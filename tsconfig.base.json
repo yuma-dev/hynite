@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "baseUrl": ".",
+    "paths": {
+      "@hynite/core": ["packages/core/src/index.ts"],
+      "@hynite/db": ["packages/db/src/index.ts"],
+      "@hynite/importers": ["packages/importers/src/index.ts"],
+      "@hynite/metadata": ["packages/metadata/src/index.ts"],
+      "@hynite/recommendations": ["packages/recommendations/src/index.ts"],
+      "@hynite/source-search": ["packages/source-search/src/index.ts"]
+    }
+  }
+}
+

@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/source-search" },
+    { "path": "packages/importers" },
+    { "path": "packages/metadata" },
+    { "path": "packages/recommendations" },
+    { "path": "packages/db" },
+    { "path": "apps/desktop" }
+  ]
+}
+

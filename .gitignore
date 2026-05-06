@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+out-tsc/
+coverage/
+.vite/
+*.tsbuildinfo
+bin/
+obj/
+*.db
+*.db-shm
+*.db-wal
+dev.*.log
