@@ -10,13 +10,16 @@ import type {
   SourceImportInput,
   SourceImportResult,
   SourceMatch,
+  SteamPairingResult,
+  SyncStatus,
   SyncResult
 } from "@hynite/core";
 
 const api = {
   library: {
     sync: (providerId?: ProviderId): Promise<SyncResult> => ipcRenderer.invoke("library:sync", providerId),
-    list: (query: LibraryQuery): Promise<Game[]> => ipcRenderer.invoke("library:list", query)
+    list: (query: LibraryQuery): Promise<Game[]> => ipcRenderer.invoke("library:list", query),
+    clear: (): Promise<{ cleared: number }> => ipcRenderer.invoke("library:clear")
   },
   games: {
     get: (id: string): Promise<GameDetail> => ipcRenderer.invoke("games:get", id),
@@ -24,6 +27,14 @@ const api = {
   },
   home: {
     get: (): Promise<HomeModel> => ipcRenderer.invoke("home:get")
+  },
+  sync: {
+    status: (): Promise<SyncStatus> => ipcRenderer.invoke("sync:status"),
+    onStatusChanged: (callback: (status: SyncStatus) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: SyncStatus) => callback(status);
+      ipcRenderer.on("sync:statusChanged", listener);
+      return () => ipcRenderer.removeListener("sync:statusChanged", listener);
+    }
   },
   sources: {
     import: (input: SourceImportInput): Promise<SourceImportResult> => ipcRenderer.invoke("sources:import", input),
@@ -33,9 +44,21 @@ const api = {
   clipboard: {
     copy: (text: string): Promise<void> => ipcRenderer.invoke("clipboard:copy", text)
   },
+  native: {
+    openExternal: (url: string): Promise<void> => ipcRenderer.invoke("native:openExternal", url)
+  },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke("settings:get"),
     update: (patch: Partial<AppSettings>): Promise<AppSettings> => ipcRenderer.invoke("settings:update", patch)
+  },
+  steam: {
+    pair: (): Promise<SteamPairingResult> => ipcRenderer.invoke("steam:pair"),
+    saveApiKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("steam:saveApiKey", apiKey),
+    disconnect: (): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnect")
+  },
+  metadata: {
+    saveSteamGridDbKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("metadata:saveSteamGridDbKey", apiKey),
+    clearSteamGridDbKey: (): Promise<AppSettings> => ipcRenderer.invoke("metadata:clearSteamGridDbKey")
   },
   debug: {
     seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed")

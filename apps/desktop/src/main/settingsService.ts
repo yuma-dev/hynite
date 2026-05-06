@@ -3,7 +3,8 @@ import { dirname } from "node:path";
 import type { AppSettings } from "@hynite/core";
 
 const defaultSettings: AppSettings = {
-  steamLibraryRoots: [],
+  steamAccount: undefined,
+  steamGridDbApiKey: undefined,
   cacheTtlHours: 24,
   reduceMotion: false
 };
@@ -27,4 +28,3 @@ export class SettingsService {
     return next;
   }
 }
-

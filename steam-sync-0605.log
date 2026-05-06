@@ -1,0 +1,2111 @@
+4:36:04
+Steam sync complete: 228 games, 91 local installs
+complete
+14:36:04
+Wanderburg Demo: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/4268810?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:36:04
+Wanderburg Demo: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/4268810?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:36:03
+Wanderburg Demo: Steam library hero was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/4268810/library_hero.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/4268810/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/4268810/library_600x900.jpg"
+  ]
+}
+14:36:03
+Wanderburg Demo: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/4268810/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/4268810/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/4268810/library_hero.jpg"
+  ]
+}
+14:36:03
+Fetching metadata for Wanderburg Demo
+metadata:refresh
+{
+  "appid": "4268810"
+}
+14:36:03
+Syncing Wanderburg Demo
+steam:upsert
+{
+  "appid": "4268810",
+  "installed": true
+}
+14:36:02
+RV There Yet?: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/3949040/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/3949040/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/3949040/library_hero.jpg"
+  ]
+}
+14:36:02
+Fetching metadata for RV There Yet?
+metadata:refresh
+{
+  "appid": "3949040"
+}
+14:36:02
+Syncing RV There Yet?
+steam:upsert
+{
+  "appid": "3949040",
+  "installed": true
+}
+14:36:02
+RACCOIN: Coin Pusher Roguelike Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3921890?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:36:02
+RACCOIN: Coin Pusher Roguelike Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3921890?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:36:02
+RACCOIN: Coin Pusher Roguelike Playtest: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/3921890/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/3921890/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/3921890/library_hero.jpg"
+  ]
+}
+14:36:01
+Fetching metadata for RACCOIN: Coin Pusher Roguelike Playtest
+metadata:refresh
+{
+  "appid": "3921890"
+}
+14:36:01
+Syncing RACCOIN: Coin Pusher Roguelike Playtest
+steam:upsert
+{
+  "appid": "3921890",
+  "installed": false
+}
+14:36:01
+YAPYAP: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/3834090/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/3834090/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/3834090/library_hero.jpg"
+  ]
+}
+14:36:00
+Fetching metadata for YAPYAP
+metadata:refresh
+{
+  "appid": "3834090"
+}
+14:36:00
+Syncing YAPYAP
+steam:upsert
+{
+  "appid": "3834090",
+  "installed": true
+}
+14:36:00
+Hozy Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3743800?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:36:00
+Hozy Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3743800?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:36:00
+Hozy Playtest: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/3743800/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/3743800/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/3743800/library_hero.jpg"
+  ]
+}
+14:36:00
+Fetching metadata for Hozy Playtest
+metadata:refresh
+{
+  "appid": "3743800"
+}
+14:36:00
+Syncing Hozy Playtest
+steam:upsert
+{
+  "appid": "3743800",
+  "installed": false
+}
+14:36:00
+SpeedRunners 2: King of Speed Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3730770?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:59
+SpeedRunners 2: King of Speed Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3730770?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:59
+SpeedRunners 2: King of Speed Playtest: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/3730770/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/3730770/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/3730770/library_hero.jpg"
+  ]
+}
+14:35:59
+Fetching metadata for SpeedRunners 2: King of Speed Playtest
+metadata:refresh
+{
+  "appid": "3730770"
+}
+14:35:59
+Syncing SpeedRunners 2: King of Speed Playtest
+steam:upsert
+{
+  "appid": "3730770",
+  "installed": false
+}
+14:35:59
+Low-Budget Repairs Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3550740?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:58
+Low-Budget Repairs Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3550740?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:58
+Fetching metadata for Low-Budget Repairs Playtest
+metadata:refresh
+{
+  "appid": "3550740"
+}
+14:35:58
+Syncing Low-Budget Repairs Playtest
+steam:upsert
+{
+  "appid": "3550740",
+  "installed": false
+}
+14:35:58
+PEAK: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/3527290/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/3527290/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/3527290/library_hero.jpg"
+  ]
+}
+14:35:57
+Fetching metadata for PEAK
+metadata:refresh
+{
+  "appid": "3527290"
+}
+14:35:57
+Syncing PEAK
+steam:upsert
+{
+  "appid": "3527290",
+  "installed": true
+}
+14:35:57
+Fetching metadata for ENDLESS™ Legend 2
+metadata:refresh
+{
+  "appid": "3407390"
+}
+14:35:57
+Syncing ENDLESS™ Legend 2
+steam:upsert
+{
+  "appid": "3407390",
+  "installed": true
+}
+14:35:56
+Fetching metadata for Megabonk
+metadata:refresh
+{
+  "appid": "3405340"
+}
+14:35:56
+Syncing Megabonk
+steam:upsert
+{
+  "appid": "3405340",
+  "installed": true
+}
+14:35:56
+skate.: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/3354750/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/3354750/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/3354750/library_hero.jpg"
+  ]
+}
+14:35:55
+Fetching metadata for skate.
+metadata:refresh
+{
+  "appid": "3354750"
+}
+14:35:55
+Syncing skate.
+steam:upsert
+{
+  "appid": "3354750",
+  "installed": true
+}
+14:35:55
+All Will Fall Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3320480?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:55
+All Will Fall Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3320480?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:54
+Fetching metadata for All Will Fall Playtest
+metadata:refresh
+{
+  "appid": "3320480"
+}
+14:35:54
+Syncing All Will Fall Playtest
+steam:upsert
+{
+  "appid": "3320480",
+  "installed": false
+}
+14:35:54
+Fetching metadata for R.E.P.O.
+metadata:refresh
+{
+  "appid": "3241660"
+}
+14:35:54
+Syncing R.E.P.O.
+steam:upsert
+{
+  "appid": "3241660",
+  "installed": true
+}
+14:35:53
+Fetching metadata for WEBFISHING
+metadata:refresh
+{
+  "appid": "3146520"
+}
+14:35:53
+Syncing WEBFISHING
+steam:upsert
+{
+  "appid": "3146520",
+  "installed": true
+}
+14:35:53
+Battlefield™ 6 Open Beta: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3081410?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:53
+Battlefield™ 6 Open Beta: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3081410?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:53
+Battlefield™ 6 Open Beta: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/3081410/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/3081410/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/3081410/library_hero.jpg"
+  ]
+}
+14:35:53
+Fetching metadata for Battlefield™ 6 Open Beta
+metadata:refresh
+{
+  "appid": "3081410"
+}
+14:35:53
+Syncing Battlefield™ 6 Open Beta
+steam:upsert
+{
+  "appid": "3081410",
+  "installed": false
+}
+14:35:53
+Monster Hunter Wilds Beta test: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3065170?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:52
+Monster Hunter Wilds Beta test: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/3065170?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:52
+Fetching metadata for Monster Hunter Wilds Beta test
+metadata:refresh
+{
+  "appid": "3065170"
+}
+14:35:52
+Syncing Monster Hunter Wilds Beta test
+steam:upsert
+{
+  "appid": "3065170",
+  "installed": false
+}
+14:35:52
+FragPunk Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2943730?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:52
+FragPunk Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2943730?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:51
+Fetching metadata for FragPunk Playtest
+metadata:refresh
+{
+  "appid": "2943730"
+}
+14:35:51
+Syncing FragPunk Playtest
+steam:upsert
+{
+  "appid": "2943730",
+  "installed": false
+}
+14:35:51
+Fetching metadata for The Spell Brigade
+metadata:refresh
+{
+  "appid": "2904000"
+}
+14:35:51
+Syncing The Spell Brigade
+steam:upsert
+{
+  "appid": "2904000",
+  "installed": true
+}
+14:35:50
+Fetching metadata for Content Warning
+metadata:refresh
+{
+  "appid": "2881650"
+}
+14:35:50
+Syncing Content Warning
+steam:upsert
+{
+  "appid": "2881650",
+  "installed": true
+}
+14:35:50
+Cash Cleaner Simulator Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2843160?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:50
+Cash Cleaner Simulator Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2843160?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:49
+Fetching metadata for Cash Cleaner Simulator Playtest
+metadata:refresh
+{
+  "appid": "2843160"
+}
+14:35:49
+Syncing Cash Cleaner Simulator Playtest
+steam:upsert
+{
+  "appid": "2843160",
+  "installed": false
+}
+14:35:49
+Fetching metadata for Asgard's Fall — Viking Survivors
+metadata:refresh
+{
+  "appid": "2780710"
+}
+14:35:49
+Syncing Asgard's Fall — Viking Survivors
+steam:upsert
+{
+  "appid": "2780710",
+  "installed": true
+}
+14:35:48
+Fetching metadata for Marvel Rivals
+metadata:refresh
+{
+  "appid": "2767030"
+}
+14:35:48
+Syncing Marvel Rivals
+steam:upsert
+{
+  "appid": "2767030",
+  "installed": false
+}
+14:35:48
+Fetching metadata for The King is Watching
+metadata:refresh
+{
+  "appid": "2753900"
+}
+14:35:48
+Syncing The King is Watching
+steam:upsert
+{
+  "appid": "2753900",
+  "installed": true
+}
+14:35:47
+Fetching metadata for WHAT THE PAK?!
+metadata:refresh
+{
+  "appid": "2752710"
+}
+14:35:47
+Syncing WHAT THE PAK?!
+steam:upsert
+{
+  "appid": "2752710",
+  "installed": false
+}
+14:35:47
+Fetching metadata for Supermarket Together
+metadata:refresh
+{
+  "appid": "2709570"
+}
+14:35:47
+Syncing Supermarket Together
+steam:upsert
+{
+  "appid": "2709570",
+  "installed": false
+}
+14:35:46
+Fetching metadata for Palia
+metadata:refresh
+{
+  "appid": "2707930"
+}
+14:35:46
+Syncing Palia
+steam:upsert
+{
+  "appid": "2707930",
+  "installed": false
+}
+14:35:46
+Fetching metadata for ContractVille
+metadata:refresh
+{
+  "appid": "2698780"
+}
+14:35:46
+Syncing ContractVille
+steam:upsert
+{
+  "appid": "2698780",
+  "installed": false
+}
+14:35:46
+Commander Quest: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2697930?types=static",
+  "returned": []
+}
+14:35:46
+Commander Quest: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2697930?dimensions=600x900&types=static",
+  "returned": []
+}
+14:35:45
+Fetching metadata for Commander Quest
+metadata:refresh
+{
+  "appid": "2697930"
+}
+14:35:45
+Syncing Commander Quest
+steam:upsert
+{
+  "appid": "2697930",
+  "installed": true
+}
+14:35:44
+Fetching metadata for Path of Exile 2
+metadata:refresh
+{
+  "appid": "2694490"
+}
+14:35:44
+Syncing Path of Exile 2
+steam:upsert
+{
+  "appid": "2694490",
+  "installed": false
+}
+14:35:44
+Fetching metadata for PICO PARK 2
+metadata:refresh
+{
+  "appid": "2644470"
+}
+14:35:44
+Syncing PICO PARK 2
+steam:upsert
+{
+  "appid": "2644470",
+  "installed": true
+}
+14:35:43
+Fetching metadata for GUNTOUCHABLES
+metadata:refresh
+{
+  "appid": "2543510"
+}
+14:35:43
+Syncing GUNTOUCHABLES
+steam:upsert
+{
+  "appid": "2543510",
+  "installed": false
+}
+14:35:43
+Fetching metadata for POPUCOM
+metadata:refresh
+{
+  "appid": "2543180"
+}
+14:35:43
+Syncing POPUCOM
+steam:upsert
+{
+  "appid": "2543180",
+  "installed": false
+}
+14:35:42
+Fetching metadata for Delta Force
+metadata:refresh
+{
+  "appid": "2507950"
+}
+14:35:42
+Syncing Delta Force
+steam:upsert
+{
+  "appid": "2507950",
+  "installed": false
+}
+14:35:42
+Fetching metadata for A Difficult Game About Climbing
+metadata:refresh
+{
+  "appid": "2497920"
+}
+14:35:42
+Syncing A Difficult Game About Climbing
+steam:upsert
+{
+  "appid": "2497920",
+  "installed": false
+}
+14:35:41
+Fetching metadata for Shape of Dreams
+metadata:refresh
+{
+  "appid": "2444750"
+}
+14:35:41
+Syncing Shape of Dreams
+steam:upsert
+{
+  "appid": "2444750",
+  "installed": true
+}
+14:35:41
+ARC Raiders Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2427520?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:41
+ARC Raiders Playtest: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2427520?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:40
+Fetching metadata for ARC Raiders Playtest
+metadata:refresh
+{
+  "appid": "2427520"
+}
+14:35:40
+Syncing ARC Raiders Playtest
+steam:upsert
+{
+  "appid": "2427520",
+  "installed": false
+}
+14:35:40
+Fetching metadata for Nubs!
+metadata:refresh
+{
+  "appid": "2337860"
+}
+14:35:40
+Syncing Nubs!
+steam:upsert
+{
+  "appid": "2337860",
+  "installed": false
+}
+14:35:39
+Fetching metadata for We Were Here Expeditions: The FriendShip
+metadata:refresh
+{
+  "appid": "2296990"
+}
+14:35:39
+Syncing We Were Here Expeditions: The FriendShip
+steam:upsert
+{
+  "appid": "2296990",
+  "installed": false
+}
+14:35:39
+Rhythia: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2250500?types=static",
+  "returned": []
+}
+14:35:39
+Rhythia: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2250500?dimensions=600x900&types=static",
+  "returned": []
+}
+14:35:39
+Rhythia: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/2250500/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/2250500/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/2250500/library_hero.jpg"
+  ]
+}
+14:35:38
+Fetching metadata for Rhythia
+metadata:refresh
+{
+  "appid": "2250500"
+}
+14:35:38
+Syncing Rhythia
+steam:upsert
+{
+  "appid": "2250500",
+  "installed": true
+}
+14:35:38
+Fetching metadata for Monster Hunter Wilds
+metadata:refresh
+{
+  "appid": "2246340"
+}
+14:35:38
+Syncing Monster Hunter Wilds
+steam:upsert
+{
+  "appid": "2246340",
+  "installed": true
+}
+14:35:37
+Fetching metadata for Outpath: First Journey
+metadata:refresh
+{
+  "appid": "2237980"
+}
+14:35:37
+Syncing Outpath: First Journey
+steam:upsert
+{
+  "appid": "2237980",
+  "installed": false
+}
+14:35:37
+Fetching metadata for Ghost of Tsushima DIRECTOR'S CUT
+metadata:refresh
+{
+  "appid": "2215430"
+}
+14:35:37
+Syncing Ghost of Tsushima DIRECTOR'S CUT
+steam:upsert
+{
+  "appid": "2215430",
+  "installed": false
+}
+14:35:36
+Fetching metadata for Your Only Move Is HUSTLE
+metadata:refresh
+{
+  "appid": "2212330"
+}
+14:35:36
+Syncing Your Only Move Is HUSTLE
+steam:upsert
+{
+  "appid": "2212330",
+  "installed": false
+}
+14:35:36
+Gatekeeper: Eclipse: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2197700?types=static",
+  "returned": []
+}
+14:35:36
+Gatekeeper: Eclipse: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2197700?dimensions=600x900&types=static",
+  "returned": []
+}
+14:35:36
+Fetching metadata for Gatekeeper: Eclipse
+metadata:refresh
+{
+  "appid": "2197700"
+}
+14:35:36
+Syncing Gatekeeper: Eclipse
+steam:upsert
+{
+  "appid": "2197700",
+  "installed": false
+}
+14:35:35
+Little Nightmares Enhanced Edition: Steam library capsule was not available
+metadata:steam-cdn
+{
+  "requested": "https://cdn.akamai.steamstatic.com/steam/apps/2149010/library_600x900.jpg",
+  "response": {
+    "ok": false,
+    "status": 404,
+    "statusText": "Not Found",
+    "contentType": "text/html"
+  },
+  "alternatives": [
+    "https://cdn.akamai.steamstatic.com/steam/apps/2149010/header.jpg",
+    "https://cdn.akamai.steamstatic.com/steam/apps/2149010/library_hero.jpg"
+  ]
+}
+14:35:35
+Fetching metadata for Little Nightmares Enhanced Edition
+metadata:refresh
+{
+  "appid": "2149010"
+}
+14:35:35
+Syncing Little Nightmares Enhanced Edition
+steam:upsert
+{
+  "appid": "2149010",
+  "installed": false
+}
+14:35:34
+Fetching metadata for Once Human
+metadata:refresh
+{
+  "appid": "2139460"
+}
+14:35:34
+Syncing Once Human
+steam:upsert
+{
+  "appid": "2139460",
+  "installed": false
+}
+14:35:34
+Fetching metadata for Unsolved Case
+metadata:refresh
+{
+  "appid": "2084050"
+}
+14:35:34
+Syncing Unsolved Case
+steam:upsert
+{
+  "appid": "2084050",
+  "installed": false
+}
+14:35:33
+Fetching metadata for THE FINALS
+metadata:refresh
+{
+  "appid": "2073850"
+}
+14:35:33
+Syncing THE FINALS
+steam:upsert
+{
+  "appid": "2073850",
+  "installed": false
+}
+14:35:33
+Fetching metadata for Ravenswatch
+metadata:refresh
+{
+  "appid": "2071280"
+}
+14:35:33
+Syncing Ravenswatch
+steam:upsert
+{
+  "appid": "2071280",
+  "installed": false
+}
+14:35:33
+Mechabellum PlayTest Server: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2050860?types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:33
+Mechabellum PlayTest Server: SteamGridDB artwork request failed
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/2050860?dimensions=600x900&types=static",
+  "status": 404,
+  "statusText": "Not Found"
+}
+14:35:32
+Fetching metadata for Mechabellum PlayTest Server
+metadata:refresh
+{
+  "appid": "2050860"
+}
+14:35:32
+Syncing Mechabellum PlayTest Server
+steam:upsert
+{
+  "appid": "2050860",
+  "installed": false
+}
+14:35:32
+Fetching metadata for One-armed cook
+metadata:refresh
+{
+  "appid": "1977530"
+}
+14:35:32
+Syncing One-armed cook
+steam:upsert
+{
+  "appid": "1977530",
+  "installed": false
+}
+14:35:31
+Fetching metadata for Lethal Company
+metadata:refresh
+{
+  "appid": "1966720"
+}
+14:35:31
+Syncing Lethal Company
+steam:upsert
+{
+  "appid": "1966720",
+  "installed": false
+}
+14:35:30
+Fetching metadata for Project Playtime
+metadata:refresh
+{
+  "appid": "1961460"
+}
+14:35:30
+Syncing Project Playtime
+steam:upsert
+{
+  "appid": "1961460",
+  "installed": false
+}
+14:35:30
+Fetching metadata for Brotato
+metadata:refresh
+{
+  "appid": "1942280"
+}
+14:35:30
+Syncing Brotato
+steam:upsert
+{
+  "appid": "1942280",
+  "installed": true
+}
+14:35:29
+Fetching metadata for Call of Duty®
+metadata:refresh
+{
+  "appid": "1938090"
+}
+14:35:29
+Syncing Call of Duty®
+steam:upsert
+{
+  "appid": "1938090",
+  "installed": false
+}
+14:35:29
+Fetching metadata for Windblown
+metadata:refresh
+{
+  "appid": "1911610"
+}
+14:35:29
+Syncing Windblown
+steam:upsert
+{
+  "appid": "1911610",
+  "installed": false
+}
+14:35:29
+Walk of Life: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/1910150?types=static",
+  "returned": [
+    {
+      "url": "https://cdn2.steamgriddb.com/grid/46a0bf4721ecf81577cfa83fc056d7da.png",
+      "width": 1024,
+      "height": 1024,
+      "score": 0,
+      "nsfw": false,
+      "humor": false
+    }
+  ]
+}
+14:35:29
+Walk of Life: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/1910150?dimensions=600x900&types=static",
+  "returned": []
+}
+14:35:28
+Fetching metadata for Walk of Life
+metadata:refresh
+{
+  "appid": "1910150"
+}
+14:35:28
+Syncing Walk of Life
+steam:upsert
+{
+  "appid": "1910150",
+  "installed": true
+}
+14:35:28
+Fetching metadata for Aperture Desk Job
+metadata:refresh
+{
+  "appid": "1902490"
+}
+14:35:28
+Syncing Aperture Desk Job
+steam:upsert
+{
+  "appid": "1902490",
+  "installed": false
+}
+14:35:27
+Fetching metadata for TRYP FPV
+metadata:refresh
+{
+  "appid": "1881200"
+}
+14:35:27
+Syncing TRYP FPV
+steam:upsert
+{
+  "appid": "1881200",
+  "installed": true
+}
+14:35:26
+Fetching metadata for Omega Strikers
+metadata:refresh
+{
+  "appid": "1869590"
+}
+14:35:26
+Syncing Omega Strikers
+steam:upsert
+{
+  "appid": "1869590",
+  "installed": false
+}
+14:35:26
+Fetching metadata for Ghost Watchers
+metadata:refresh
+{
+  "appid": "1850740"
+}
+14:35:26
+Syncing Ghost Watchers
+steam:upsert
+{
+  "appid": "1850740",
+  "installed": false
+}
+14:35:25
+Fetching metadata for Laysara: Summit Kingdom
+metadata:refresh
+{
+  "appid": "1823950"
+}
+14:35:25
+Syncing Laysara: Summit Kingdom
+steam:upsert
+{
+  "appid": "1823950",
+  "installed": false
+}
+14:35:25
+Fetching metadata for MultiVersus
+metadata:refresh
+{
+  "appid": "1818750"
+}
+14:35:25
+Syncing MultiVersus
+steam:upsert
+{
+  "appid": "1818750",
+  "installed": false
+}
+14:35:24
+Fetching metadata for Nine Sols
+metadata:refresh
+{
+  "appid": "1809540"
+}
+14:35:24
+Syncing Nine Sols
+steam:upsert
+{
+  "appid": "1809540",
+  "installed": false
+}
+14:35:24
+Fetching metadata for ARC Raiders
+metadata:refresh
+{
+  "appid": "1808500"
+}
+14:35:24
+Syncing ARC Raiders
+steam:upsert
+{
+  "appid": "1808500",
+  "installed": true
+}
+14:35:23
+Fetching metadata for Crab Game
+metadata:refresh
+{
+  "appid": "1782210"
+}
+14:35:23
+Syncing Crab Game
+steam:upsert
+{
+  "appid": "1782210",
+  "installed": false
+}
+14:35:23
+Fetching metadata for The Dark Pictures Anthology: House of Ashes - Friend's Pass
+metadata:refresh
+{
+  "appid": "1775270"
+}
+14:35:22
+Syncing The Dark Pictures Anthology: House of Ashes - Friend's Pass
+steam:upsert
+{
+  "appid": "1775270",
+  "installed": false
+}
+14:35:22
+Fetching metadata for Super Auto Pets
+metadata:refresh
+{
+  "appid": "1714040"
+}
+14:35:22
+Syncing Super Auto Pets
+steam:upsert
+{
+  "appid": "1714040",
+  "installed": false
+}
+14:35:21
+Fetching metadata for HITMAN World of Assassination
+metadata:refresh
+{
+  "appid": "1659040"
+}
+14:35:21
+Syncing HITMAN World of Assassination
+steam:upsert
+{
+  "appid": "1659040",
+  "installed": false
+}
+14:35:21
+Fetching metadata for V Rising
+metadata:refresh
+{
+  "appid": "1604030"
+}
+14:35:21
+Syncing V Rising
+steam:upsert
+{
+  "appid": "1604030",
+  "installed": true
+}
+14:35:21
+Fetching metadata for PlateUp!
+metadata:refresh
+{
+  "appid": "1599600"
+}
+14:35:21
+Syncing PlateUp!
+steam:upsert
+{
+  "appid": "1599600",
+  "installed": false
+}
+14:35:20
+Fetching metadata for Lost Ark
+metadata:refresh
+{
+  "appid": "1599340"
+}
+14:35:20
+Syncing Lost Ark
+steam:upsert
+{
+  "appid": "1599340",
+  "installed": false
+}
+14:35:20
+Fetching metadata for ROUNDS
+metadata:refresh
+{
+  "appid": "1557740"
+}
+14:35:20
+Syncing ROUNDS
+steam:upsert
+{
+  "appid": "1557740",
+  "installed": true
+}
+14:35:19
+Fetching metadata for Battlefield™ 2042
+metadata:refresh
+{
+  "appid": "1517290"
+}
+14:35:19
+Syncing Battlefield™ 2042
+steam:upsert
+{
+  "appid": "1517290",
+  "installed": false
+}
+14:35:19
+Fetching metadata for Toy Tinker Simulator
+metadata:refresh
+{
+  "appid": "1510580"
+}
+14:35:18
+Syncing Toy Tinker Simulator
+steam:upsert
+{
+  "appid": "1510580",
+  "installed": false
+}
+14:35:18
+Fetching metadata for Just Act Natural
+metadata:refresh
+{
+  "appid": "1485080"
+}
+14:35:18
+Syncing Just Act Natural
+steam:upsert
+{
+  "appid": "1485080",
+  "installed": false
+}
+14:35:18
+Fetching metadata for Escape Simulator
+metadata:refresh
+{
+  "appid": "1435790"
+}
+14:35:18
+Syncing Escape Simulator
+steam:upsert
+{
+  "appid": "1435790",
+  "installed": false
+}
+14:35:17
+Fetching metadata for Deadlock
+metadata:refresh
+{
+  "appid": "1422450"
+}
+14:35:17
+Syncing Deadlock
+steam:upsert
+{
+  "appid": "1422450",
+  "installed": true
+}
+14:35:17
+Fetching metadata for My Singing Monsters
+metadata:refresh
+{
+  "appid": "1419170"
+}
+14:35:17
+Syncing My Singing Monsters
+steam:upsert
+{
+  "appid": "1419170",
+  "installed": false
+}
+14:35:16
+Fetching metadata for Red Dead Online
+metadata:refresh
+{
+  "appid": "1404210"
+}
+14:35:16
+Syncing Red Dead Online
+steam:upsert
+{
+  "appid": "1404210",
+  "installed": false
+}
+14:35:16
+Fetching metadata for Oblivity
+metadata:refresh
+{
+  "appid": "1389990"
+}
+14:35:16
+Syncing Oblivity
+steam:upsert
+{
+  "appid": "1389990",
+  "installed": true
+}
+14:35:16
+surviv.io - 2D Battle Royale: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/1375740?types=static",
+  "returned": []
+}
+14:35:15
+surviv.io - 2D Battle Royale: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/1375740?dimensions=600x900&types=static",
+  "returned": []
+}
+14:35:15
+Fetching metadata for surviv.io - 2D Battle Royale
+metadata:refresh
+{
+  "appid": "1375740"
+}
+14:35:15
+Syncing surviv.io - 2D Battle Royale
+steam:upsert
+{
+  "appid": "1375740",
+  "installed": false
+}
+14:35:14
+Fetching metadata for Animaze
+metadata:refresh
+{
+  "appid": "1364390"
+}
+14:35:14
+Syncing Animaze
+steam:upsert
+{
+  "appid": "1364390",
+  "installed": false
+}
+14:35:14
+Fetching metadata for Sons Of The Forest
+metadata:refresh
+{
+  "appid": "1326470"
+}
+14:35:14
+Syncing Sons Of The Forest
+steam:upsert
+{
+  "appid": "1326470",
+  "installed": false
+}
+14:35:14
+Fetching metadata for Cult of the Lamb
+metadata:refresh
+{
+  "appid": "1313140"
+}
+14:35:14
+Syncing Cult of the Lamb
+steam:upsert
+{
+  "appid": "1313140",
+  "installed": false
+}
+14:35:13
+Fetching metadata for Divine Knockout (DKO)
+metadata:refresh
+{
+  "appid": "1294660"
+}
+14:35:13
+Syncing Divine Knockout (DKO)
+steam:upsert
+{
+  "appid": "1294660",
+  "installed": false
+}
+14:35:13
+Fetching metadata for SUPERVIVE
+metadata:refresh
+{
+  "appid": "1283700"
+}
+14:35:13
+Syncing SUPERVIVE
+steam:upsert
+{
+  "appid": "1283700",
+  "installed": false
+}
+14:35:12
+Fetching metadata for tModLoader
+metadata:refresh
+{
+  "appid": "1281930"
+}
+14:35:12
+Syncing tModLoader
+steam:upsert
+{
+  "appid": "1281930",
+  "installed": false
+}
+14:35:12
+Fetching metadata for The Dark Pictures Anthology: House of Ashes
+metadata:refresh
+{
+  "appid": "1281590"
+}
+14:35:12
+Syncing The Dark Pictures Anthology: House of Ashes
+steam:upsert
+{
+  "appid": "1281590",
+  "installed": false
+}
+14:35:11
+Fetching metadata for Party Animals
+metadata:refresh
+{
+  "appid": "1260320"
+}
+14:35:11
+Syncing Party Animals
+steam:upsert
+{
+  "appid": "1260320",
+  "installed": true
+}
+14:35:11
+Fetching metadata for Titanfall® 2
+metadata:refresh
+{
+  "appid": "1237970"
+}
+14:35:11
+Syncing Titanfall® 2
+steam:upsert
+{
+  "appid": "1237970",
+  "installed": false
+}
+14:35:10
+Fetching metadata for NARAKA: BLADEPOINT
+metadata:refresh
+{
+  "appid": "1203220"
+}
+14:35:10
+Syncing NARAKA: BLADEPOINT
+steam:upsert
+{
+  "appid": "1203220",
+  "installed": false
+}
+14:35:10
+Fetching metadata for KartRider: Drift
+metadata:refresh
+{
+  "appid": "1184140"
+}
+14:35:10
+Syncing KartRider: Drift
+steam:upsert
+{
+  "appid": "1184140",
+  "installed": false
+}
+14:35:09
+Fetching metadata for Tell Me Why
+metadata:refresh
+{
+  "appid": "1180660"
+}
+14:35:09
+Syncing Tell Me Why
+steam:upsert
+{
+  "appid": "1180660",
+  "installed": false
+}
+14:35:08
+Fetching metadata for Slapshot: Rebound
+metadata:refresh
+{
+  "appid": "1173370"
+}
+14:35:08
+Syncing Slapshot: Rebound
+steam:upsert
+{
+  "appid": "1173370",
+  "installed": false
+}
+14:35:08
+Fetching metadata for Apex Legends
+metadata:refresh
+{
+  "appid": "1172470"
+}
+14:35:08
+Syncing Apex Legends
+steam:upsert
+{
+  "appid": "1172470",
+  "installed": false
+}
+14:35:07
+Fetching metadata for Marbles on Stream
+metadata:refresh
+{
+  "appid": "1170970"
+}
+14:35:07
+Syncing Marbles on Stream
+steam:upsert
+{
+  "appid": "1170970",
+  "installed": false
+}
+14:35:07
+Fetching metadata for Necesse
+metadata:refresh
+{
+  "appid": "1169040"
+}
+14:35:07
+Syncing Necesse
+steam:upsert
+{
+  "appid": "1169040",
+  "installed": false
+}
+14:35:06
+Fetching metadata for Teardown
+metadata:refresh
+{
+  "appid": "1167630"
+}
+14:35:06
+Syncing Teardown
+steam:upsert
+{
+  "appid": "1167630",
+  "installed": false
+}
+14:35:06
+Fetching metadata for Golf Gang
+metadata:refresh
+{
+  "appid": "1151050"
+}
+14:35:06
+Syncing Golf Gang
+steam:upsert
+{
+  "appid": "1151050",
+  "installed": false
+}
+14:35:04
+Fetching metadata for Icarus
+metadata:refresh
+{
+  "appid": "1149460"
+}
+14:35:04
+Syncing Icarus
+steam:upsert
+{
+  "appid": "1149460",
+  "installed": false
+}
+14:35:03
+Fetching metadata for SLUDGE LIFE
+metadata:refresh
+{
+  "appid": "1144770"
+}
+14:35:03
+Syncing SLUDGE LIFE
+steam:upsert
+{
+  "appid": "1144770",
+  "installed": false
+}
+14:35:03
+Fetching metadata for Mindustry
+metadata:refresh
+{
+  "appid": "1127400"
+}
+14:35:03
+Syncing Mindustry
+steam:upsert
+{
+  "appid": "1127400",
+  "installed": true
+}
+14:35:02
+Fetching metadata for HUMANKIND™
+metadata:refresh
+{
+  "appid": "1124300"
+}
+14:35:02
+Syncing HUMANKIND™
+steam:upsert
+{
+  "appid": "1124300",
+  "installed": false
+}
+14:35:02
+Fetching metadata for Ranch Simulator
+metadata:refresh
+{
+  "appid": "1119730"
+}
+14:35:02
+Syncing Ranch Simulator
+steam:upsert
+{
+  "appid": "1119730",
+  "installed": false
+}
+14:35:01
+Fetching metadata for Fall Guys
+metadata:refresh
+{
+  "appid": "1097150"
+}
+14:35:01
+Syncing Fall Guys
+steam:upsert
+{
+  "appid": "1097150",
+  "installed": false
+}
+14:35:01
+Fetching metadata for New World: Aeternum
+metadata:refresh
+{
+  "appid": "1063730"
+}
+14:35:01
+Syncing New World: Aeternum
+steam:upsert
+{
+  "appid": "1063730",
+  "installed": false
+}
+14:35:00
+Fetching metadata for Ultimate Zombie Defense
+metadata:refresh
+{
+  "appid": "1035510"
+}
+14:35:00
+Syncing Ultimate Zombie Defense
+steam:upsert
+{
+  "appid": "1035510",
+  "installed": false
+}
+14:35:00
+Fetching metadata for The Long Drive
+metadata:refresh
+{
+  "appid": "1017180"
+}
+14:35:00
+Syncing The Long Drive
+steam:upsert
+{
+  "appid": "1017180",
+  "installed": true
+}
+14:34:59
+Fetching metadata for Totally Reliable Delivery Service
+metadata:refresh
+{
+  "appid": "1011670"
+}
+14:34:59
+Syncing Totally Reliable Delivery Service
+steam:upsert
+{
+  "appid": "1011670",
+  "installed": false
+}
+14:34:59
+Kebab Chefs! - Restaurant Simulator: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/1001270?types=static",
+  "returned": []
+}
+14:34:59
+Kebab Chefs! - Restaurant Simulator: SteamGridDB returned no usable vertical static artwork
+metadata:steamgriddb
+{
+  "requested": "https://www.steamgriddb.com/api/v2/grids/steam/1001270?dimensions=600x900&types=static",
+  "returned": []
+}
+14:34:58
+Fetching metadata for Kebab Chefs! - Restaurant Simulator
+metadata:refresh
+{
+  "appid": "1001270"
+}
+14:34:58
+Syncing Kebab Chefs! - Restaurant Simulator
+steam:upsert
+{
+  "appid": "1001270",
+  "installed": false
+}
+14:34:58
+Fetching metadata for Lossless Scaling
+metadata:refresh
+{
+  "appid": "993090"
+}
+14:34:58
+Syncing Lossless Scaling
+steam:upsert
+{
+  "appid": "993090",
+  "installed": true
+}
+14:34:57
+Fetching metadata for Mortal Kombat 11
+metadata:refresh
+{
+  "appid": "976310"
+}
+14:34:57
+Syncing Mortal Kombat 11
+steam:upsert
+{
+  "appid": "976310",
+  "installed": false
+}
+14:34:57
+Fetching metadata for Boomerang Fu
+metadata:refresh
+{
+  "appid": "965680"
+}
+14:34:57
+Syncing Boomerang Fu
+steam:upsert
+{
+  "appid": "965680",
+  "installed": false
+}
+14:34:56
+Fetching metadata for DJMAX RESPECT V
+metadata:refresh
+{
+  "appid": "960170"
+}
+14:34:56
+Syncing DJMAX RESPECT V
+steam:upsert
+{
+  "appid": "960170",
+  "installed": false
+}
+14:34:56
+Fetching metadata for Bloons TD 6
+metadata:refresh
+{
+  "appid": "960090"
+}
+14:34:56
+Syncing Bloons TD 6
+steam:upsert
+{
+  "appid": "960090",
+  "installed": false
+}
+14:34:55
+Fetching metadata for Among Us
+metadata:refresh
+{
+  "appid": "945360"
+}
+14:34:55
+Syncing Among Us
+steam:upsert
+{
+  "appid": "945360",
+  "installed": false
+}
+14:34:55
+Fetching metadata for Cybarian: The Time Travelling Warrior
+metadata:refresh
+{
+  "appid": "928840"
+}
+14:34:55
+Syncing Cybarian: The Time Travelling Warrior
+steam:upsert
+{
+  "appid": "928840",
+  "installed": false
+}
+14:34:54
+Fetching metadata for Valheim
+metadata:refresh
+{
+  "appid": "892970"
+}
+14:34:54
+Syncing Valheim
+steam:upsert
+{
+  "appid": "892970",
+  "installed": false
+}
+14:34:54
+Fetching metadata for CRSED: Cuisine Royale
+metadata:refresh
+{
+  "appid": "884660"
+}
+14:34:54
+Syncing CRSED: Cuisine Royale
+steam:upsert
+{
+  "appid": "884660",
+  "installed": false
+}
+14:34:53
+Fetching metadata for Pummel Party
+metadata:refresh
+{
+  "appid": "880940"
+}
+14:34:52
+Syncing Pummel Party
+steam:upsert
+{
+  "appid": "880940",
+  "installed": true
+}
+14:34:52
+Fetching metadata for Battlerite Royale
+metadata:refresh
+{
+  "appid": "879160"
+}
+14:34:52
+Syncing Battlerite Royale
+steam:upsert
+{
+  "appid": "879160",
+  "installed": false
+}
+14:34:52
+Fetching metadata for Session: Skate Sim
+metadata:refresh
+{
+  "appid": "861650"
+}
+14:34:52
+Syncing Session: Skate Sim
+steam:upsert
+{
+  "appid": "861650",
+  "installed": true
+}
+14:34:51
+Fetching metadata for Realm Royale Reforged
+metadata:refresh
+{
+  "appid": "813820"
+}
+14:34:51
+Syncing Realm Royale Reforged
+steam:upsert
+{
+  "appid": "813820",
+  "installed": false
+}
+14:34:51
+Fetching metadata for Ironsight
+metadata:refresh
+{
+  "appid": "783770"
+}
+14:34:51
+Syncing Ironsight
+steam:upsert
+{
+  "appid": "783770",
+  "installed": false
+}
+14:34:50
+Fetching metadata for Hunt: Showdown 1896 (Test Server)
+metadata:refresh
+{
+  "appid": "770720"
+}

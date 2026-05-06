@@ -7,19 +7,27 @@ export class HomeService {
   constructor(private readonly cachePath: string) {}
 
   async get(games: Game[]): Promise<HomeModel> {
+    const previous = await this.readCache();
     try {
-      const model = await buildHomeModel(games);
+      const model = await buildHomeModel(games, fetch, previous);
       await mkdir(dirname(this.cachePath), { recursive: true });
       await writeFile(this.cachePath, JSON.stringify(model, null, 2));
       return model;
     } catch {
-      const cached = await this.readCache();
-      if (cached) {
-        return { ...cached, stale: true };
+      if (previous) {
+        return { ...previous, stale: true };
       }
 
       return {
-        continuePlaying: games.slice(0, 8),
+        recentActivity: games
+          .slice()
+          .sort((a, b) => Math.max(Date.parse(b.lastPlayedAt ?? "") || 0, Date.parse(b.addedAt ?? "") || 0) - Math.max(Date.parse(a.lastPlayedAt ?? "") || 0, Date.parse(a.addedAt ?? "") || 0))
+          .slice(0, 10),
+        continuePlaying: games.filter((game) => game.lastPlayedAt).slice(0, 8),
+        mostPlayed: games
+          .slice()
+          .sort((a, b) => (b.playtimeMinutes ?? 0) - (a.playtimeMinutes ?? 0))
+          .slice(0, 8),
         popularNow: [],
         recommended: [],
         newAndNotable: [],
@@ -37,4 +45,3 @@ export class HomeService {
     }
   }
 }
-

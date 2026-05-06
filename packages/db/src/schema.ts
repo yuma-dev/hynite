@@ -57,6 +57,32 @@ export const migrations = [
       CREATE INDEX IF NOT EXISTS idx_games_sort_title ON games(sort_title);
       CREATE INDEX IF NOT EXISTS idx_download_entries_normalized_title ON download_entries(normalized_title);
     `
+  },
+  {
+    id: 2,
+    sql: `
+      ALTER TABLE games ADD COLUMN added_at TEXT;
+      ALTER TABLE games ADD COLUMN community_icon_url TEXT;
+      ALTER TABLE games ADD COLUMN library_capsule_url TEXT;
+      ALTER TABLE games ADD COLUMN header_url TEXT;
+      ALTER TABLE games ADD COLUMN trailer_url TEXT;
+      ALTER TABLE games ADD COLUMN trailer_poster_url TEXT;
+      ALTER TABLE games ADD COLUMN screenshots_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE games ADD COLUMN short_description TEXT;
+      ALTER TABLE games ADD COLUMN about_text TEXT;
+      ALTER TABLE games ADD COLUMN website_url TEXT;
+      ALTER TABLE games ADD COLUMN support_url TEXT;
+      ALTER TABLE games ADD COLUMN platforms_json TEXT;
+      ALTER TABLE games ADD COLUMN achievement_count INTEGER;
+      ALTER TABLE games ADD COLUMN recommendation_count INTEGER;
+      ALTER TABLE games ADD COLUMN content_descriptors_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE games ADD COLUMN discovery_json TEXT;
+    `
+  },
+  {
+    id: 3,
+    sql: `
+      ALTER TABLE games ADD COLUMN metadata_version INTEGER NOT NULL DEFAULT 0;
+    `
   }
 ] as const;
-

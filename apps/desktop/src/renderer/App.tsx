@@ -1,29 +1,31 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
+  ChevronLeft,
+  ChevronRight,
   Clipboard,
-  Download,
+  ExternalLink,
   Gamepad2,
   Home,
+  KeyRound,
   Library,
+  Link2,
+  LogOut,
   Play,
   RefreshCw,
   Search,
   Settings,
-  Sparkles,
   X
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import type { AppSettings, Game, GameDetail, HomeModel, SourceImportResult, SourceMatch } from "@hynite/core";
+import type { AppSettings, Game, GameDetail, HomeModel, InstallState, SourceImportResult, SourceMatch, SyncStatus } from "@hynite/core";
 
-type Route = "home" | "library" | "discover" | "sources" | "settings";
+type Route = "home" | "library" | "settings";
 
 const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
   { id: "home", label: "Home", icon: Home },
   { id: "library", label: "Library", icon: Library },
-  { id: "discover", label: "Discover", icon: Sparkles },
-  { id: "sources", label: "Sources", icon: Download },
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
@@ -44,18 +46,78 @@ function coverGlow(game?: Game): CSSProperties {
   return { "--glow": `oklch(0.58 0.12 ${seed % 360} / 0.55)` } as CSSProperties;
 }
 
+function primaryCover(game: Game): string | undefined {
+  return game.libraryCapsuleUrl ?? game.coverUrl;
+}
+
+function heroStill(game: Game): string | undefined {
+  return game.headerUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.fullUrl ?? game.backgroundUrl;
+}
+
+function formatHours(minutes?: number): string {
+  if (!minutes) {
+    return "No playtime";
+  }
+
+  return `${Math.round(minutes / 60)}h played`;
+}
+
+function formatDate(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: parsed.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+}
+
+function activityLabel(game: Game): string {
+  const played = Date.parse(game.lastPlayedAt ?? "") || 0;
+  const added = Date.parse(game.addedAt ?? "") || 0;
+  if (played >= added && played > 0) {
+    const today = new Date().toDateString();
+    const date = new Date(played);
+    return date.toDateString() === today ? "Played today" : `Played ${formatDate(date.toISOString())}`;
+  }
+
+  if (added > 0) {
+    return `Added ${formatDate(game.addedAt)}`;
+  }
+
+  return formatHours(game.playtimeMinutes);
+}
+
+function canLaunch(game: Game): boolean {
+  return game.installState === "installed" || game.sourceIds.some((source) => source.provider === "steam");
+}
+
+function heroMeta(game: Game): string[] {
+  return [
+    game.discovery?.storeCategory ?? game.discovery?.signal,
+    game.discovery?.priceText,
+    game.releaseDate ? `Released ${formatDate(game.releaseDate)}` : undefined,
+    game.genres[0]
+  ].filter(Boolean) as string[];
+}
+
 function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (game: Game) => void; wide?: boolean }) {
   const info = [
     game.installState === "installed" ? "Installed" : "Not installed",
     game.genres[0],
+    game.discovery?.signal,
     game.playtimeMinutes ? `${Math.round(game.playtimeMinutes / 60)}h` : undefined
   ]
     .filter(Boolean)
     .join(" · ");
+  const cover = primaryCover(game);
 
   return (
     <button className={wide ? "wide-game" : "game-cover"} style={{ ...fallbackArt(game), ...coverGlow(game) }} onClick={() => onSelect(game)}>
-      <span className="cover-art" style={game.coverUrl ? { backgroundImage: `url(${game.coverUrl})` } : undefined}>
+      <span className="cover-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
         <span className="cover-reveal">
           <span className="cover-title">{game.title}</span>
           <span className="cover-meta">{info}</span>
@@ -84,41 +146,103 @@ function GameRow({ title, games, onSelect }: { title: string; games: Game[]; onS
   );
 }
 
-function Hero({ home, onSelect, onSync }: { home?: HomeModel; onSelect: (game: Game) => void; onSync: () => void }) {
-  const heroGame = home?.continuePlaying[0] ?? home?.popularNow[0] ?? home?.recommended[0];
+function Hero({
+  home,
+  settings,
+  onSelect,
+  onSync
+}: {
+  home?: HomeModel;
+  settings?: AppSettings;
+  onSelect: (game: Game) => void;
+  onSync: () => void;
+}) {
+  const heroGames = useMemo(() => {
+    const rows = home?.popularNow ?? [];
+    return rows.filter((game, index) => rows.findIndex((candidate) => candidate.id === game.id) === index).slice(0, 6);
+  }, [home]);
+  const [heroIndex, setHeroIndex] = useState(0);
+  const heroGame = heroGames[heroIndex % Math.max(heroGames.length, 1)];
+  const heroShots = (heroGame?.screenshots ?? []).slice(0, 3).map((shot) => shot.thumbnailUrl);
+
+  useEffect(() => {
+    setHeroIndex(0);
+  }, [heroGames.length]);
+
+  useEffect(() => {
+    if (settings?.reduceMotion || heroGames.length < 2) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % heroGames.length), 9000);
+    return () => window.clearInterval(timer);
+  }, [heroGames.length, settings?.reduceMotion]);
+
+  const stepHero = (direction: -1 | 1) => {
+    setHeroIndex((index) => (index + direction + heroGames.length) % heroGames.length);
+  };
 
   return (
     <section className="hero" style={coverGlow(heroGame)}>
-      <div className="hero-glow hero-glow-a" />
-      <div className="hero-glow hero-glow-b" />
       {heroGame ? (
         <>
+          <div className="hero-media">
+            <span style={heroStill(heroGame) ? { backgroundImage: `url(${heroStill(heroGame)})` } : undefined} />
+          </div>
+          <div className="hero-shade" />
           <button className="hero-cover" style={fallbackArt(heroGame)} onClick={() => onSelect(heroGame)}>
-            <span style={heroGame.coverUrl ? { backgroundImage: `url(${heroGame.coverUrl})` } : undefined} />
+            <span style={heroStill(heroGame) ? { backgroundImage: `url(${heroStill(heroGame)})` } : undefined} />
           </button>
           <div className="hero-copy">
-            <p className="eyebrow">{heroGame.installState === "installed" ? "Continue playing" : "Popular now"}</p>
+            <div className="hero-kicker">
+              <span>{heroGame.discovery?.signal ?? "Featured on Steam"}</span>
+              {heroGames.length > 1 ? (
+                <span className="hero-nav">
+                  <button onClick={() => stepHero(-1)} aria-label="Previous featured game">
+                    <ChevronLeft size={15} />
+                  </button>
+                  <button onClick={() => stepHero(1)} aria-label="Next featured game">
+                    <ChevronRight size={15} />
+                  </button>
+                </span>
+              ) : null}
+            </div>
             <h1>{heroGame.title}</h1>
-            <p>
-              {[heroGame.genres[0], heroGame.developers[0], heroGame.releaseDate].filter(Boolean).join(" · ") || "Steam discovery"}
-            </p>
+            <p>{heroGame.shortDescription || heroMeta(heroGame).join(" · ") || "Steam Store feature"}</p>
+            <div className="hero-meta-grid">
+              {heroMeta(heroGame).map((item) => (
+                <span key={item}>{item}</span>
+              ))}
+              {heroGame.discovery?.discountPercent ? <strong>-{heroGame.discovery.discountPercent}%</strong> : null}
+            </div>
+            {heroShots.length ? (
+              <div className="hero-shot-grid">
+                {heroShots.map((image) => (
+                  <span key={image} style={{ backgroundImage: `url(${image})` }} />
+                ))}
+              </div>
+            ) : null}
             <div className="hero-actions">
-              <button className="primary-action" onClick={() => (heroGame.installState === "installed" ? window.hynite.games.launch(heroGame.id) : onSelect(heroGame))}>
-                <Play size={16} />
-                {heroGame.installState === "installed" ? "Play" : "Details"}
-              </button>
               <button className="secondary-action" onClick={() => onSelect(heroGame)}>
                 <BookOpen size={16} />
                 Info
               </button>
+              {heroGame.discovery?.storeUrl ? (
+                <button className="secondary-action" onClick={() => void window.hynite.native.openExternal(heroGame.discovery?.storeUrl ?? "")}>
+                  <ExternalLink size={16} />
+                  Store
+                </button>
+              ) : null}
             </div>
           </div>
         </>
       ) : (
         <div className="hero-empty">
+          <div className="hero-glow hero-glow-a" />
+          <div className="hero-glow hero-glow-b" />
           <Gamepad2 size={36} />
           <h1>Hynite</h1>
-          <p>Sync Steam to build the first library view.</p>
+          <p>Pair Steam to build the first library view.</p>
           <button className="primary-action" onClick={onSync}>
             <RefreshCw size={16} />
             Sync Steam
@@ -129,13 +253,22 @@ function Hero({ home, onSelect, onSync }: { home?: HomeModel; onSelect: (game: G
   );
 }
 
-function HomeScreen({ home, onSelect, onSync }: { home?: HomeModel; onSelect: (game: Game) => void; onSync: () => void }) {
+function HomeScreen({
+  home,
+  settings,
+  onSelect,
+  onSync
+}: {
+  home?: HomeModel;
+  settings?: AppSettings;
+  onSelect: (game: Game) => void;
+  onSync: () => void;
+}) {
   return (
     <main className="page">
-      <Hero home={home} onSelect={onSelect} onSync={onSync} />
-      <GameRow title="Jump back in" games={home?.continuePlaying ?? []} onSelect={onSelect} />
-      <GameRow title="Recommended for you" games={home?.recommended ?? []} onSelect={onSelect} />
-      <GameRow title="Popular now" games={home?.popularNow ?? []} onSelect={onSelect} />
+      <Hero home={home} settings={settings} onSelect={onSelect} onSync={onSync} />
+      <GameRow title="Recently played" games={home?.continuePlaying ?? []} onSelect={onSelect} />
+      <GameRow title="Most played" games={home?.mostPlayed ?? []} onSelect={onSelect} />
     </main>
   );
 }
@@ -144,12 +277,24 @@ function LibraryScreen({
   games,
   query,
   setQuery,
+  sort,
+  setSort,
+  sortDirection,
+  setSortDirection,
+  installState,
+  setInstallState,
   onSelect,
   onSync
 }: {
   games: Game[];
   query: string;
   setQuery: (query: string) => void;
+  sort: "recent" | "title" | "playtime" | "release";
+  setSort: (sort: "recent" | "title" | "playtime" | "release") => void;
+  sortDirection: "asc" | "desc";
+  setSortDirection: (direction: "asc" | "desc") => void;
+  installState: InstallState | "all";
+  setInstallState: (state: InstallState | "all") => void;
   onSelect: (game: Game) => void;
   onSync: () => void;
 }) {
@@ -165,6 +310,21 @@ function LibraryScreen({
             <Search size={15} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search library" />
           </label>
+          <select className="plain-select" value={installState} onChange={(event) => setInstallState(event.target.value as InstallState | "all")}>
+            <option value="all">All states</option>
+            <option value="installed">Installed</option>
+            <option value="not_installed">Not installed</option>
+            <option value="unknown">Unknown</option>
+          </select>
+          <select className="plain-select" value={sort} onChange={(event) => setSort(event.target.value as "recent" | "title" | "playtime" | "release")}>
+            <option value="title">Title</option>
+            <option value="recent">Recent activity</option>
+            <option value="playtime">Playtime</option>
+            <option value="release">Release date</option>
+          </select>
+          <button className="secondary-action" onClick={() => setSortDirection(sortDirection === "asc" ? "desc" : "asc")}>
+            {sortDirection === "asc" ? "Ascending" : "Descending"}
+          </button>
           <button className="secondary-action" onClick={onSync}>
             <RefreshCw size={16} />
             Sync
@@ -175,7 +335,7 @@ function LibraryScreen({
         <div className="empty-state">
           <Library size={34} />
           <h2>No games imported</h2>
-          <p>Steam sync will scan installed app manifests from your Steam libraries.</p>
+          <p>Steam sync imports owned games from your paired account.</p>
           <button className="primary-action" onClick={onSync}>
             <RefreshCw size={16} />
             Sync Steam
@@ -188,20 +348,6 @@ function LibraryScreen({
           ))}
         </div>
       )}
-    </main>
-  );
-}
-
-function DiscoverScreen({ home, onSelect }: { home?: HomeModel; onSelect: (game: Game) => void }) {
-  return (
-    <main className="page">
-      <div className="screen-title">
-        <h1>Discover</h1>
-        <p>{home?.stale ? "Showing cached Steam discovery data" : "Steam-powered popular and local-taste rows"}</p>
-      </div>
-      <GameRow title="Popular now" games={home?.popularNow ?? []} onSelect={onSelect} />
-      <GameRow title="Recommended" games={home?.recommended ?? []} onSelect={onSelect} />
-      <GameRow title="New and notable" games={home?.newAndNotable ?? []} onSelect={onSelect} />
     </main>
   );
 }
@@ -257,7 +403,7 @@ function SourcesScreen() {
   }
 
   return (
-    <main className="page source-page">
+    <div className="source-page settings-source-tab">
       <div className="screen-title">
         <h1>Sources</h1>
         <p>User-managed Hydra-compatible JSON sources. Imported links are only shown and copied.</p>
@@ -325,54 +471,242 @@ function SourcesScreen() {
           ))}
         </div>
       </section>
-    </main>
+    </div>
   );
 }
+
+function progressText(status?: SyncStatus): string {
+  if (!status) {
+    return "Sync status unavailable";
+  }
+  const progress = status.total ? ` · ${status.current ?? 0}/${status.total}` : "";
+  const last = status.lastSuccessAt ? ` · last ${formatDate(status.lastSuccessAt)}` : "";
+  return `${status.active ? "Syncing" : "Idle"} · ${status.message}${progress}${last}`;
+}
+
+function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: () => void }) {
+  return (
+    <AnimatePresence>
+      <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+        <motion.section className="settings-modal" initial={{ y: 24, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 24, opacity: 0 }}>
+          <div className="modal-head">
+            <div>
+              <p className="eyebrow">Steam sync</p>
+              <h2>{status?.message ?? "No sync status"}</h2>
+            </div>
+            <button className="close-button inline-close" onClick={onClose}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="sync-summary">
+            <span>{status?.active ? "Running" : "Idle"}</span>
+            <span>{status?.phase ?? "idle"}</span>
+            <span>{status?.total ? `${status.current ?? 0}/${status.total}` : "No active progress"}</span>
+            <span>{status?.lastSuccessAt ? `Last success ${formatDate(status.lastSuccessAt)}` : "No successful sync yet"}</span>
+          </div>
+          <div className="sync-log">
+            {status?.history.length ? null : <p className="muted">No sync events recorded yet.</p>}
+            {status?.history.map((entry) => (
+              <div key={entry.id} className={`sync-log-row ${entry.level}`}>
+                <time>{new Date(entry.timestamp).toLocaleTimeString()}</time>
+                <div>
+                  <strong>{entry.message}</strong>
+                  <span>{entry.phase}</span>
+                  {entry.details ? <pre>{JSON.stringify(entry.details, null, 2)}</pre> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.section>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+type SettingsTab = "steam" | "metadata" | "sources" | "advanced";
 
 function SettingsScreen({
   settings,
   setSettings,
-  onSeed
+  syncStatus,
+  onSeed,
+  onLibraryCleared
 }: {
   settings?: AppSettings;
   setSettings: (settings: AppSettings) => void;
+  syncStatus?: SyncStatus;
   onSeed: () => void;
+  onLibraryCleared: () => void;
 }) {
-  const [roots, setRoots] = useState(settings?.steamLibraryRoots.join("\n") ?? "");
+  const [tab, setTab] = useState<SettingsTab>("steam");
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [steamGridDbKey, setSteamGridDbKey] = useState("");
+  const [steamMessage, setSteamMessage] = useState<string | undefined>();
+  const [metadataMessage, setMetadataMessage] = useState<string | undefined>();
 
-  useEffect(() => {
-    setRoots(settings?.steamLibraryRoots.join("\n") ?? "");
-  }, [settings]);
+  async function pairSteam() {
+    setSteamMessage(undefined);
+    const paired = await window.hynite.steam.pair();
+    setSettings(await window.hynite.settings.get());
+    setSteamMessage(`Paired Steam account ${paired.steamId}.`);
+  }
 
-  async function save() {
-    const next = await window.hynite.settings.update({
-      steamLibraryRoots: roots
-        .split("\n")
-        .map((root) => root.trim())
-        .filter(Boolean)
-    });
+  async function saveApiKey() {
+    setSteamMessage(undefined);
+    const next = await window.hynite.steam.saveApiKey(apiKey);
     setSettings(next);
+    setApiKey("");
+    setSteamMessage("Steam Web API key saved.");
+  }
+
+  async function disconnectSteam() {
+    const next = await window.hynite.steam.disconnect();
+    setSettings(next);
+    setApiKey("");
+    setSteamMessage("Steam account disconnected.");
+  }
+
+  async function saveSteamGridDbKey() {
+    setMetadataMessage(undefined);
+    const next = await window.hynite.metadata.saveSteamGridDbKey(steamGridDbKey);
+    setSettings(next);
+    setSteamGridDbKey("");
+    setMetadataMessage("SteamGridDB fallback saved.");
+  }
+
+  async function clearSteamGridDbKey() {
+    setMetadataMessage(undefined);
+    const next = await window.hynite.metadata.clearSteamGridDbKey();
+    setSettings(next);
+    setSteamGridDbKey("");
+    setMetadataMessage("SteamGridDB fallback disabled.");
+  }
+
+  async function clearLibrary() {
+    const result = await window.hynite.library.clear();
+    onLibraryCleared();
+    setSteamMessage(`Cleared ${result.cleared} games from the local library.`);
   }
 
   return (
     <main className="page settings-page">
       <div className="screen-title">
         <h1>Settings</h1>
-        <p>Steam roots are optional. Hynite also scans common Windows Steam paths.</p>
+        <p>Steam account, metadata providers, source imports, and local maintenance.</p>
       </div>
-      <section className="settings-section">
-        <h2>Steam library roots</h2>
-        <textarea value={roots} onChange={(event) => setRoots(event.target.value)} placeholder="D:\\SteamLibrary" />
-        <button className="primary-action" onClick={() => void save()}>
-          Save
-        </button>
+
+      <button className="sync-status-line" onClick={() => setShowSyncModal(true)}>
+        <span className={syncStatus?.active ? "status-dot active-sync" : "status-dot"} />
+        <span>{progressText(syncStatus)}</span>
+      </button>
+
+      <section className="settings-shell">
+        <nav className="settings-tabs">
+          {[
+            ["steam", "Steam"],
+            ["metadata", "Metadata"],
+            ["sources", "Sources"],
+            ["advanced", "Advanced"]
+          ].map(([id, label]) => (
+            <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id as SettingsTab)}>
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="settings-pane">
+          {tab === "steam" ? (
+            <section className="settings-section">
+              <h2>Steam account</h2>
+              <div className="steam-account-row">
+                <div>
+                  <strong>{settings?.steamAccount ? settings.steamAccount.steamId : "No account paired"}</strong>
+                  <span>
+                    {settings?.steamAccount?.webApiKey
+                      ? "Ready to sync owned games, playtime, recent activity, and local install state"
+                      : settings?.steamAccount
+                        ? "Web API key required for owned games"
+                        : "Use Steam login to pair an account"}
+                  </span>
+                </div>
+                <div className="steam-actions">
+                  <button className="secondary-action" onClick={() => void pairSteam()}>
+                    <Link2 size={16} />
+                    Pair
+                  </button>
+                  <button className="secondary-action" disabled={!settings?.steamAccount} onClick={() => void disconnectSteam()}>
+                    <LogOut size={16} />
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+              <div className="api-key-row">
+                <input
+                  className="plain-input"
+                  type="password"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder="Steam Web API key"
+                  disabled={!settings?.steamAccount}
+                />
+                <button className="primary-action" disabled={!settings?.steamAccount || !apiKey.trim()} onClick={() => void saveApiKey()}>
+                  <KeyRound size={16} />
+                  Save key
+                </button>
+              </div>
+              {steamMessage ? <p className="result-line">{steamMessage}</p> : null}
+            </section>
+          ) : null}
+
+          {tab === "metadata" ? (
+            <section className="settings-section">
+              <h2>Metadata</h2>
+              <div className="steam-account-row">
+                <div>
+                  <strong>{settings?.steamGridDbApiKey ? "SteamGridDB configured" : "SteamGridDB not configured"}</strong>
+                  <span>Optional fallback for missing vertical covers. Steam official assets remain the first source.</span>
+                </div>
+                <button className="secondary-action" disabled={!settings?.steamGridDbApiKey} onClick={() => void clearSteamGridDbKey()}>
+                  <X size={16} />
+                  Clear
+                </button>
+              </div>
+              <div className="api-key-row">
+                <input
+                  className="plain-input"
+                  type="password"
+                  value={steamGridDbKey}
+                  onChange={(event) => setSteamGridDbKey(event.target.value)}
+                  placeholder="SteamGridDB API key"
+                />
+                <button className="primary-action" disabled={!steamGridDbKey.trim()} onClick={() => void saveSteamGridDbKey()}>
+                  <KeyRound size={16} />
+                  Save key
+                </button>
+              </div>
+              {metadataMessage ? <p className="result-line">{metadataMessage}</p> : null}
+            </section>
+          ) : null}
+
+          {tab === "sources" ? <SourcesScreen /> : null}
+
+          {tab === "advanced" ? (
+            <section className="settings-section">
+              <h2>Development</h2>
+              <div className="settings-actions">
+                <button className="secondary-action" onClick={() => void clearLibrary()}>
+                  Clear library
+                </button>
+                <button className="secondary-action" onClick={onSeed}>
+                  Add demo game
+                </button>
+              </div>
+            </section>
+          ) : null}
+        </div>
       </section>
-      <section className="settings-section">
-        <h2>Development</h2>
-        <button className="secondary-action" onClick={onSeed}>
-          Add demo game
-        </button>
-      </section>
+      {showSyncModal ? <SyncStatusModal status={syncStatus} onClose={() => setShowSyncModal(false)} /> : null}
     </main>
   );
 }
@@ -382,42 +716,125 @@ function DetailOverlay({ game, onClose, onChanged }: { game: GameDetail; onClose
     await window.hynite.clipboard.copy(text);
   }
 
+  const cover = primaryCover(game);
+  const media = heroStill(game);
+  const platforms = [
+    game.platforms?.windows ? "Windows" : undefined,
+    game.platforms?.mac ? "macOS" : undefined,
+    game.platforms?.linux ? "Linux" : undefined
+  ].filter(Boolean);
+
   return (
     <AnimatePresence>
       <motion.aside className="detail-overlay" style={coverGlow(game)} initial={{ x: 460 }} animate={{ x: 0 }} exit={{ x: 460 }} transition={{ duration: 0.26 }}>
         <div className="detail-hero">
-          <div className="detail-glow" />
+          <div className="detail-media">
+            {game.trailerUrl ? (
+              <video muted autoPlay loop playsInline poster={media}>
+                <source src={game.trailerUrl} />
+              </video>
+            ) : null}
+            <span style={media ? { backgroundImage: `url(${media})` } : undefined} />
+          </div>
+          <div className="detail-shade" />
           <button className="close-button" onClick={onClose}>
             <X size={18} />
           </button>
           <div className="detail-cover" style={fallbackArt(game)}>
-            <span style={game.coverUrl ? { backgroundImage: `url(${game.coverUrl})` } : undefined} />
+            <span style={cover ? { backgroundImage: `url(${cover})` } : undefined} />
           </div>
-          <p className="eyebrow">Game info</p>
+          <p className="eyebrow">{game.discovery?.signal ?? "Game info"}</p>
           <h1>{game.title}</h1>
-          <p>{[game.developers[0], game.genres[0], game.releaseDate].filter(Boolean).join(" · ")}</p>
-          <button className="primary-action" disabled={game.installState !== "installed"} onClick={() => void window.hynite.games.launch(game.id)}>
+          <p>{[game.developers[0], game.genres[0], game.releaseDate].filter(Boolean).join(" · ") || game.shortDescription}</p>
+          <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void window.hynite.games.launch(game.id)}>
             <Play size={16} />
             Play
           </button>
         </div>
+        {game.shortDescription || game.aboutText ? (
+          <div className="detail-section">
+            <h2>Overview</h2>
+            <p className="detail-copy">{game.shortDescription ?? game.aboutText}</p>
+          </div>
+        ) : null}
         <div className="detail-section">
-          <h2>Metadata</h2>
+          <h2>Activity</h2>
           <dl>
             <div>
-              <dt>Provider</dt>
-              <dd>{game.sourceIds.map((source) => source.provider).join(", ")}</dd>
-            </div>
-            <div>
               <dt>Playtime</dt>
-              <dd>{game.playtimeMinutes ? `${Math.round(game.playtimeMinutes / 60)}h` : "None"}</dd>
+              <dd>{formatHours(game.playtimeMinutes)}</dd>
             </div>
             <div>
-              <dt>Status</dt>
-              <dd>{game.metadataStatus}</dd>
+              <dt>Last played</dt>
+              <dd>{formatDate(game.lastPlayedAt) ?? "Never"}</dd>
+            </div>
+            <div>
+              <dt>Added</dt>
+              <dd>{formatDate(game.addedAt) ?? "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Release</dt>
+              <dd>{formatDate(game.releaseDate) ?? "Unknown"}</dd>
             </div>
           </dl>
         </div>
+        <div className="detail-section">
+          <h2>Steam data</h2>
+          <dl>
+            <div>
+              <dt>Developers</dt>
+              <dd>{game.developers.join(", ") || "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Publishers</dt>
+              <dd>{game.publishers.join(", ") || "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Achievements</dt>
+              <dd>{game.achievementCount ?? "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Recommendations</dt>
+              <dd>{game.recommendationCount?.toLocaleString() ?? "Unknown"}</dd>
+            </div>
+          </dl>
+          <div className="tag-list">
+            {[...game.genres, ...game.tags].slice(0, 12).map((tag) => (
+              <span key={tag}>{tag}</span>
+            ))}
+          </div>
+          {platforms.length ? (
+            <div className="platform-list">
+              {platforms.map((platform) => (
+                <span key={platform}>{platform}</span>
+              ))}
+            </div>
+          ) : null}
+          <div className="detail-links">
+            {game.websiteUrl ? (
+              <button className="icon-action" onClick={() => window.open(game.websiteUrl, "_blank")}>
+                <ExternalLink size={15} />
+                Website
+              </button>
+            ) : null}
+            {game.supportUrl ? (
+              <button className="icon-action" onClick={() => window.open(game.supportUrl, "_blank")}>
+                <ExternalLink size={15} />
+                Support
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {game.screenshots.length ? (
+          <div className="detail-section">
+            <h2>Screenshots</h2>
+            <div className="screenshot-strip">
+              {game.screenshots.slice(0, 6).map((screenshot) => (
+                <button key={screenshot.fullUrl} style={{ backgroundImage: `url(${screenshot.thumbnailUrl})` }} onClick={() => window.open(screenshot.fullUrl, "_blank")} />
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className="detail-section source-matches">
           <h2>Download options</h2>
           {game.sourceMatches.length === 0 ? (
@@ -452,35 +869,51 @@ export function App() {
   const [route, setRoute] = useState<Route>("home");
   const [home, setHome] = useState<HomeModel | undefined>();
   const [games, setGames] = useState<Game[]>([]);
+  const [recentGames, setRecentGames] = useState<Game[]>([]);
   const [selected, setSelected] = useState<GameDetail | undefined>();
   const [settings, setSettings] = useState<AppSettings | undefined>();
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
   const [query, setQuery] = useState("");
+  const [librarySort, setLibrarySort] = useState<"recent" | "title" | "playtime" | "release">("title");
+  const [librarySortDirection, setLibrarySortDirection] = useState<"asc" | "desc">("asc");
+  const [libraryInstallState, setLibraryInstallState] = useState<InstallState | "all">("all");
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
-    const [nextGames, nextHome, nextSettings] = await Promise.all([
-      window.hynite.library.list({ search: query, sort: "title", installState: "all" }),
+    const [nextGames, nextRecentGames, nextHome, nextSettings] = await Promise.all([
+      window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState }),
+      window.hynite.library.list({ search: "", sort: "recent", installState: "all" }),
       window.hynite.home.get(),
       window.hynite.settings.get()
     ]);
     setGames(nextGames);
+    setRecentGames(nextRecentGames);
     setHome(nextHome);
     setSettings(nextSettings);
   }
 
   useEffect(() => {
     void refresh();
+    void window.hynite.sync.status().then(setSyncStatus);
+    return window.hynite.sync.onStatusChanged((status) => {
+      setSyncStatus(status);
+      if (!status.active && status.phase === "complete") {
+        void refresh();
+      }
+    });
   }, []);
 
   useEffect(() => {
-    void window.hynite.library.list({ search: query, sort: "title", installState: "all" }).then(setGames);
-  }, [query]);
+    void window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState }).then(setGames);
+  }, [query, librarySort, librarySortDirection, libraryInstallState]);
 
   async function syncSteam() {
     setBusy(true);
     try {
       await window.hynite.library.sync("steam");
       await refresh();
+    } catch (err) {
+      console.error(err);
     } finally {
       setBusy(false);
     }
@@ -496,19 +929,38 @@ export function App() {
 
   const routeContent = useMemo(() => {
     if (route === "home") {
-      return <HomeScreen home={home} onSelect={(game) => void selectGame(game)} onSync={() => void syncSteam()} />;
+      return <HomeScreen home={home} settings={settings} onSelect={(game) => void selectGame(game)} onSync={() => void syncSteam()} />;
     }
     if (route === "library") {
-      return <LibraryScreen games={games} query={query} setQuery={setQuery} onSelect={(game) => void selectGame(game)} onSync={() => void syncSteam()} />;
+      return (
+        <LibraryScreen
+          games={games}
+          query={query}
+          setQuery={setQuery}
+          sort={librarySort}
+          setSort={setLibrarySort}
+          sortDirection={librarySortDirection}
+          setSortDirection={setLibrarySortDirection}
+          installState={libraryInstallState}
+          setInstallState={setLibraryInstallState}
+          onSelect={(game) => void selectGame(game)}
+          onSync={() => void syncSteam()}
+        />
+      );
     }
-    if (route === "discover") {
-      return <DiscoverScreen home={home} onSelect={(game) => void selectGame(game)} />;
-    }
-    if (route === "sources") {
-      return <SourcesScreen />;
-    }
-    return <SettingsScreen settings={settings} setSettings={setSettings} onSeed={() => void window.hynite.debug.seed().then(refresh)} />;
-  }, [route, home, games, query, settings]);
+    return (
+      <SettingsScreen
+        settings={settings}
+        setSettings={setSettings}
+        syncStatus={syncStatus}
+        onLibraryCleared={() => {
+          setSelected(undefined);
+          void refresh();
+        }}
+        onSeed={() => void window.hynite.debug.seed().then(refresh)}
+      />
+    );
+  }, [route, home, games, query, settings, syncStatus, librarySort, librarySortDirection, libraryInstallState]);
 
   return (
     <div className="app-shell">
@@ -530,9 +982,15 @@ export function App() {
           </button>
           <div className="rail-section">
             <p>Recent</p>
-            {games.slice(0, 5).map((game) => (
+            {recentGames.slice(0, 6).map((game) => (
               <button key={game.id} className="recent-link" onClick={() => void selectGame(game)}>
-                {game.title}
+                <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
+                  {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
+                </span>
+                <span>
+                  <strong>{game.title}</strong>
+                  <em>{activityLabel(game)}</em>
+                </span>
               </button>
             ))}
           </div>

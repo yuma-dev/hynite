@@ -9,6 +9,35 @@ export type InstallState = z.infer<typeof installStateSchema>;
 export const metadataStatusSchema = z.enum(["none", "partial", "complete", "failed"]);
 export type MetadataStatus = z.infer<typeof metadataStatusSchema>;
 
+export const gameScreenshotSchema = z.object({
+  thumbnailUrl: z.string().min(1),
+  fullUrl: z.string().min(1)
+});
+export type GameScreenshot = z.infer<typeof gameScreenshotSchema>;
+
+export const gamePlatformsSchema = z.object({
+  windows: z.boolean(),
+  mac: z.boolean(),
+  linux: z.boolean()
+});
+export type GamePlatforms = z.infer<typeof gamePlatformsSchema>;
+
+export const gameDiscoverySchema = z.object({
+  score: z.number(),
+  signal: z.string().min(1),
+  ccu: z.number().int().nonnegative().optional(),
+  owners: z.string().optional(),
+  reviewScore: z.number().optional(),
+  rankDelta: z.number().optional(),
+  priceText: z.string().optional(),
+  originalPriceText: z.string().optional(),
+  discountPercent: z.number().int().nonnegative().optional(),
+  storeCategory: z.string().optional(),
+  storeUrl: z.string().optional(),
+  sources: z.array(z.string())
+});
+export type GameDiscovery = z.infer<typeof gameDiscoverySchema>;
+
 export const sourceIdentitySchema = z.object({
   provider: providerIdSchema,
   externalId: z.string().min(1)
@@ -25,6 +54,21 @@ export const gameSchema = z.object({
   executablePath: z.string().optional(),
   coverUrl: z.string().optional(),
   backgroundUrl: z.string().optional(),
+  communityIconUrl: z.string().optional(),
+  libraryCapsuleUrl: z.string().optional(),
+  headerUrl: z.string().optional(),
+  trailerUrl: z.string().optional(),
+  trailerPosterUrl: z.string().optional(),
+  screenshots: z.array(gameScreenshotSchema),
+  shortDescription: z.string().optional(),
+  aboutText: z.string().optional(),
+  websiteUrl: z.string().optional(),
+  supportUrl: z.string().optional(),
+  platforms: gamePlatformsSchema.optional(),
+  achievementCount: z.number().int().nonnegative().optional(),
+  recommendationCount: z.number().int().nonnegative().optional(),
+  contentDescriptors: z.array(z.string()),
+  discovery: gameDiscoverySchema.optional(),
   genres: z.array(z.string()),
   tags: z.array(z.string()),
   developers: z.array(z.string()),
@@ -32,6 +76,8 @@ export const gameSchema = z.object({
   releaseDate: z.string().optional(),
   playtimeMinutes: z.number().int().nonnegative().optional(),
   lastPlayedAt: z.string().optional(),
+  addedAt: z.string().optional(),
+  updatedAt: z.string().optional(),
   metadataStatus: metadataStatusSchema
 });
 export type Game = z.infer<typeof gameSchema>;
@@ -46,13 +92,31 @@ export type ImportedGame = {
   launchCommand?: string;
   playtimeMinutes?: number;
   lastPlayedAt?: string;
+  communityIconUrl?: string;
 };
 
 export type GameMetadataPatch = Partial<
   Pick<
     Game,
+    | "title"
+    | "sortTitle"
     | "coverUrl"
     | "backgroundUrl"
+    | "communityIconUrl"
+    | "libraryCapsuleUrl"
+    | "headerUrl"
+    | "trailerUrl"
+    | "trailerPosterUrl"
+    | "screenshots"
+    | "shortDescription"
+    | "aboutText"
+    | "websiteUrl"
+    | "supportUrl"
+    | "platforms"
+    | "achievementCount"
+    | "recommendationCount"
+    | "contentDescriptors"
+    | "discovery"
     | "genres"
     | "tags"
     | "developers"
@@ -73,6 +137,7 @@ export type LibraryQuery = {
   search?: string;
   installState?: InstallState | "all";
   sort?: "recent" | "title" | "playtime" | "release";
+  sortDirection?: "asc" | "desc";
 };
 
 export type SyncResult = {
@@ -80,6 +145,30 @@ export type SyncResult = {
   scanned: number;
   upserted: number;
   warnings: string[];
+};
+
+export type SyncLogLevel = "info" | "warning" | "error";
+
+export type SyncLogEntry = {
+  id: string;
+  timestamp: string;
+  level: SyncLogLevel;
+  phase: string;
+  message: string;
+  details?: Record<string, unknown>;
+};
+
+export type SyncStatus = {
+  active: boolean;
+  phase: string;
+  message: string;
+  providerId?: ProviderId;
+  startedAt?: string;
+  finishedAt?: string;
+  lastSuccessAt?: string;
+  current?: number;
+  total?: number;
+  history: SyncLogEntry[];
 };
 
 export type SourceImportInput =
@@ -111,7 +200,9 @@ export type GameDetail = Game & {
 };
 
 export type HomeModel = {
+  recentActivity: Game[];
   continuePlaying: Game[];
+  mostPlayed: Game[];
   popularNow: Game[];
   recommended: Game[];
   newAndNotable: Game[];
@@ -119,15 +210,23 @@ export type HomeModel = {
   stale: boolean;
 };
 
-export type AppSettings = {
-  steamLibraryRoots: string[];
-  cacheTtlHours: number;
-  reduceMotion: boolean;
+export type SteamAccountSettings = {
+  steamId: string;
+  personaName?: string;
+  pairedAt: string;
+  webApiKey?: EncryptedSecret;
 };
 
-export type SteamInstallLocation = {
-  path: string;
-  source: "registry" | "common-path" | "manual";
+export type SteamPairingResult = {
+  steamId: string;
+  pairedAt: string;
+};
+
+export type AppSettings = {
+  steamAccount?: SteamAccountSettings;
+  steamGridDbApiKey?: EncryptedSecret;
+  cacheTtlHours: number;
+  reduceMotion: boolean;
 };
 
 export type ExecutableInfo = {
@@ -173,4 +272,3 @@ export function makeGameId(provider: ProviderId, externalId: string): string {
 export function makeSortTitle(title: string): string {
   return title.replace(/^(the|a|an)\s+/i, "").toLocaleLowerCase();
 }
-

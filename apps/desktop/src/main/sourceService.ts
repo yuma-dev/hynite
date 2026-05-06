@@ -40,10 +40,12 @@ export class SourceService {
         sortTitle: trimmed.toLocaleLowerCase(),
         sourceIds: [{ provider: "manual", externalId: trimmed }],
         installState: "unknown",
+        screenshots: [],
         genres: [],
         tags: [],
         developers: [],
         publishers: [],
+        contentDescriptors: [],
         metadataStatus: "none"
       },
       this.repository.listDownloadEntries()

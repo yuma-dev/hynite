@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Win32;
 
 var options = new JsonSerializerOptions
 {
@@ -26,7 +25,6 @@ while (await Console.In.ReadLineAsync() is { } line)
 
         object? result = request.Method switch
         {
-            "scanSteamInstall" => ScanSteamInstall(),
             "resolveExecutable" => ResolveExecutable(request.Params),
             "launchGame" => LaunchGame(request.Params),
             "openFolder" => OpenFolder(request.Params),
@@ -48,32 +46,6 @@ static async Task WriteResponse(RpcResponse response, JsonSerializerOptions opti
 {
     await Console.Out.WriteLineAsync(JsonSerializer.Serialize(response, options));
     await Console.Out.FlushAsync();
-}
-
-static object[] ScanSteamInstall()
-{
-    var locations = new List<object>();
-    var registryPath = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null) as string;
-    if (!string.IsNullOrWhiteSpace(registryPath) && Directory.Exists(registryPath))
-    {
-        locations.Add(new { path = registryPath, source = "registry" });
-    }
-
-    var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-    var commonPath = Path.Combine(programFilesX86, "Steam");
-    if (Directory.Exists(commonPath) && locations.All(item => !PathEquals(item, commonPath)))
-    {
-        locations.Add(new { path = commonPath, source = "common-path" });
-    }
-
-    return locations.ToArray();
-}
-
-static bool PathEquals(object item, string path)
-{
-    var property = item.GetType().GetProperty("path");
-    var value = property?.GetValue(item) as string;
-    return string.Equals(value, path, StringComparison.OrdinalIgnoreCase);
 }
 
 static object ResolveExecutable(JsonElement parameters)
@@ -144,4 +116,3 @@ public sealed record RpcRequest(string? Id, string Method, JsonElement Params);
 public sealed record RpcResponse(string? Id, object? Result, RpcError? Error);
 
 public sealed record RpcError(string Message);
-

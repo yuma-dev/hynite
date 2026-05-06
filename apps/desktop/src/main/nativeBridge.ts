@@ -7,19 +7,9 @@ import type {
   LaunchGameRequest,
   LaunchSession,
   SecretInput,
-  SteamInstallLocation
 } from "@hynite/core";
 
 export class NativeBridge {
-  async scanSteamInstall(): Promise<SteamInstallLocation[]> {
-    const roots = [
-      process.env["ProgramFiles(x86)"] ? `${process.env["ProgramFiles(x86)"]}\\Steam` : undefined,
-      process.env.ProgramFiles ? `${process.env.ProgramFiles}\\Steam` : undefined
-    ].filter((path): path is string => Boolean(path));
-
-    return roots.filter((path) => existsSync(path)).map((path) => ({ path, source: "common-path" as const }));
-  }
-
   async resolveExecutable(path: string): Promise<ExecutableInfo> {
     return { path, exists: existsSync(path) };
   }

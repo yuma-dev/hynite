@@ -3,17 +3,15 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { objectValue, parseVdf, stringValue, type VdfObject } from "./vdf";
 
+export type SteamInstalledApp = {
+  appid: string;
+  name: string;
+  installDirectory?: string;
+};
+
 export type SteamLibraryFolder = {
   path: string;
   steamAppsPath: string;
-};
-
-export type SteamAppManifest = {
-  appid: string;
-  name: string;
-  installdir?: string;
-  installDirectory?: string;
-  playtimeMinutes?: number;
 };
 
 function commonSteamRoots(): string[] {
@@ -86,7 +84,7 @@ export async function discoverSteamLibraries(candidateRoots: string[] = []): Pro
   return [...libraries.values()];
 }
 
-function parseManifest(input: string): SteamAppManifest | undefined {
+function parseManifest(input: string): (Omit<SteamInstalledApp, "installDirectory"> & { installFolder?: string }) | undefined {
   const parsed = parseVdf(input);
   const appState = objectValue(parsed.AppState);
   if (!appState) {
@@ -99,20 +97,16 @@ function parseManifest(input: string): SteamAppManifest | undefined {
     return undefined;
   }
 
-  const installdir = stringValue(appState.installdir);
-  const minutes = Number.parseInt(stringValue(appState.LastPlayed) ?? "", 10);
-
   return {
     appid,
     name,
-    installdir,
-    playtimeMinutes: Number.isFinite(minutes) ? minutes : undefined
+    installFolder: stringValue(appState.installdir)
   };
 }
 
-export async function readSteamManifests(library: SteamLibraryFolder): Promise<SteamAppManifest[]> {
+export async function readSteamInstalledApps(library: SteamLibraryFolder): Promise<SteamInstalledApp[]> {
   const files = await readdir(library.steamAppsPath);
-  const manifests: SteamAppManifest[] = [];
+  const apps: SteamInstalledApp[] = [];
 
   for (const file of files.filter((name) => /^appmanifest_\d+\.acf$/i.test(name))) {
     const manifest = parseManifest(await readFile(join(library.steamAppsPath, file), "utf8"));
@@ -120,12 +114,23 @@ export async function readSteamManifests(library: SteamLibraryFolder): Promise<S
       continue;
     }
 
-    manifests.push({
-      ...manifest,
-      installDirectory: manifest.installdir ? join(library.steamAppsPath, "common", manifest.installdir) : undefined
+    apps.push({
+      appid: manifest.appid,
+      name: manifest.name,
+      installDirectory: manifest.installFolder ? join(library.steamAppsPath, "common", manifest.installFolder) : undefined
     });
   }
 
-  return manifests;
+  return apps;
 }
 
+export async function discoverInstalledSteamApps(): Promise<Map<string, SteamInstalledApp>> {
+  const installed = new Map<string, SteamInstalledApp>();
+  for (const library of await discoverSteamLibraries()) {
+    for (const app of await readSteamInstalledApps(library)) {
+      installed.set(app.appid, app);
+    }
+  }
+
+  return installed;
+}

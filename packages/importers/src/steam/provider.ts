@@ -1,9 +1,15 @@
 import type { GameMetadataPatch, ImportedGame, ImporterProvider } from "@hynite/core";
-import { fetchSteamMetadata } from "@hynite/metadata";
-import { discoverSteamLibraries, readSteamManifests } from "./discovery";
+import { refreshFusedMetadata, type MetadataLogger } from "@hynite/metadata";
+import { fetchOwnedSteamGames } from "./webApi";
 
 export type SteamProviderOptions = {
-  candidateRoots?: string[];
+  account?: {
+    steamId: string;
+    webApiKey: string;
+  };
+  includePlayedFreeGames?: boolean;
+  steamGridDbApiKey?: string;
+  metadataLogger?: MetadataLogger;
 };
 
 export class SteamImporterProvider implements ImporterProvider {
@@ -13,22 +19,20 @@ export class SteamImporterProvider implements ImporterProvider {
   constructor(private readonly options: SteamProviderOptions = {}) {}
 
   async scan(): Promise<ImportedGame[]> {
-    const libraries = await discoverSteamLibraries(this.options.candidateRoots);
-    const manifests = (await Promise.all(libraries.map((library) => readSteamManifests(library)))).flat();
+    if (!this.options.account?.steamId || !this.options.account.webApiKey) {
+      throw new Error("Steam sync requires a paired Steam account and Steam Web API key.");
+    }
 
-    return manifests.map((manifest) => ({
-      provider: this.id,
-      externalId: manifest.appid,
-      title: manifest.name,
-      installState: "installed",
-      installDirectory: manifest.installDirectory,
-      launchCommand: `steam://rungameid/${manifest.appid}`,
-      playtimeMinutes: manifest.playtimeMinutes
-    }));
+    const ownedGames = await fetchOwnedSteamGames({
+      steamId: this.options.account.steamId,
+      webApiKey: this.options.account.webApiKey,
+      includePlayedFreeGames: this.options.includePlayedFreeGames
+    });
+
+    return ownedGames;
   }
 
   async refreshMetadata(game: ImportedGame): Promise<GameMetadataPatch> {
-    return fetchSteamMetadata(game.externalId);
+    return refreshFusedMetadata(game, { steamGridDbApiKey: this.options.steamGridDbApiKey, logger: this.options.metadataLogger });
   }
 }
-
