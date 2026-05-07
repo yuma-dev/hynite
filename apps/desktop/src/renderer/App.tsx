@@ -159,82 +159,135 @@ function Hero({
 }) {
   const heroGames = useMemo(() => {
     const rows = home?.popularNow ?? [];
-    return rows.filter((game, index) => rows.findIndex((candidate) => candidate.id === game.id) === index).slice(0, 6);
+    return rows.filter((game, index) => rows.findIndex((candidate) => candidate.id === game.id) === index).slice(0, 20);
   }, [home]);
   const [heroIndex, setHeroIndex] = useState(0);
+  const [isHeroPaused, setHeroPaused] = useState(false);
+  const [activeHeroImage, setActiveHeroImage] = useState<{ gameId: string; image: string } | undefined>();
   const heroGame = heroGames[heroIndex % Math.max(heroGames.length, 1)];
-  const heroShots = (heroGame?.screenshots ?? []).slice(0, 3).map((shot) => shot.thumbnailUrl);
+  const selectedHeroImage = activeHeroImage && activeHeroImage.gameId === heroGame?.id ? activeHeroImage.image : undefined;
+  const heroImage = selectedHeroImage ?? (heroGame ? heroStill(heroGame) : undefined);
+  const heroShots = (heroGame?.screenshots ?? []).slice(0, 3);
+  const reduceHeroMotion = Boolean(settings?.reduceMotion);
+  const heroImageKey = `${heroGame?.id ?? "empty"}:${heroImage ?? "fallback"}`;
 
   useEffect(() => {
     setHeroIndex(0);
   }, [heroGames.length]);
 
   useEffect(() => {
-    if (settings?.reduceMotion || heroGames.length < 2) {
+    setActiveHeroImage(undefined);
+  }, [heroGame?.id]);
+
+  useEffect(() => {
+    if (reduceHeroMotion || isHeroPaused || heroGames.length < 2) {
       return undefined;
     }
 
     const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % heroGames.length), 9000);
     return () => window.clearInterval(timer);
-  }, [heroGames.length, settings?.reduceMotion]);
+  }, [heroGames.length, isHeroPaused, reduceHeroMotion]);
 
   const stepHero = (direction: -1 | 1) => {
     setHeroIndex((index) => (index + direction + heroGames.length) % heroGames.length);
   };
 
   return (
-    <section className="hero" style={coverGlow(heroGame)}>
+    <section
+      className="hero"
+      style={heroGame ? undefined : coverGlow()}
+      onPointerEnter={() => setHeroPaused(true)}
+      onPointerLeave={() => setHeroPaused(false)}
+      onFocus={() => setHeroPaused(true)}
+      onBlur={() => setHeroPaused(false)}
+    >
       {heroGame ? (
         <>
           <div className="hero-media">
-            <span style={heroStill(heroGame) ? { backgroundImage: `url(${heroStill(heroGame)})` } : undefined} />
+            <AnimatePresence initial={false}>
+              <motion.span
+                key={heroImageKey}
+                style={heroImage ? { backgroundImage: `url(${heroImage})` } : undefined}
+                initial={reduceHeroMotion ? false : { opacity: 0, scale: 1.04 }}
+                animate={{ opacity: 0.72, scale: 1.08 }}
+                exit={reduceHeroMotion ? undefined : { opacity: 0, scale: 1.12 }}
+                transition={{ duration: reduceHeroMotion ? 0 : 0.42, ease: "easeOut" }}
+              />
+            </AnimatePresence>
           </div>
           <div className="hero-shade" />
-          <button className="hero-cover" style={fallbackArt(heroGame)} onClick={() => onSelect(heroGame)}>
-            <span style={heroStill(heroGame) ? { backgroundImage: `url(${heroStill(heroGame)})` } : undefined} />
-          </button>
-          <div className="hero-copy">
-            <div className="hero-kicker">
-              <span>{heroGame.discovery?.signal ?? "Featured on Steam"}</span>
-              {heroGames.length > 1 ? (
-                <span className="hero-nav">
-                  <button onClick={() => stepHero(-1)} aria-label="Previous featured game">
-                    <ChevronLeft size={15} />
-                  </button>
-                  <button onClick={() => stepHero(1)} aria-label="Next featured game">
-                    <ChevronRight size={15} />
-                  </button>
-                </span>
-              ) : null}
-            </div>
-            <h1>{heroGame.title}</h1>
-            <p>{heroGame.shortDescription || heroMeta(heroGame).join(" · ") || "Steam Store feature"}</p>
-            <div className="hero-meta-grid">
-              {heroMeta(heroGame).map((item) => (
-                <span key={item}>{item}</span>
-              ))}
-              {heroGame.discovery?.discountPercent ? <strong>-{heroGame.discovery.discountPercent}%</strong> : null}
-            </div>
-            {heroShots.length ? (
-              <div className="hero-shot-grid">
-                {heroShots.map((image) => (
-                  <span key={image} style={{ backgroundImage: `url(${image})` }} />
-                ))}
+          <AnimatePresence initial={false} mode="wait">
+            <motion.button
+              key={heroImageKey}
+              className="hero-cover"
+              style={fallbackArt(heroGame)}
+              onClick={() => onSelect(heroGame)}
+              initial={reduceHeroMotion ? false : { opacity: 0, x: -18, scale: 0.98 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={reduceHeroMotion ? undefined : { opacity: 0, x: 18, scale: 0.98 }}
+              transition={{ duration: reduceHeroMotion ? 0 : 0.28, ease: "easeOut" }}
+            >
+              <span style={heroImage ? { backgroundImage: `url(${heroImage})` } : undefined} />
+            </motion.button>
+          </AnimatePresence>
+          <AnimatePresence initial={false} mode="wait">
+            <motion.div
+              key={heroGame.id}
+              className="hero-copy"
+              initial={reduceHeroMotion ? false : { opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduceHeroMotion ? undefined : { opacity: 0, y: -8 }}
+              transition={{ duration: reduceHeroMotion ? 0 : 0.24, ease: "easeOut" }}
+            >
+              <div className="hero-kicker">
+                <span>{heroGame.discovery?.signal ?? "Featured on Steam"}</span>
+                {heroGames.length > 1 ? (
+                  <span className="hero-nav">
+                    <button onClick={() => stepHero(-1)} aria-label="Previous featured game">
+                      <ChevronLeft size={15} />
+                    </button>
+                    <button onClick={() => stepHero(1)} aria-label="Next featured game">
+                      <ChevronRight size={15} />
+                    </button>
+                  </span>
+                ) : null}
               </div>
-            ) : null}
-            <div className="hero-actions">
-              <button className="secondary-action" onClick={() => onSelect(heroGame)}>
-                <BookOpen size={16} />
-                Info
-              </button>
-              {heroGame.discovery?.storeUrl ? (
-                <button className="secondary-action" onClick={() => void window.hynite.native.openExternal(heroGame.discovery?.storeUrl ?? "")}>
-                  <ExternalLink size={16} />
-                  Store
-                </button>
+              <h1>{heroGame.title}</h1>
+              <p>{heroGame.shortDescription || heroMeta(heroGame).join(" · ") || "Steam Store feature"}</p>
+              <div className="hero-meta-grid">
+                {heroMeta(heroGame).map((item) => (
+                  <span key={item}>{item}</span>
+                ))}
+                {heroGame.discovery?.discountPercent ? <strong>-{heroGame.discovery.discountPercent}%</strong> : null}
+              </div>
+              {heroShots.length ? (
+                <div className="hero-shot-grid">
+                  {heroShots.map((shot, index) => (
+                    <button
+                      key={shot.fullUrl}
+                      type="button"
+                      className={selectedHeroImage === shot.fullUrl ? "active" : undefined}
+                      style={{ backgroundImage: `url(${shot.thumbnailUrl})` }}
+                      onClick={() => setActiveHeroImage({ gameId: heroGame.id, image: shot.fullUrl })}
+                      aria-label={`Show screenshot ${index + 1} for ${heroGame.title}`}
+                    />
+                  ))}
+                </div>
               ) : null}
-            </div>
-          </div>
+              <div className="hero-actions">
+                <button className="secondary-action" onClick={() => onSelect(heroGame)}>
+                  <BookOpen size={16} />
+                  Info
+                </button>
+                {heroGame.discovery?.storeUrl ? (
+                  <button className="secondary-action" onClick={() => void window.hynite.native.openExternal(heroGame.discovery?.storeUrl ?? "")}>
+                    <ExternalLink size={16} />
+                    Store
+                  </button>
+                ) : null}
+              </div>
+            </motion.div>
+          </AnimatePresence>
         </>
       ) : (
         <div className="hero-empty">

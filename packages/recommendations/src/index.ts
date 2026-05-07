@@ -564,7 +564,7 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
 
   const ownedIds = new Set(localGames.flatMap((game) => game.sourceIds.map((source) => `${source.provider}:${source.externalId}`)));
   const discoverable = enriched.filter((game) => !ownedIds.has(game.id));
-  const popularNow = uniqueGames(discoverable).slice(0, 8);
+  const popularNow = uniqueGames(discoverable).slice(0, 20);
   const recentActivity = [...localGames].sort((a, b) => activityTime(b) - activityTime(a)).slice(0, 10);
   const continuePlaying = [...localGames]
     .filter((game) => game.lastPlayedAt)

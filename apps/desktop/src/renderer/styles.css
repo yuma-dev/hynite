@@ -310,13 +310,12 @@ button {
 }
 
 .hero-cover {
-  width: min(42vw, 420px);
-  aspect-ratio: 4 / 3;
+  width: clamp(380px, 44vw, 640px);
+  aspect-ratio: 16 / 9;
   border: 0.5px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
   padding: 0;
   overflow: hidden;
-  box-shadow: 0 16px 44px -14px var(--glow), 0 12px 26px rgba(0, 0, 0, 0.45);
   cursor: pointer;
   position: relative;
   flex: none;
@@ -332,8 +331,15 @@ button {
   background-position: center;
 }
 
+.hero-cover span {
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
 .hero-copy {
   position: relative;
+  flex: 1 1 320px;
+  min-width: 280px;
   max-width: 570px;
   text-shadow: 0 1px 18px rgba(0, 0, 0, 0.72);
 }
@@ -426,12 +432,27 @@ button {
   margin-bottom: 16px;
 }
 
-.hero-shot-grid span {
+.hero-shot-grid button {
   aspect-ratio: 16 / 9;
   border-radius: 6px;
+  border: 0;
+  padding: 0;
   background-size: cover;
   background-position: center;
   box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  transition: opacity 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.hero-shot-grid button:hover,
+.hero-shot-grid button:focus-visible {
+  opacity: 0.88;
+  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.hero-shot-grid button.active {
+  box-shadow: inset 0 0 0 1px var(--text);
 }
 
 .primary-action,
@@ -1115,7 +1136,8 @@ dd {
   }
 
   .hero-cover {
-    width: 150px;
+    width: min(40vw, 330px);
+    min-width: 260px;
   }
 
   .hero h1,
