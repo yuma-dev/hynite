@@ -28,6 +28,8 @@ type SteamAppDetailsResponse = Record<
         name?: string;
         thumbnail?: string;
         hls_h264?: string;
+        mp4?: { "480"?: string; max?: string };
+        webm?: { "480"?: string; max?: string };
         highlight?: boolean;
       }>;
       recommendations?: { total?: number };
@@ -40,6 +42,8 @@ type SteamAppDetailsResponse = Record<
     };
   }
 >;
+
+type SteamMovie = NonNullable<NonNullable<SteamAppDetailsResponse[string]["data"]>["movies"]>[number];
 
 function parseSteamDate(value: string | undefined): string | undefined {
   if (!value) {
@@ -81,6 +85,10 @@ function stripHtml(value: string | undefined): string | undefined {
     .trim();
 }
 
+function movieUrl(movie: SteamMovie | undefined): string | undefined {
+  return movie?.mp4?.max ?? movie?.mp4?.["480"] ?? movie?.webm?.max ?? movie?.webm?.["480"] ?? movie?.hls_h264;
+}
+
 export async function fetchSteamMetadata(appid: string, fetchImpl: typeof fetch = fetch): Promise<GameMetadataPatch> {
   try {
     const response = await fetchImpl(`https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appid)}&cc=us&l=english`);
@@ -95,12 +103,12 @@ export async function fetchSteamMetadata(appid: string, fetchImpl: typeof fetch 
     }
 
     const data = details.data;
-    const highlightedMovie = data.movies?.find((movie) => movie.highlight && movie.hls_h264) ?? data.movies?.find((movie) => movie.hls_h264);
+    const highlightedMovie = data.movies?.find((movie) => movie.highlight && movieUrl(movie)) ?? data.movies?.find((movie) => movieUrl(movie));
     return {
       title: data.name,
       backgroundUrl: data.background_raw ?? data.background,
       headerUrl: data.header_image ?? data.capsule_imagev5 ?? data.capsule_image,
-      trailerUrl: highlightedMovie?.hls_h264,
+      trailerUrl: movieUrl(highlightedMovie),
       trailerPosterUrl: highlightedMovie?.thumbnail,
       screenshots:
         data.screenshots

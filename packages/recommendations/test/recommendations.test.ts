@@ -161,4 +161,20 @@ describe("recommendations", () => {
 
     expect(home.popularNow[0]?.coverUrl).toBe("cached-cover.jpg");
   });
+
+  it("returns enough local row items for lazy Home row loading", async () => {
+    const fetchMock = async () => ({ ok: false, status: 500 }) as Response;
+    const localGames = Array.from({ length: 15 }, (_, index) => ({
+      ...game(`steam:${index + 1}`, `Game ${index + 1}`),
+      lastPlayedAt: new Date(Date.UTC(2026, 4, index + 1)).toISOString(),
+      playtimeMinutes: index + 1
+    }));
+
+    const home = await buildHomeModel(localGames, fetchMock as typeof fetch);
+
+    expect(home.continuePlaying).toHaveLength(15);
+    expect(home.mostPlayed).toHaveLength(15);
+    expect(home.continuePlaying[0]?.title).toBe("Game 15");
+    expect(home.mostPlayed[0]?.title).toBe("Game 15");
+  });
 });

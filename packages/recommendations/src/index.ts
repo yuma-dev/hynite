@@ -87,6 +87,7 @@ const fallbackPopular = [
   { appid: "1086940", title: "Baldur's Gate 3" },
   { appid: "1091500", title: "Cyberpunk 2077" }
 ];
+const HOME_LOCAL_ROW_LIMIT = 72;
 
 function emptyGame(appid: string, title: string): Game {
   return {
@@ -569,8 +570,8 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
   const continuePlaying = [...localGames]
     .filter((game) => game.lastPlayedAt)
     .sort((a, b) => (Date.parse(b.lastPlayedAt ?? "") || 0) - (Date.parse(a.lastPlayedAt ?? "") || 0))
-    .slice(0, 8);
-  const mostPlayed = [...localGames].sort((a, b) => (b.playtimeMinutes ?? 0) - (a.playtimeMinutes ?? 0)).slice(0, 8);
+    .slice(0, HOME_LOCAL_ROW_LIMIT);
+  const mostPlayed = [...localGames].sort((a, b) => (b.playtimeMinutes ?? 0) - (a.playtimeMinutes ?? 0)).slice(0, HOME_LOCAL_ROW_LIMIT);
 
   return {
     recentActivity,
