@@ -113,4 +113,23 @@ describe("HyniteRepository", () => {
 
     repository.close();
   });
+
+  it("hides legacy guessed library capsule urls from mapped games", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({ provider: "steam", externalId: "3405690", title: "EA SPORTS FC™ 26", installState: "unknown" });
+    repository.applyMetadata("steam:3405690", {
+      libraryCapsuleUrl: "https://cdn.akamai.steamstatic.com/steam/apps/3405690/library_600x900.jpg",
+      coverUrl: "https://cdn.akamai.steamstatic.com/steam/apps/3405690/library_600x900.jpg",
+      headerUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3405690/hash/header.jpg",
+      metadataStatus: "partial"
+    });
+
+    expect(repository.getGame("steam:3405690")).toMatchObject({
+      libraryCapsuleUrl: undefined,
+      coverUrl: undefined,
+      headerUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3405690/hash/header.jpg"
+    });
+
+    repository.close();
+  });
 });

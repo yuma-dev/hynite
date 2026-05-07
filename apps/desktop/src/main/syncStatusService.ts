@@ -4,6 +4,8 @@ import { dirname } from "node:path";
 import type { BrowserWindow } from "electron";
 import type { ProviderId, SyncLogEntry, SyncLogLevel, SyncStatus } from "@hynite/core";
 
+const STATUS_FLUSH_INTERVAL_MS = 250;
+
 export class SyncStatusService {
   private status: SyncStatus = {
     active: false,
@@ -11,6 +13,8 @@ export class SyncStatusService {
     message: "No sync running",
     history: []
   };
+  private emitTimer?: NodeJS.Timeout;
+  private persistTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly getWindow: () => BrowserWindow | undefined,
@@ -54,6 +58,33 @@ export class SyncStatusService {
     this.log("info", phase, message, details);
   }
 
+  backgroundProgress(phase: string, message: string, current?: number, total?: number, details?: Record<string, unknown>): void {
+    this.status = {
+      ...this.status,
+      backgroundActive: true,
+      backgroundPhase: phase,
+      backgroundMessage: message,
+      backgroundCurrent: current,
+      backgroundTotal: total
+    };
+    this.log("info", phase, message, details);
+  }
+
+  backgroundFinish(message: string, details?: Record<string, unknown>): void {
+    if (!this.status.backgroundActive) {
+      return;
+    }
+
+    this.status = {
+      ...this.status,
+      backgroundActive: false,
+      backgroundMessage: message,
+      backgroundCurrent: this.status.backgroundTotal ?? this.status.backgroundCurrent
+    };
+    this.log("info", this.status.backgroundPhase ?? "metadata:detail", message, details);
+    this.flush();
+  }
+
   log(level: SyncLogLevel, phase: string, message: string, details?: Record<string, unknown>): void {
     const entry: SyncLogEntry = {
       id: randomUUID(),
@@ -68,8 +99,8 @@ export class SyncStatusService {
       ...this.status,
       history: [entry, ...this.status.history].slice(0, 300)
     };
-    this.emit();
-    this.persist();
+    this.scheduleEmit();
+    this.schedulePersist();
   }
 
   finish(message: string): void {
@@ -84,7 +115,7 @@ export class SyncStatusService {
       current: this.status.total ?? this.status.current
     };
     this.log("info", "complete", message);
-    this.persist();
+    this.flush();
   }
 
   fail(message: string, details?: Record<string, unknown>): void {
@@ -96,11 +127,47 @@ export class SyncStatusService {
       finishedAt: new Date().toISOString()
     };
     this.log("error", "failed", message, details);
-    this.persist();
+    this.flush();
+  }
+
+  cancel(message: string, details?: Record<string, unknown>): void {
+    this.status = {
+      ...this.status,
+      active: false,
+      phase: "cancelled",
+      message,
+      finishedAt: new Date().toISOString()
+    };
+    this.log("info", "cancelled", message, details);
+    this.flush();
+  }
+
+  flush(): void {
+    this.flushEmit();
+    this.flushPersist();
   }
 
   private emit(): void {
     this.getWindow()?.webContents.send("sync:statusChanged", this.get());
+  }
+
+  private scheduleEmit(): void {
+    if (this.emitTimer) {
+      return;
+    }
+
+    this.emitTimer = setTimeout(() => {
+      this.emitTimer = undefined;
+      this.emit();
+    }, STATUS_FLUSH_INTERVAL_MS);
+  }
+
+  private flushEmit(): void {
+    if (this.emitTimer) {
+      clearTimeout(this.emitTimer);
+      this.emitTimer = undefined;
+    }
+    this.emit();
   }
 
   private readPersistedStatus(): SyncStatus {
@@ -109,10 +176,13 @@ export class SyncStatusService {
       return {
         ...parsed,
         active: false,
+        backgroundActive: false,
         phase: "idle",
         message: parsed.lastSuccessAt ? `Last Steam sync ${parsed.lastSuccessAt}` : "No sync running",
         current: undefined,
         total: undefined,
+        backgroundCurrent: undefined,
+        backgroundTotal: undefined,
         history: parsed.history?.slice(0, 300) ?? []
       };
     } catch {
@@ -122,6 +192,25 @@ export class SyncStatusService {
 
   private persist(): void {
     mkdirSync(dirname(this.filePath), { recursive: true });
-    writeFileSync(this.filePath, JSON.stringify({ ...this.status, active: false }, null, 2));
+    writeFileSync(this.filePath, JSON.stringify({ ...this.status, active: false, backgroundActive: false }, null, 2));
+  }
+
+  private schedulePersist(): void {
+    if (this.persistTimer) {
+      return;
+    }
+
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      this.persist();
+    }, STATUS_FLUSH_INTERVAL_MS);
+  }
+
+  private flushPersist(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = undefined;
+    }
+    this.persist();
   }
 }

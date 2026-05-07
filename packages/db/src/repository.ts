@@ -16,7 +16,7 @@ import {
 } from "@hynite/core";
 import { migrations } from "./schema";
 
-export const CURRENT_METADATA_VERSION = 3;
+export const CURRENT_METADATA_VERSION = 7;
 
 type GameRow = {
   id: string;
@@ -94,6 +94,10 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 
 function serializeJson<T>(value: T | undefined): string | null {
   return value === undefined ? null : JSON.stringify(value);
+}
+
+function isLegacyGuessedLibraryCapsuleUrl(value: string | null | undefined): boolean {
+  return Boolean(value && /^https:\/\/(?:cdn\.akamai\.steamstatic\.com\/steam|steamcdn-a\.akamaihd\.net\/steam)\/apps\/\d+\/library_600x900(?:_2x)?\.jpg(?:\?.*)?$/i.test(value));
 }
 
 export class HyniteRepository {
@@ -375,6 +379,9 @@ export class HyniteRepository {
       .prepare("SELECT provider, external_id FROM game_sources WHERE game_id = ?")
       .all(row.id) as Array<{ provider: ProviderId; external_id: string }>;
 
+    const libraryCapsuleUrl = isLegacyGuessedLibraryCapsuleUrl(row.library_capsule_url) ? undefined : (row.library_capsule_url ?? undefined);
+    const coverUrl = isLegacyGuessedLibraryCapsuleUrl(row.cover_url) ? undefined : (row.cover_url ?? undefined);
+
     return {
       id: row.id,
       title: row.title,
@@ -383,10 +390,10 @@ export class HyniteRepository {
       installState: row.install_state,
       installDirectory: row.install_directory ?? undefined,
       executablePath: row.executable_path ?? undefined,
-      coverUrl: row.cover_url ?? undefined,
+      coverUrl,
       backgroundUrl: row.background_url ?? undefined,
       communityIconUrl: row.community_icon_url ?? undefined,
-      libraryCapsuleUrl: row.library_capsule_url ?? undefined,
+      libraryCapsuleUrl,
       headerUrl: row.header_url ?? undefined,
       trailerUrl: row.trailer_url ?? undefined,
       trailerPosterUrl: row.trailer_poster_url ?? undefined,

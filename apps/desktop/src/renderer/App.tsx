@@ -65,6 +65,29 @@ function BrandLogo({ className, sizes }: { className?: string; sizes: string }) 
   );
 }
 
+function StartupLoading({ syncStatus }: { syncStatus?: SyncStatus }) {
+  const progress =
+    syncStatus?.active && syncStatus.total && syncStatus.current !== undefined
+      ? Math.min(100, Math.round((syncStatus.current / Math.max(1, syncStatus.total)) * 100))
+      : undefined;
+
+  return (
+    <main className="startup-screen">
+      <div className="startup-mark">
+        <BrandLogo className="startup-logo" sizes="88px" />
+        <span />
+      </div>
+      <div className="startup-copy">
+        <h1>Hynite</h1>
+        <p>{syncStatus?.active ? syncStatus.message : "Loading library"}</p>
+      </div>
+      <div className={progress === undefined ? "startup-progress" : "startup-progress determinate"} aria-label="Startup progress">
+        <span style={progress === undefined ? undefined : { width: `${progress}%` }} />
+      </div>
+    </main>
+  );
+}
+
 function fallbackArt(game: Game): CSSProperties {
   const seed = [...game.title].reduce((sum, char) => sum + char.charCodeAt(0), 0);
   const hue = seed % 360;
@@ -878,7 +901,12 @@ function progressText(status?: SyncStatus): string {
     return "Sync status unavailable";
   }
   const progress = status.total ? ` · ${status.current ?? 0}/${status.total}` : "";
+  const backgroundProgress = status.backgroundTotal ? ` · ${status.backgroundCurrent ?? 0}/${status.backgroundTotal}` : "";
   const last = status.lastSuccessAt ? ` · last ${formatDate(status.lastSuccessAt)}` : "";
+  if (status.backgroundActive && !status.active) {
+    return `Metadata · ${status.backgroundMessage ?? "Updating details"}${backgroundProgress}${last}`;
+  }
+
   return `${status.active ? "Syncing" : "Idle"} · ${status.message}${progress}${last}`;
 }
 
@@ -899,9 +927,21 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
           <div className="sync-summary">
             <span>{status?.active ? "Running" : "Idle"}</span>
             <span>{status?.phase ?? "idle"}</span>
-            <span>{status?.total ? `${status.current ?? 0}/${status.total}` : "No active progress"}</span>
+            <span>
+              {status?.total
+                ? `${status.current ?? 0}/${status.total}`
+                : status?.backgroundActive
+                  ? `Metadata ${status.backgroundCurrent ?? 0}/${status.backgroundTotal ?? 0}`
+                  : "No active progress"}
+            </span>
             <span>{status?.lastSuccessAt ? `Last success ${formatDate(status.lastSuccessAt)}` : "No successful sync yet"}</span>
           </div>
+          {status?.backgroundActive ? (
+            <div className="sync-background">
+              <strong>{status.backgroundMessage ?? "Updating detail metadata"}</strong>
+              <span>{status.backgroundPhase ?? "metadata:detail"}</span>
+            </div>
+          ) : null}
           <div className="sync-log">
             {status?.history.length ? null : <p className="muted">No sync events recorded yet.</p>}
             {status?.history.map((entry) => (
@@ -995,7 +1035,7 @@ function SettingsScreen({
       </div>
 
       <button className="sync-status-line" onClick={() => setShowSyncModal(true)}>
-        <span className={syncStatus?.active ? "status-dot active-sync" : "status-dot"} />
+        <span className={syncStatus?.active || syncStatus?.backgroundActive ? "status-dot active-sync" : "status-dot"} />
         <span>{progressText(syncStatus)}</span>
       </button>
 
@@ -1509,29 +1549,43 @@ export function App() {
   const [librarySortDirection, setLibrarySortDirection] = useState<"asc" | "desc">("asc");
   const [libraryInstallState, setLibraryInstallState] = useState<InstallState | "all">("all");
   const [busy, setBusy] = useState(false);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
-  async function refresh() {
-    const [nextGames, nextRecentGames, nextHome, nextSettings] = await Promise.all([
+  async function refresh(options: { awaitHome?: boolean } = {}) {
+    const homePromise = window.hynite.home.get();
+    const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
       window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState }),
       window.hynite.library.list({ search: "", sort: "recent", installState: "all" }),
-      window.hynite.home.get(),
       window.hynite.settings.get()
     ]);
     setGames(nextGames);
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
-    setHome(nextHome);
     setSettings(nextSettings);
+    void homePromise.then(setHome).catch(console.error);
+    if (options.awaitHome) {
+      await homePromise.catch(console.error);
+    }
   }
 
   useEffect(() => {
-    void refresh();
-    void window.hynite.sync.status().then(setSyncStatus);
-    return window.hynite.sync.onStatusChanged((status) => {
+    const minimumStartupPaint = new Promise((resolve) => setTimeout(resolve, 900));
+    void Promise.all([refresh({ awaitHome: true }), window.hynite.sync.status().then(setSyncStatus), minimumStartupPaint]).finally(() => setInitialLoadComplete(true));
+    const unsubscribeSync = window.hynite.sync.onStatusChanged((status) => {
       setSyncStatus(status);
       if (!status.active && status.phase === "complete") {
         void refresh();
       }
     });
+    const unsubscribeGameUpdated = window.hynite.games.onUpdated((game) => {
+      setGames((current) => current.map((item) => (item.id === game.id ? game : item)));
+      setRecentGames((current) => current.map((item) => (item.id === game.id ? game : item)));
+      setSelected((current) => (current?.id === game.id ? game : current));
+      void window.hynite.home.get().then(setHome).catch(console.error);
+    });
+    return () => {
+      unsubscribeSync();
+      unsubscribeGameUpdated();
+    };
   }, []);
 
   useEffect(() => {
@@ -1554,7 +1608,11 @@ export function App() {
     try {
       setSelected(await window.hynite.games.get(game.id));
     } catch {
-      setSelected({ ...game, sourceMatches: await window.hynite.sources.searchTitle(game.title) });
+      try {
+        setSelected(await window.hynite.games.hydrateDiscovery(game));
+      } catch {
+        setSelected({ ...game, sourceMatches: await window.hynite.sources.searchTitle(game.title) });
+      }
     }
   }
 
@@ -1591,10 +1649,14 @@ export function App() {
           setSelected(undefined);
           void refresh();
         }}
-        onSeed={() => void window.hynite.debug.seed().then(refresh)}
+        onSeed={() => void window.hynite.debug.seed().then(() => refresh())}
       />
     );
   }, [route, home, games, query, settings, syncStatus, librarySort, librarySortDirection, libraryInstallState]);
+
+  if (!initialLoadComplete) {
+    return <StartupLoading syncStatus={syncStatus} />;
+  }
 
   return (
     <div className="app-shell">

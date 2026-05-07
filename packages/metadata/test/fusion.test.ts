@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSteamGridDbArtworkProvider, refreshFusedMetadata, steamCdnArtworkProvider, type MetadataProvider } from "../src/fusion";
+import { createSteamGridDbArtworkProvider, defaultMetadataProviders, refreshFusedMetadata, steamCdnArtworkProvider, type MetadataProvider } from "../src/fusion";
 
 const game = {
   provider: "steam" as const,
@@ -38,17 +38,20 @@ describe("refreshFusedMetadata", () => {
     });
   });
 
-  it("uses Steam CDN vertical library capsule artwork", async () => {
+  it("uses Steam CDN header artwork without unverified library artwork", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("", { status: 200 }))
     );
 
     await expect(steamCdnArtworkProvider.refresh(game)).resolves.toMatchObject({
-      coverUrl: "https://steamcdn-a.akamaihd.net/steam/apps/1086940/library_600x900_2x.jpg",
-      libraryCapsuleUrl: "https://steamcdn-a.akamaihd.net/steam/apps/1086940/library_600x900_2x.jpg",
-      backgroundUrl: "https://steamcdn-a.akamaihd.net/steam/apps/1086940/library_hero.jpg"
+      coverUrl: "https://cdn.akamai.steamstatic.com/steam/apps/1086940/header.jpg",
+      backgroundUrl: "https://cdn.akamai.steamstatic.com/steam/apps/1086940/header.jpg"
     });
+  });
+
+  it("skips Steam Store appdetails in fast metadata mode", () => {
+    expect(defaultMetadataProviders({ mode: "fast" }).map((provider) => provider.id)).toEqual(["steam-appinfo", "steam-cdn"]);
   });
 
   it("uses SteamGridDB bearer auth and picks a static 600x900 grid", async () => {

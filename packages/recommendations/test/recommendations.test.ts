@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Game } from "@hynite/core";
+import { SteamRateLimitError } from "@hynite/metadata";
 import { buildHomeModel } from "../src";
 
 function game(id: string, title: string): Game {
@@ -93,6 +94,7 @@ describe("recommendations", () => {
     expect(home.popularNow[0]?.discovery?.sources).toContain("featured:top_sellers");
     expect(home.popularNow[0]?.discovery?.priceText).toBe("$17.99");
     expect(home.popularNow[0]?.discovery?.storeCategory).toBe("Top Sellers");
+    expect(home.popularNow[0]?.coverUrl).toBeTruthy();
   });
 
   it("uses Steam Store featured content for the hero set instead of SteamSpy", async () => {
@@ -175,6 +177,22 @@ describe("recommendations", () => {
         );
       }
 
+      if (url.includes("api.steamcmd.net")) {
+        const appid = url.split("/").pop() ?? "";
+        return new Response(
+          JSON.stringify({
+            data: {
+              [appid]: {
+                common: {
+                  name: names[appid]
+                }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
       const appid = new URL(url).searchParams.get("appids") ?? "";
       return new Response(
         JSON.stringify({
@@ -197,6 +215,83 @@ describe("recommendations", () => {
     expect(home.trendingRows.find((row) => row.id === "rising-recently")?.games[0]?.title).toBe("Fresh Trend Game");
     expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games[0]?.title).toBe("Top Seller Game");
     expect(home.trendingRows.find((row) => row.id === "new-releases")?.games[0]?.title).toBe("New Release Game");
+  });
+
+  it("enriches discovery games with Steam appinfo covers instead of unverified deterministic covers", async () => {
+    const fetchMock = async (url: string, init?: RequestInit) => {
+      if (init?.method === "HEAD") {
+        return new Response("", { status: url.includes("library_600x900.jpg") ? 200 : 404 });
+      }
+
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "cat_topsellers",
+              name: "Top Sellers",
+              items: [{ id: 346110, type: 0, name: "ARK: Survival Evolved", header_image: "store-header.jpg" }]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      if (url.includes("api.steamcmd.net")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              "346110": {
+                common: {
+                  name: "ARK: Survival Evolved",
+                  library_assets_full: {
+                    library_capsule: {
+                      image: { english: "library_600x900.jpg" },
+                      image2x: { english: "library_600x900_2x.jpg" }
+                    }
+                  }
+                }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          "346110": {
+            success: true,
+            data: {
+              name: "ARK: Survival Evolved",
+              short_description: "Dinosaur survival."
+            }
+          }
+        }),
+        { status: 200 }
+      );
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch);
+
+    expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games[0]?.libraryCapsuleUrl).toBe(
+      "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/346110/library_600x900.jpg"
+    );
+  });
+
+  it("aborts discovery rebuilds when Steam rate limits source fetches", async () => {
+    const fetchMock = async (url: string) => {
+      if (url.includes("steampowered.com") || url.includes("ISteamChartsService")) {
+        throw new SteamRateLimitError("Steam returned 429 Too Many Requests", 5000);
+      }
+
+      return new Response("", { status: 500 });
+    };
+
+    await expect(buildHomeModel([], fetchMock as typeof fetch)).rejects.toThrow("Steam returned 429");
   });
 
   it("reuses cached discovery metadata instead of refetching appdetails", async () => {
@@ -236,6 +331,87 @@ describe("recommendations", () => {
     });
 
     expect(home.popularNow[0]?.coverUrl).toBe("cached-cover.jpg");
+  });
+
+  it("fills cached discovery cover art from current Store candidates when metadata had no image", async () => {
+    const fetchMock = async (url: string) => {
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "top_sellers",
+              items: [{ id: 123, type: 0, name: "Named Game", header_image: "current-header.jpg" }]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      throw new Error(`Unexpected metadata fetch: ${url}`);
+    };
+
+    const cached = game("steam:123", "Named Game");
+    cached.coverUrl = undefined;
+    cached.libraryCapsuleUrl = undefined;
+    cached.headerUrl = undefined;
+    const home = await buildHomeModel([], fetchMock as typeof fetch, {
+      recentActivity: [],
+      continuePlaying: [],
+      mostPlayed: [],
+      popularNow: [cached],
+      recommended: [],
+      newAndNotable: [],
+      trendingRows: [],
+      generatedAt: "2026-05-06T00:00:00.000Z",
+      stale: false
+    });
+
+    expect(home.popularNow[0]?.coverUrl).toBe("current-header.jpg");
+    expect(home.popularNow[0]?.headerUrl).toBe("current-header.jpg");
+  });
+
+  it("ignores legacy guessed cached library capsules for discovery rows", async () => {
+    const fetchMock = async (url: string) => {
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "top_sellers",
+              items: [{ id: 3405690, type: 0, name: "EA SPORTS FC™ 26", header_image: "fc-header.jpg" }]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      throw new Error(`Unexpected metadata fetch: ${url}`);
+    };
+
+    const cached = game("steam:3405690", "EA SPORTS FC™ 26");
+    cached.coverUrl = "https://cdn.akamai.steamstatic.com/steam/apps/3405690/library_600x900.jpg";
+    cached.libraryCapsuleUrl = "https://cdn.akamai.steamstatic.com/steam/apps/3405690/library_600x900.jpg";
+    const home = await buildHomeModel([], fetchMock as typeof fetch, {
+      recentActivity: [],
+      continuePlaying: [],
+      mostPlayed: [],
+      popularNow: [cached],
+      recommended: [],
+      newAndNotable: [],
+      trendingRows: [],
+      generatedAt: "2026-05-06T00:00:00.000Z",
+      stale: false
+    });
+
+    expect(home.popularNow[0]?.libraryCapsuleUrl).toBeUndefined();
+    expect(home.popularNow[0]?.coverUrl).toBe("fc-header.jpg");
   });
 
   it("returns enough local row items for lazy Home row loading", async () => {

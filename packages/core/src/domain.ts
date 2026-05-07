@@ -170,6 +170,11 @@ export type SyncStatus = {
   lastSuccessAt?: string;
   current?: number;
   total?: number;
+  backgroundActive?: boolean;
+  backgroundPhase?: string;
+  backgroundMessage?: string;
+  backgroundCurrent?: number;
+  backgroundTotal?: number;
   history: SyncLogEntry[];
 };
 

@@ -20,6 +20,7 @@ export type SteamOwnedGamesOptions = {
   webApiKey: string;
   includePlayedFreeGames?: boolean;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 };
 
 function unixSecondsToIso(value: number | undefined): string | undefined {
@@ -48,7 +49,7 @@ export async function fetchOwnedSteamGames(options: SteamOwnedGamesOptions): Pro
     format: "json"
   });
 
-  const response = await fetchImpl(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?${params.toString()}`);
+  const response = await fetchImpl(`https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?${params.toString()}`, { signal: options.signal });
   if (!response.ok) {
     throw new Error(`Steam owned games request failed with ${response.status}.`);
   }

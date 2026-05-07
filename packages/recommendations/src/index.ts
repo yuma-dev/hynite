@@ -1,5 +1,14 @@
-import { type Game, type GameDiscovery, type HomeModel, type HomeTrendRow, gameActivityTime, makeGameId, makeSortTitle } from "@hynite/core";
-import { fetchSteamMetadata } from "@hynite/metadata";
+import { type Game, type GameDiscovery, type GameMetadataPatch, type HomeModel, type HomeTrendRow, type ImportedGame, gameActivityTime, makeGameId, makeSortTitle } from "@hynite/core";
+import {
+  createSteamGridDbArtworkProvider,
+  fetchSteamAppInfoMetadata,
+  fetchSteamCdnArtworkMetadata,
+  isSteamRateLimitError,
+  refreshFusedMetadata,
+  steamRateLimitedFetch,
+  type MetadataLogger,
+  type MetadataProvider
+} from "@hynite/metadata";
 
 type SteamChartItem = {
   appid: number;
@@ -58,6 +67,7 @@ type SteamSpyItem = {
 type Candidate = {
   appid: string;
   title?: string;
+  coverUrl?: string;
   headerUrl?: string;
   sources: Set<string>;
   trendRank?: number;
@@ -85,6 +95,21 @@ type DiscoverySources = {
   steamSpyTrending: Candidate[];
 };
 
+export type RecommendationLog = {
+  level: "info" | "warning" | "error";
+  phase: string;
+  message: string;
+  details?: Record<string, unknown>;
+};
+
+export type RecommendationLogger = (entry: RecommendationLog) => void;
+
+export type BuildHomeOptions = {
+  steamGridDbApiKey?: string;
+  logger?: RecommendationLogger;
+  steamAppInfoProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>;
+};
+
 const fallbackPopular = [
   { appid: "730", title: "Counter-Strike 2" },
   { appid: "570", title: "Dota 2" },
@@ -96,6 +121,19 @@ const fallbackPopular = [
   { appid: "1091500", title: "Cyberpunk 2077" }
 ];
 const HOME_LOCAL_ROW_LIMIT = 72;
+const DISCOVERY_ENRICHMENT_CONCURRENCY = 2;
+
+function isLegacyGuessedLibraryCapsuleUrl(value: string | undefined): boolean {
+  return Boolean(value && /^https:\/\/(?:cdn\.akamai\.steamstatic\.com\/steam|steamcdn-a\.akamaihd\.net\/steam)\/apps\/\d+\/library_600x900(?:_2x)?\.jpg(?:\?.*)?$/i.test(value));
+}
+
+function usableArtworkUrl(value: string | undefined): string | undefined {
+  return isLegacyGuessedLibraryCapsuleUrl(value) ? undefined : value;
+}
+
+function steamFetch(fetchImpl: typeof fetch): typeof fetch {
+  return fetchImpl === fetch ? (steamRateLimitedFetch as typeof fetch) : fetchImpl;
+}
 
 function emptyGame(appid: string, title: string): Game {
   return {
@@ -128,6 +166,7 @@ function mergeCandidate(candidates: Map<string, Candidate>, appid: string, patch
     ...existing,
     ...patch,
     title: existing.title ?? patch.title,
+    coverUrl: existing.coverUrl ?? patch.coverUrl,
     headerUrl: existing.headerUrl ?? patch.headerUrl,
     sources: existing.sources,
     featuredWeight: Math.max(existing.featuredWeight, patch.featuredWeight ?? 0),
@@ -169,7 +208,7 @@ function storeUrl(appid: string, item?: FeaturedItem): string {
 }
 
 async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await fetchImpl("https://store.steampowered.com/api/featuredcategories/?cc=US&l=english");
+  const response = await steamFetch(fetchImpl)("https://store.steampowered.com/api/featuredcategories/?cc=US&l=english");
   if (!response.ok) {
     throw new Error(`Steam featured categories returned ${response.status}`);
   }
@@ -186,7 +225,7 @@ async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candida
     const categoryWeight = categorySignal === "top_sellers" || categorySignal === "topsellers" ? 1 : categorySignal === "new_releases" || categorySignal === "newreleases" || categorySignal === "coming_soon" || categorySignal === "comingsoon" ? 0.85 : 0.5;
     const newnessWeight = categorySignal === "new_releases" || categorySignal === "newreleases" || categorySignal === "coming_soon" || categorySignal === "comingsoon" ? 1 : 0;
     const storeCategory = category.name ?? categorySignal.replace(/_/g, " ");
-    category.items.slice(0, 24).forEach((item, index) => {
+    category.items.forEach((item, index) => {
       if (item.type !== 0 || !item.id || !item.name) {
         return;
       }
@@ -194,6 +233,7 @@ async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candida
       const appid = String(item.id);
       mergeCandidate(candidates, String(item.id), {
         title: item.name,
+        coverUrl: item.large_capsule_image ?? item.small_capsule_image ?? item.header_image,
         headerUrl: item.header_image ?? item.large_capsule_image ?? item.small_capsule_image,
         featuredWeight: categoryWeight * (1 - index / 32),
         newnessWeight,
@@ -212,7 +252,7 @@ async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candida
 }
 
 async function fetchStoreFeatured(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await fetchImpl("https://store.steampowered.com/api/featured/?cc=US&l=english");
+  const response = await steamFetch(fetchImpl)("https://store.steampowered.com/api/featured/?cc=US&l=english");
   if (!response.ok) {
     throw new Error(`Steam featured returned ${response.status}`);
   }
@@ -227,7 +267,7 @@ async function fetchStoreFeatured(fetchImpl: typeof fetch): Promise<Candidate[]>
   ];
 
   for (const [group, items] of groups) {
-    items?.slice(0, 24).forEach((item, index) => {
+    items?.forEach((item, index) => {
       if (item.type !== 0 || !item.id || !item.name) {
         return;
       }
@@ -235,6 +275,7 @@ async function fetchStoreFeatured(fetchImpl: typeof fetch): Promise<Candidate[]>
       const appid = String(item.id);
       mergeCandidate(candidates, String(item.id), {
         title: item.name,
+        coverUrl: item.large_capsule_image ?? item.small_capsule_image ?? item.header_image,
         headerUrl: item.header_image ?? item.large_capsule_image ?? item.small_capsule_image,
         featuredWeight: 0.65 * (1 - index / 40),
         newnessWeight: 0.25,
@@ -275,9 +316,10 @@ async function fetchSteamSpyTrending(fetchImpl: typeof fetch): Promise<Candidate
   }
 
   const rows = [...table.matchAll(/<tr>[\s\S]*?<a href=\/app\/(?<appid>\d+)>[\s\S]*?<img[^>]+src="(?<image>[^"]+)"[^>]*>\s*(?<name>[\s\S]*?)<\/a>[\s\S]*?<td[^>]+data-order="(?<releaseDate>[^"]*)"[\s\S]*?<td[^>]+data-order="(?<price>[^"]*)"[\s\S]*?<td[^>]+data-order="(?<owners>[^"]*)"/gi)];
-  return rows.slice(0, 40).map((row, index) => ({
+  return rows.map((row, index) => ({
     appid: row.groups?.appid ?? "",
     title: decodeHtml(row.groups?.name ?? ""),
+    coverUrl: row.groups?.image,
     headerUrl: row.groups?.image,
     sources: new Set([`steamspy-trending:${index + 1}`]),
     trendRank: index + 1,
@@ -314,7 +356,7 @@ async function fetchSteamSpyTop(fetchImpl: typeof fetch): Promise<Candidate[]> {
 }
 
 async function fetchSteamCharts(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await fetchImpl("https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?format=json");
+  const response = await steamFetch(fetchImpl)("https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?format=json");
   if (!response.ok) {
     throw new Error(`Steam charts returned ${response.status}`);
   }
@@ -335,7 +377,7 @@ async function fetchSteamCharts(fetchImpl: typeof fetch): Promise<Candidate[]> {
   }));
 }
 
-async function fetchDiscoverySources(fetchImpl: typeof fetch): Promise<DiscoverySources> {
+async function fetchDiscoverySources(fetchImpl: typeof fetch, logger?: RecommendationLogger): Promise<DiscoverySources> {
   const [storeFeatured, featuredCategories, steamCharts, steamSpyTop, steamSpyTrending] = await Promise.allSettled([
     fetchStoreFeatured(fetchImpl),
     fetchFeaturedCategories(fetchImpl),
@@ -343,6 +385,16 @@ async function fetchDiscoverySources(fetchImpl: typeof fetch): Promise<Discovery
     fetchSteamSpyTop(fetchImpl),
     fetchSteamSpyTrending(fetchImpl)
   ]);
+  const rateLimited = [storeFeatured, featuredCategories, steamCharts].find((result) => result.status === "rejected" && isSteamRateLimitError(result.reason));
+  if (rateLimited?.status === "rejected") {
+    logger?.({
+      level: "warning",
+      phase: "home:discovery",
+      message: "Steam discovery source is rate limited",
+      details: { error: rateLimited.reason instanceof Error ? rateLimited.reason.message : String(rateLimited.reason) }
+    });
+    throw rateLimited.reason;
+  }
 
   return {
     storeFeatured: storeFeatured.status === "fulfilled" ? storeFeatured.value : [],
@@ -360,6 +412,22 @@ function mergeCandidates(values: Candidate[]): Candidate[] {
   }
 
   return [...candidates.values()];
+}
+
+async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper: (item: T) => Promise<U>): Promise<U[]> {
+  const results = new Array<U>(items.length);
+  let index = 0;
+
+  async function worker(): Promise<void> {
+    while (index < items.length) {
+      const currentIndex = index;
+      index += 1;
+      results[currentIndex] = await mapper(items[currentIndex] as T);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
 }
 
 function normalizedReviewScore(candidate: Candidate): number {
@@ -423,7 +491,8 @@ function scoreCandidate(candidate: Candidate, previousRanks: Map<string, number>
 
 function previousDiscoveryGames(previous?: HomeModel): Map<string, Game> {
   const games = new Map<string, Game>();
-  for (const game of [...(previous?.popularNow ?? []), ...(previous?.recommended ?? []), ...(previous?.newAndNotable ?? [])]) {
+  const previousRows = (previous?.trendingRows ?? []).flatMap((row) => row.games);
+  for (const game of [...(previous?.popularNow ?? []), ...(previous?.recommended ?? []), ...(previous?.newAndNotable ?? []), ...previousRows]) {
     if (game.metadataStatus !== "none" && !/^Steam App \d+$/i.test(game.title)) {
       games.set(game.id, game);
     }
@@ -432,33 +501,123 @@ function previousDiscoveryGames(previous?: HomeModel): Map<string, Game> {
   return games;
 }
 
-async function enrichCandidate(candidate: Candidate, discovery: GameDiscovery, fetchImpl: typeof fetch, cachedGames: Map<string, Game>): Promise<Game | undefined> {
+function metadataLoggerForCandidate(candidate: Candidate, logger?: RecommendationLogger): MetadataLogger | undefined {
+  if (!logger) {
+    return undefined;
+  }
+
+  return (entry) =>
+    logger({
+      level: entry.level,
+      phase: `metadata:${entry.providerId}`,
+      message: `${entry.gameTitle}: ${entry.message}`,
+      details: {
+        appid: entry.appid,
+        sources: [...candidate.sources],
+        ...entry.details
+      }
+    });
+}
+
+function discoveryMetadataProviders(candidate: Candidate, fetchImpl: typeof fetch, options: BuildHomeOptions = {}): MetadataProvider[] {
+  const logger = metadataLoggerForCandidate(candidate, options.logger);
+  const fastProviders: MetadataProvider[] = [
+    {
+      id: "steam-appinfo",
+      label: "Steam appinfo",
+      async refresh(game) {
+        const nativePatch = await options.steamAppInfoProvider?.(game);
+        return nativePatch && Object.keys(nativePatch).length > 0 ? nativePatch : fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title);
+      }
+    },
+    {
+      id: "steam-cdn",
+      label: "Steam CDN artwork",
+      refresh: (game) => fetchSteamCdnArtworkMetadata(game.externalId, fetchImpl, logger, game.title)
+    },
+    ...(options.steamGridDbApiKey ? [createSteamGridDbArtworkProvider(options.steamGridDbApiKey, fetchImpl, logger)] : [])
+  ];
+
+  return fastProviders;
+}
+
+async function enrichCandidate(
+  candidate: Candidate,
+  discovery: GameDiscovery,
+  fetchImpl: typeof fetch,
+  cachedGames: Map<string, Game>,
+  options: BuildHomeOptions = {}
+): Promise<Game | undefined> {
   const fallbackTitle = candidate.title?.trim() || `Steam App ${candidate.appid}`;
 
   const base = emptyGame(candidate.appid, fallbackTitle);
+  const imported = {
+    provider: "steam" as const,
+    externalId: candidate.appid,
+    title: fallbackTitle,
+    installState: "not_installed" as const
+  };
   const cached = cachedGames.get(base.id);
   if (cached) {
+    const cachedCoverUrl = usableArtworkUrl(cached.coverUrl);
+    const cachedLibraryCapsuleUrl = usableArtworkUrl(cached.libraryCapsuleUrl);
+    const fallbackCoverUrl = cachedCoverUrl ?? cachedLibraryCapsuleUrl ?? candidate.coverUrl ?? candidate.headerUrl;
+    const fallbackHeaderUrl = cached.headerUrl ?? candidate.headerUrl ?? fallbackCoverUrl;
     return {
       ...cached,
       discovery,
-      headerUrl: cached.headerUrl ?? candidate.headerUrl,
+      libraryCapsuleUrl: cachedLibraryCapsuleUrl,
+      coverUrl: fallbackCoverUrl,
+      headerUrl: fallbackHeaderUrl,
+      backgroundUrl: cached.backgroundUrl ?? fallbackHeaderUrl,
       metadataStatus: cached.metadataStatus
     };
   }
 
   try {
-    const metadata = await fetchSteamMetadata(candidate.appid, fetchImpl);
+    const metadata = await refreshFusedMetadata(imported, discoveryMetadataProviders(candidate, fetchImpl, options));
     const title = metadata.title ?? fallbackTitle;
-    const libraryCapsuleUrl = `https://cdn.akamai.steamstatic.com/steam/apps/${encodeURIComponent(candidate.appid)}/library_600x900.jpg`;
+    const fallbackCoverUrl = metadata.coverUrl ?? metadata.libraryCapsuleUrl ?? candidate.coverUrl ?? candidate.headerUrl;
+    const fallbackHeaderUrl = metadata.headerUrl ?? candidate.headerUrl ?? fallbackCoverUrl;
+
+    if (!fallbackCoverUrl) {
+      options.logger?.({
+        level: "warning",
+        phase: "metadata:discovery",
+        message: `${title}: discovery metadata has no cover artwork after all providers`,
+        details: {
+          appid: candidate.appid,
+          sources: [...candidate.sources],
+          candidateCoverUrl: candidate.coverUrl,
+          storeHeaderUrl: candidate.headerUrl,
+          metadataStatus: metadata.metadataStatus
+        }
+      });
+    }
+
+    if (!metadata.shortDescription && !metadata.aboutText) {
+      options.logger?.({
+        level: "warning",
+        phase: "metadata:discovery",
+        message: `${title}: discovery metadata has no description after Steam appdetails`,
+        details: {
+          appid: candidate.appid,
+          sources: [...candidate.sources],
+          metadataStatus: metadata.metadataStatus
+        }
+      });
+    }
+
     return {
       ...base,
       ...metadata,
       id: base.id,
       title,
       sortTitle: makeSortTitle(title),
-      coverUrl: metadata.coverUrl ?? libraryCapsuleUrl,
-      libraryCapsuleUrl: metadata.libraryCapsuleUrl ?? libraryCapsuleUrl,
-      headerUrl: metadata.headerUrl ?? candidate.headerUrl,
+      coverUrl: fallbackCoverUrl,
+      libraryCapsuleUrl: metadata.libraryCapsuleUrl,
+      headerUrl: fallbackHeaderUrl,
+      backgroundUrl: metadata.backgroundUrl ?? fallbackHeaderUrl,
       discovery,
       metadataStatus: metadata.metadataStatus ?? "partial",
       screenshots: metadata.screenshots ?? [],
@@ -468,10 +627,36 @@ async function enrichCandidate(candidate: Candidate, discovery: GameDiscovery, f
       publishers: metadata.publishers ?? [],
       contentDescriptors: metadata.contentDescriptors ?? []
     };
-  } catch {
+  } catch (error) {
+    if (isSteamRateLimitError(error)) {
+      options.logger?.({
+        level: "warning",
+        phase: "metadata:discovery",
+        message: `${fallbackTitle}: discovery metadata enrichment paused by Steam rate limiting`,
+        details: {
+          appid: candidate.appid,
+          sources: [...candidate.sources],
+          retryAfterMs: error.retryAfterMs
+        }
+      });
+      throw error;
+    }
+
+    options.logger?.({
+      level: "error",
+      phase: "metadata:discovery",
+      message: `${fallbackTitle}: discovery metadata enrichment failed`,
+      details: {
+        appid: candidate.appid,
+        sources: [...candidate.sources],
+        error: error instanceof Error ? error.message : String(error)
+      }
+    });
     return {
       ...base,
+      coverUrl: candidate.coverUrl ?? candidate.headerUrl,
       headerUrl: candidate.headerUrl,
+      backgroundUrl: candidate.headerUrl ?? candidate.coverUrl,
       discovery,
       metadataStatus: "partial"
     };
@@ -570,24 +755,24 @@ function sortByCcu(a: Candidate, b: Candidate): number {
 
 function trendingCandidatePool(sources: DiscoverySources): Candidate[] {
   return [
-    ...sources.steamCharts.slice().sort(sortByChartRank).slice(0, 36),
-    ...sources.steamSpyTop.slice().sort(sortByCcu).slice(0, 36),
-    ...sources.steamSpyTrending.slice(0, 30),
-    ...sources.storeFeatured.slice(0, 24),
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")).slice(0, 24),
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:newreleases") || hasSource(candidate, "featured:new_releases")).slice(0, 24),
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:comingsoon") || hasSource(candidate, "featured:coming_soon")).slice(0, 18),
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:specials") || hasSource(candidate, "featured:dailydeal")).slice(0, 24)
+    ...sources.steamCharts.slice().sort(sortByChartRank),
+    ...sources.steamSpyTop.slice().sort(sortByCcu),
+    ...sources.steamSpyTrending,
+    ...sources.storeFeatured,
+    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")),
+    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:newreleases") || hasSource(candidate, "featured:new_releases")),
+    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:comingsoon") || hasSource(candidate, "featured:coming_soon")),
+    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:specials") || hasSource(candidate, "featured:dailydeal"))
   ];
 }
 
-function gamesForCandidates(candidates: Candidate[], enrichedById: Map<string, Game>, ownedIds: Set<string>, limit: number): Game[] {
+function gamesForCandidates(candidates: Candidate[], enrichedById: Map<string, Game>, ownedIds: Set<string>): Game[] {
   return uniqueGames(
     candidates
       .map((candidate) => enrichedById.get(candidateGameId(candidate)))
       .filter((game): game is Game => Boolean(game))
       .filter((game) => !ownedIds.has(game.id))
-  ).slice(0, limit);
+  );
 }
 
 function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Game>, ownedIds: Set<string>): HomeTrendRow[] {
@@ -596,19 +781,19 @@ function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Gam
       id: "most-played-now",
       title: "Most played now",
       description: "Steam chart leaders, ordered by current rank and peak player count.",
-      games: gamesForCandidates(sources.steamCharts.slice().sort(sortByChartRank), enrichedById, ownedIds, 30)
+      games: gamesForCandidates(sources.steamCharts.slice().sort(sortByChartRank), enrichedById, ownedIds)
     },
     {
       id: "top-two-weeks",
       title: "Popular this week",
       description: "SteamSpy two-week demand with owner, player, and review signals.",
-      games: gamesForCandidates(sources.steamSpyTop.slice().sort(sortByCcu), enrichedById, ownedIds, 30)
+      games: gamesForCandidates(sources.steamSpyTop.slice().sort(sortByCcu), enrichedById, ownedIds)
     },
     {
       id: "rising-recently",
       title: "Rising recently",
       description: "Fresh SteamSpy movement, useful for catching smaller games early.",
-      games: gamesForCandidates(sources.steamSpyTrending, enrichedById, ownedIds, 24)
+      games: gamesForCandidates(sources.steamSpyTrending, enrichedById, ownedIds)
     },
     {
       id: "top-sellers",
@@ -617,8 +802,7 @@ function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Gam
       games: gamesForCandidates(
         sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")),
         enrichedById,
-        ownedIds,
-        24
+        ownedIds
       )
     },
     {
@@ -628,8 +812,7 @@ function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Gam
       games: gamesForCandidates(
         sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:newreleases") || hasSource(candidate, "featured:new_releases")),
         enrichedById,
-        ownedIds,
-        24
+        ownedIds
       )
     },
     {
@@ -639,8 +822,7 @@ function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Gam
       games: gamesForCandidates(
         sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:comingsoon") || hasSource(candidate, "featured:coming_soon")),
         enrichedById,
-        ownedIds,
-        18
+        ownedIds
       )
     },
     {
@@ -650,25 +832,24 @@ function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Gam
       games: gamesForCandidates(
         sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:specials") || hasSource(candidate, "featured:dailydeal")),
         enrichedById,
-        ownedIds,
-        24
+        ownedIds
       )
     },
     {
       id: "featured",
       title: "Featured",
       description: "Platform front-page picks from the Steam Store featured feed.",
-      games: gamesForCandidates(sources.storeFeatured, enrichedById, ownedIds, 24)
+      games: gamesForCandidates(sources.storeFeatured, enrichedById, ownedIds)
     }
   ];
 
   return rows.filter((row) => row.games.length > 0);
 }
 
-export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch = fetch, previous?: HomeModel): Promise<HomeModel> {
+export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch = fetch, previous?: HomeModel, options: BuildHomeOptions = {}): Promise<HomeModel> {
   const previousRanks = previousChartRanks(previous);
   const cachedGames = previousDiscoveryGames(previous);
-  const sources = await fetchDiscoverySources(fetchImpl);
+  const sources = await fetchDiscoverySources(fetchImpl, options.logger);
   let heroCandidates = mergeCandidates([...sources.storeFeatured, ...sources.featuredCategories]);
   if (heroCandidates.length === 0) {
     heroCandidates = fallbackPopular.map((item) => ({
@@ -684,10 +865,12 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
     .map((candidate) => ({ candidate, discovery: scoreCandidate(candidate, previousRanks) }))
     .sort((a, b) => candidatePriority(b.candidate, b.discovery) - candidatePriority(a.candidate, a.discovery))
     .slice(0, 72);
-  const enrichmentCandidates = mergeCandidates([...prioritized.map((item) => item.candidate), ...trendingCandidatePool(sources)]).slice(0, 120);
+  const enrichmentCandidates = mergeCandidates([...prioritized.map((item) => item.candidate), ...trendingCandidatePool(sources)]);
   const enriched = (
-    await Promise.all(
-      enrichmentCandidates.map((candidate) => enrichCandidate(candidate, scoreCandidate(candidate, previousRanks), fetchImpl, cachedGames))
+    await mapWithConcurrency(
+      enrichmentCandidates,
+      DISCOVERY_ENRICHMENT_CONCURRENCY,
+      (candidate) => enrichCandidate(candidate, scoreCandidate(candidate, previousRanks), fetchImpl, cachedGames, options)
     )
   )
     .filter((game): game is Game => Boolean(game))

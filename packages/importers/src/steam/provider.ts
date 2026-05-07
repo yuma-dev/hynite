@@ -1,5 +1,5 @@
 import type { GameMetadataPatch, ImportedGame, ImporterProvider } from "@hynite/core";
-import { refreshFusedMetadata, type MetadataLogger } from "@hynite/metadata";
+import { refreshFusedMetadata, type MetadataFusionOptions, type MetadataLogger } from "@hynite/metadata";
 import { fetchOwnedSteamGames } from "./webApi";
 
 export type SteamProviderOptions = {
@@ -10,6 +10,9 @@ export type SteamProviderOptions = {
   includePlayedFreeGames?: boolean;
   steamGridDbApiKey?: string;
   metadataLogger?: MetadataLogger;
+  steamAppInfoProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>;
+  metadataMode?: MetadataFusionOptions["mode"];
+  signal?: AbortSignal;
 };
 
 export class SteamImporterProvider implements ImporterProvider {
@@ -26,13 +29,19 @@ export class SteamImporterProvider implements ImporterProvider {
     const ownedGames = await fetchOwnedSteamGames({
       steamId: this.options.account.steamId,
       webApiKey: this.options.account.webApiKey,
-      includePlayedFreeGames: this.options.includePlayedFreeGames
+      includePlayedFreeGames: this.options.includePlayedFreeGames,
+      signal: this.options.signal
     });
 
     return ownedGames;
   }
 
   async refreshMetadata(game: ImportedGame): Promise<GameMetadataPatch> {
-    return refreshFusedMetadata(game, { steamGridDbApiKey: this.options.steamGridDbApiKey, logger: this.options.metadataLogger });
+    return refreshFusedMetadata(game, {
+      steamGridDbApiKey: this.options.steamGridDbApiKey,
+      logger: this.options.metadataLogger,
+      steamAppInfoProvider: this.options.steamAppInfoProvider,
+      mode: this.options.metadataMode
+    });
   }
 }

@@ -23,7 +23,13 @@ const api = {
   },
   games: {
     get: (id: string): Promise<GameDetail> => ipcRenderer.invoke("games:get", id),
-    launch: (id: string): Promise<LaunchSession> => ipcRenderer.invoke("games:launch", id)
+    hydrateDiscovery: (game: Game): Promise<GameDetail> => ipcRenderer.invoke("games:hydrateDiscovery", game),
+    launch: (id: string): Promise<LaunchSession> => ipcRenderer.invoke("games:launch", id),
+    onUpdated: (callback: (game: GameDetail) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, game: GameDetail) => callback(game);
+      ipcRenderer.on("games:updated", listener);
+      return () => ipcRenderer.removeListener("games:updated", listener);
+    }
   },
   home: {
     get: (): Promise<HomeModel> => ipcRenderer.invoke("home:get")

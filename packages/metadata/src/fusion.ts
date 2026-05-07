@@ -1,5 +1,5 @@
 import type { GameMetadataPatch, ImportedGame } from "@hynite/core";
-import { fetchSteamAppInfoMetadata, fetchSteamMetadata } from "./steam";
+import { fetchSteamAppInfoMetadata, fetchSteamCdnArtworkMetadata, fetchSteamMetadata, isSteamRateLimitError } from "./steam";
 
 export type MetadataProviderId = "steam-store" | "steam-appinfo" | "steam-cdn" | "steamgriddb";
 
@@ -52,33 +52,58 @@ function mergePatch(base: GameMetadataPatch, next: GameMetadataPatch): GameMetad
   return Object.fromEntries(Object.entries(merged).filter(([, value]) => value !== undefined)) as GameMetadataPatch;
 }
 
+function shouldRunProvider(provider: MetadataProvider, fused: GameMetadataPatch): boolean {
+  if (provider.id === "steam-cdn") {
+    return !fused.coverUrl || !fused.backgroundUrl || !fused.headerUrl;
+  }
+
+  if (provider.id === "steamgriddb") {
+    return !fused.libraryCapsuleUrl;
+  }
+
+  return true;
+}
+
 export const steamStoreMetadataProvider: MetadataProvider = {
   id: "steam-store",
   label: "Steam Store",
-  refresh: (game) => fetchSteamMetadata(game.externalId)
+  refresh: (game) => fetchSteamMetadata(game.externalId, fetch, undefined, game.title)
 };
+
+function createSteamStoreMetadataProvider(logger?: MetadataLogger): MetadataProvider {
+  return {
+    id: "steam-store",
+    label: "Steam Store",
+    refresh: (game) => fetchSteamMetadata(game.externalId, fetch, logger, game.title)
+  };
+}
 
 export const steamAppInfoMetadataProvider: MetadataProvider = {
   id: "steam-appinfo",
   label: "Steam appinfo",
-  refresh: (game) => fetchSteamAppInfoMetadata(game.externalId)
+  refresh: (game) => fetchSteamAppInfoMetadata(game.externalId, fetch, undefined, game.title)
 };
 
-async function reachableImage(url: string): Promise<{ ok: boolean; status?: number; statusText?: string; contentType?: string }> {
-  try {
-    const response = await fetch(url, { method: "HEAD" });
-    return {
-      ok: response.ok,
-      status: response.status,
-      statusText: response.statusText,
-      contentType: response.headers.get("content-type") ?? undefined
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      statusText: error instanceof Error ? error.message : "request failed"
-    };
-  }
+function createSteamAppInfoMetadataProvider(logger?: MetadataLogger, nativeProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>): MetadataProvider {
+  return {
+    id: "steam-appinfo",
+    label: "Steam appinfo",
+    async refresh(game) {
+      const nativePatch = await nativeProvider?.(game);
+      if (nativePatch && Object.keys(nativePatch).length > 0) {
+        logger?.({
+          level: "info",
+          providerId: "steam-appinfo",
+          gameTitle: game.title,
+          appid: game.externalId,
+          message: "Steam appinfo loaded through native SteamKit"
+        });
+        return nativePatch;
+      }
+
+      return fetchSteamAppInfoMetadata(game.externalId, fetch, logger, game.title);
+    }
+  };
 }
 
 function createSteamCdnArtworkProvider(logger?: MetadataLogger): MetadataProvider {
@@ -86,51 +111,7 @@ function createSteamCdnArtworkProvider(logger?: MetadataLogger): MetadataProvide
     id: "steam-cdn",
     label: "Steam CDN artwork",
     async refresh(game) {
-      const appid = encodeURIComponent(game.externalId);
-      const libraryCapsule2xUrl = `https://steamcdn-a.akamaihd.net/steam/apps/${appid}/library_600x900_2x.jpg`;
-      const libraryCapsuleUrl = `https://steamcdn-a.akamaihd.net/steam/apps/${appid}/library_600x900.jpg`;
-      const backgroundUrl = `https://steamcdn-a.akamaihd.net/steam/apps/${appid}/library_hero.jpg`;
-      const headerUrl = `https://cdn.akamai.steamstatic.com/steam/apps/${appid}/header.jpg`;
-      const [capsule2x, capsule, background] = await Promise.all([reachableImage(libraryCapsule2xUrl), reachableImage(libraryCapsuleUrl), reachableImage(backgroundUrl)]);
-      const bestCapsuleUrl = capsule2x.ok ? libraryCapsule2xUrl : capsule.ok ? libraryCapsuleUrl : undefined;
-
-      if (!bestCapsuleUrl) {
-        logger?.({
-          level: "warning",
-          providerId: "steam-cdn",
-          gameTitle: game.title,
-          appid: game.externalId,
-          message: "Steam library capsule was not available",
-          details: {
-            requested: [libraryCapsule2xUrl, libraryCapsuleUrl],
-            response: { image2x: capsule2x, image: capsule },
-            alternatives: [headerUrl, backgroundUrl, `https://api.steamcmd.net/v1/info/${appid}`]
-          }
-        });
-      }
-
-      if (!background.ok) {
-        logger?.({
-          level: "warning",
-          providerId: "steam-cdn",
-          gameTitle: game.title,
-          appid: game.externalId,
-          message: "Steam library hero was not available",
-          details: {
-            requested: backgroundUrl,
-            response: background,
-            alternatives: [headerUrl, libraryCapsuleUrl]
-          }
-        });
-      }
-
-      return {
-        coverUrl: bestCapsuleUrl,
-        libraryCapsuleUrl: bestCapsuleUrl,
-        backgroundUrl: background.ok ? backgroundUrl : undefined,
-        headerUrl,
-        metadataStatus: "partial"
-      };
+      return fetchSteamCdnArtworkMetadata(game.externalId, fetch, logger, game.title);
     }
   };
 }
@@ -327,15 +308,22 @@ export function createSteamGridDbArtworkProvider(apiKey: string, fetchImpl: type
 export type MetadataFusionOptions = {
   steamGridDbApiKey?: string;
   logger?: MetadataLogger;
+  steamAppInfoProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>;
+  mode?: "fast" | "full";
 };
 
 export function defaultMetadataProviders(options: MetadataFusionOptions = {}): MetadataProvider[] {
-  return [
-    steamStoreMetadataProvider,
-    steamAppInfoMetadataProvider,
+  const fastProviders = [
+    createSteamAppInfoMetadataProvider(options.logger, options.steamAppInfoProvider),
     createSteamCdnArtworkProvider(options.logger),
     ...(options.steamGridDbApiKey ? [createSteamGridDbArtworkProvider(options.steamGridDbApiKey, fetch, options.logger)] : [])
   ];
+
+  if (options.mode === "fast") {
+    return fastProviders;
+  }
+
+  return [createSteamStoreMetadataProvider(options.logger), ...fastProviders];
 }
 
 export async function refreshFusedMetadata(
@@ -346,6 +334,10 @@ export async function refreshFusedMetadata(
   let fused: GameMetadataPatch = {};
 
   for (const provider of providers) {
+    if (!shouldRunProvider(provider, fused)) {
+      continue;
+    }
+
     try {
       const patch = await provider.refresh(game);
       if (patch.metadataStatus === "failed") {
@@ -354,6 +346,20 @@ export async function refreshFusedMetadata(
 
       fused = mergePatch(fused, patch);
     } catch (error) {
+      if (isSteamRateLimitError(error)) {
+        if (!Array.isArray(providersOrOptions)) {
+          providersOrOptions.logger?.({
+            level: "warning",
+            providerId: provider.id,
+            gameTitle: game.title,
+            appid: game.externalId,
+            message: `${provider.label} is rate limited`,
+            details: { retryAfterMs: error.retryAfterMs }
+          });
+        }
+        throw error;
+      }
+
       if (!Array.isArray(providersOrOptions)) {
         providersOrOptions.logger?.({
           level: "error",
