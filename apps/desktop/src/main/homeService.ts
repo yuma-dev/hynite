@@ -3,6 +3,8 @@ import { dirname } from "node:path";
 import type { Game, HomeModel } from "@hynite/core";
 import { buildHomeModel } from "@hynite/recommendations";
 
+const HOME_LOCAL_ROW_LIMIT = 72;
+
 export class HomeService {
   constructor(private readonly cachePath: string) {}
 
@@ -23,11 +25,14 @@ export class HomeService {
           .slice()
           .sort((a, b) => Math.max(Date.parse(b.lastPlayedAt ?? "") || 0, Date.parse(b.addedAt ?? "") || 0) - Math.max(Date.parse(a.lastPlayedAt ?? "") || 0, Date.parse(a.addedAt ?? "") || 0))
           .slice(0, 10),
-        continuePlaying: games.filter((game) => game.lastPlayedAt).slice(0, 8),
+        continuePlaying: games
+          .filter((game) => game.lastPlayedAt)
+          .sort((a, b) => (Date.parse(b.lastPlayedAt ?? "") || 0) - (Date.parse(a.lastPlayedAt ?? "") || 0))
+          .slice(0, HOME_LOCAL_ROW_LIMIT),
         mostPlayed: games
           .slice()
           .sort((a, b) => (b.playtimeMinutes ?? 0) - (a.playtimeMinutes ?? 0))
-          .slice(0, 8),
+          .slice(0, HOME_LOCAL_ROW_LIMIT),
         popularNow: [],
         recommended: [],
         newAndNotable: [],

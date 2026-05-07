@@ -158,9 +158,26 @@ type SteamGridDbResponse = {
 
 function chooseSteamGridDbGrid(grids: SteamGridDbGrid[]): SteamGridDbGrid | undefined {
   const usable = grids.filter((grid) => grid.url && !grid.nsfw && !grid.humor);
-  const exact = usable.filter((grid) => grid.width === 600 && grid.height === 900);
+  const exact = usable.filter((grid) => (grid.width === 600 && grid.height === 900) || (grid.width === 300 && grid.height === 450));
   const vertical = usable.filter((grid) => (grid.height ?? 0) > (grid.width ?? Number.MAX_SAFE_INTEGER));
   return [...(exact.length ? exact : vertical)].sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
+}
+
+type SteamGridDbGame = {
+  id?: number;
+  name?: string;
+  types?: string[];
+  verified?: boolean;
+};
+
+type SteamGridDbSearchResponse = {
+  success?: boolean;
+  data?: SteamGridDbGame[];
+};
+
+function chooseSteamGridDbGame(games: SteamGridDbGame[], title: string): SteamGridDbGame | undefined {
+  const normalizedTitle = title.trim().toLocaleLowerCase();
+  return games.find((game) => game.name?.trim().toLocaleLowerCase() === normalizedTitle) ?? games[0];
 }
 
 export function createSteamGridDbArtworkProvider(apiKey: string, fetchImpl: typeof fetch = fetch, logger?: MetadataLogger): MetadataProvider {
@@ -169,13 +186,15 @@ export function createSteamGridDbArtworkProvider(apiKey: string, fetchImpl: type
     label: "SteamGridDB artwork",
     async refresh(game) {
       const appid = encodeURIComponent(game.externalId);
+      const encodedTitle = encodeURIComponent(game.title);
       const headers = { Authorization: `Bearer ${apiKey}` };
-      const requests = [
+      const appidRequests = [
         `https://www.steamgriddb.com/api/v2/grids/steam/${appid}?dimensions=600x900&types=static`,
+        `https://www.steamgriddb.com/api/v2/grids/steam/${appid}?dimensions=300x450&types=static`,
         `https://www.steamgriddb.com/api/v2/grids/steam/${appid}?types=static`
       ];
 
-      for (const url of requests) {
+      for (const url of appidRequests) {
         const response = await fetchImpl(url, { headers });
         if (!response.ok) {
           logger?.({
@@ -206,6 +225,88 @@ export function createSteamGridDbArtworkProvider(apiKey: string, fetchImpl: type
           message: "SteamGridDB returned no usable vertical static artwork",
           details: {
             requested: url,
+            returned: json.data?.map((item) => ({
+              url: item.url,
+              width: item.width,
+              height: item.height,
+              score: item.score,
+              nsfw: item.nsfw,
+              humor: item.humor
+            }))
+          }
+        });
+      }
+
+      const searchUrl = `https://www.steamgriddb.com/api/v2/search/autocomplete/${encodedTitle}`;
+      const searchResponse = await fetchImpl(searchUrl, { headers });
+      if (!searchResponse.ok) {
+        logger?.({
+          level: "warning",
+          providerId: "steamgriddb",
+          gameTitle: game.title,
+          appid: game.externalId,
+          message: "SteamGridDB title search failed",
+          details: { requested: searchUrl, status: searchResponse.status, statusText: searchResponse.statusText }
+        });
+        return {};
+      }
+
+      const searchJson = (await searchResponse.json()) as SteamGridDbSearchResponse;
+      const foundGame = chooseSteamGridDbGame(searchJson.data ?? [], game.title);
+      if (!foundGame?.id) {
+        logger?.({
+          level: "warning",
+          providerId: "steamgriddb",
+          gameTitle: game.title,
+          appid: game.externalId,
+          message: "SteamGridDB title search returned no game match",
+          details: {
+            requested: searchUrl,
+            returned: searchJson.data?.map((item) => ({ id: item.id, name: item.name, verified: item.verified, types: item.types }))
+          }
+        });
+        return {};
+      }
+
+      const gameRequests = [
+        `https://www.steamgriddb.com/api/v2/grids/game/${foundGame.id}?dimensions=600x900&types=static`,
+        `https://www.steamgriddb.com/api/v2/grids/game/${foundGame.id}?dimensions=300x450&types=static`,
+        `https://www.steamgriddb.com/api/v2/grids/game/${foundGame.id}?types=static`
+      ];
+
+      for (const url of gameRequests) {
+        const response = await fetchImpl(url, { headers });
+        if (!response.ok) {
+          logger?.({
+            level: "warning",
+            providerId: "steamgriddb",
+            gameTitle: game.title,
+            appid: game.externalId,
+            message: "SteamGridDB artwork request failed",
+            details: { requested: url, status: response.status, statusText: response.statusText, gameId: foundGame.id, gameName: foundGame.name }
+          });
+          continue;
+        }
+
+        const json = (await response.json()) as SteamGridDbResponse;
+        const grid = chooseSteamGridDbGrid(json.data ?? []);
+        if (grid?.url) {
+          return {
+            coverUrl: grid.url,
+            libraryCapsuleUrl: grid.url,
+            metadataStatus: "partial"
+          };
+        }
+        logger?.({
+          level: "warning",
+          providerId: "steamgriddb",
+          gameTitle: game.title,
+          appid: game.externalId,
+          message: "SteamGridDB returned no usable vertical static artwork",
+          details: {
+            requested: url,
+            gameId: foundGame.id,
+            gameName: foundGame.name,
             returned: json.data?.map((item) => ({
               url: item.url,
               width: item.width,

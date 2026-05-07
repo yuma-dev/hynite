@@ -75,4 +75,28 @@ describe("refreshFusedMetadata", () => {
       { headers: { Authorization: "Bearer secret" } }
     );
   });
+
+  it("falls back to title search and accepts static 300x450 grids", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.startsWith("https://www.steamgriddb.com/api/v2/grids/steam/")) {
+        return new Response("", { status: 404, statusText: "Not Found" });
+      }
+      if (url === "https://www.steamgriddb.com/api/v2/search/autocomplete/Baldur's%20Gate%203") {
+        return new Response(JSON.stringify({ success: true, data: [{ id: 17830, name: "Baldur's Gate 3" }] }), { status: 200 });
+      }
+      if (url === "https://www.steamgriddb.com/api/v2/grids/game/17830?dimensions=600x900&types=static") {
+        return new Response(JSON.stringify({ success: true, data: [] }), { status: 200 });
+      }
+      if (url === "https://www.steamgriddb.com/api/v2/grids/game/17830?dimensions=300x450&types=static") {
+        return new Response(JSON.stringify({ success: true, data: [{ url: "cover-300x450.jpg", width: 300, height: 450, score: 4 }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ success: true, data: [] }), { status: 200 });
+    });
+    const provider = createSteamGridDbArtworkProvider("secret", fetchMock as unknown as typeof fetch);
+
+    await expect(provider.refresh(game)).resolves.toMatchObject({
+      coverUrl: "cover-300x450.jpg",
+      libraryCapsuleUrl: "cover-300x450.jpg"
+    });
+  });
 });

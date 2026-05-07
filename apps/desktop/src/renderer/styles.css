@@ -76,6 +76,7 @@ button {
 .game-cover,
 .wide-game,
 .hero-cover,
+.detail-cover,
 .close-button,
 .primary-action,
 .secondary-action,
@@ -221,7 +222,7 @@ button {
 }
 
 .hero {
-  min-height: 390px;
+  height: 390px;
   position: relative;
   overflow: hidden;
   border-bottom: 0.5px solid var(--line);
@@ -310,13 +311,12 @@ button {
 }
 
 .hero-cover {
-  width: min(42vw, 420px);
-  aspect-ratio: 4 / 3;
+  width: clamp(380px, 44vw, 640px);
+  aspect-ratio: 92 / 43;
   border: 0.5px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
   padding: 0;
   overflow: hidden;
-  box-shadow: 0 16px 44px -14px var(--glow), 0 12px 26px rgba(0, 0, 0, 0.45);
   cursor: pointer;
   position: relative;
   flex: none;
@@ -332,9 +332,18 @@ button {
   background-position: center;
 }
 
+.hero-cover span {
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
 .hero-copy {
   position: relative;
-  max-width: 570px;
+  flex: 1 1 auto;
+  min-width: 280px;
+  max-width: none;
+  max-height: 292px;
+  overflow: hidden;
   text-shadow: 0 1px 18px rgba(0, 0, 0, 0.72);
 }
 
@@ -347,23 +356,6 @@ button {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-}
-
-.hero-nav {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.hero-nav button {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  border: 0.5px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-  cursor: pointer;
 }
 
 .hero h1,
@@ -382,6 +374,21 @@ button {
 .source-panel p,
 .settings-section p {
   color: var(--text-2);
+}
+
+.hero h1,
+.hero p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+.hero h1 {
+  -webkit-line-clamp: 2;
+}
+
+.hero p {
+  -webkit-line-clamp: 3;
 }
 
 .hero-actions,
@@ -426,12 +433,113 @@ button {
   margin-bottom: 16px;
 }
 
-.hero-shot-grid span {
+.hero-shot-grid button {
   aspect-ratio: 16 / 9;
   border-radius: 6px;
+  border: 0;
+  padding: 0;
   background-size: cover;
   background-position: center;
   box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  transition: opacity 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.hero-shot-grid button:hover,
+.hero-shot-grid button:focus-visible {
+  opacity: 0.88;
+  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.hero-shot-grid button.active {
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+.hero-carousel {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  transform: translateX(-50%);
+}
+
+.hero-carousel > button {
+  width: 24px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.66);
+  cursor: pointer;
+}
+
+.hero-carousel > button:hover,
+.hero-carousel > button:focus-visible {
+  color: var(--text);
+}
+
+.hero-dots,
+.image-viewer-dots {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.hero-dots button,
+.image-viewer-dots button {
+  width: 12px;
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.28);
+  cursor: pointer;
+  overflow: hidden;
+  position: relative;
+  transition: width 160ms ease, background 160ms ease, opacity 160ms ease;
+}
+
+.hero-dots button.active,
+.image-viewer-dots button.active {
+  width: 28px;
+  background: var(--text);
+}
+
+.hero-dots button.active {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.hero-dots button.active::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  background: linear-gradient(90deg, #ffffff, rgba(255, 255, 255, 0.62));
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: heroDotFill var(--dot-duration, 9000ms) linear forwards;
+}
+
+.hero.paused .hero-dots button.active::before {
+  animation-play-state: paused;
+}
+
+.hero-dots button.active.static::before {
+  transform: scaleX(1);
+  animation: none;
+}
+
+@keyframes heroDotFill {
+  to {
+    transform: scaleX(1);
+  }
 }
 
 .primary-action,
@@ -507,13 +615,92 @@ button {
   margin-bottom: 32px;
 }
 
+.cover-strip-shell {
+  position: relative;
+  overflow: hidden;
+}
+
 .cover-strip {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 150px;
   gap: 14px;
-  overflow-x: auto;
   padding: 0 0 14px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+
+.cover-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.row-arrow {
+  position: absolute;
+  top: calc(50% - 7px);
+  z-index: 2;
+  width: 38px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(8, 9, 11, 0.66);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.44);
+  cursor: pointer;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.cover-strip-shell:hover .row-arrow,
+.cover-strip-shell:focus-within .row-arrow {
+  opacity: 1;
+}
+
+.row-arrow:hover,
+.row-arrow:focus-visible {
+  transform: translateY(-50%) scale(1.04);
+}
+
+.row-arrow.left {
+  left: 0;
+}
+
+.row-arrow.right {
+  right: 0;
+}
+
+.cover-strip-shell::before,
+.cover-strip-shell::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 14px;
+  z-index: 1;
+  width: 54px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.cover-strip-shell::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--bg-0), transparent);
+}
+
+.cover-strip-shell::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--bg-0), transparent);
+}
+
+.cover-strip-shell:has(.row-arrow.left)::before {
+  opacity: 1;
+}
+
+.cover-strip-shell:has(.row-arrow.right)::after {
+  opacity: 1;
 }
 
 .game-cover,
@@ -533,7 +720,6 @@ button {
   overflow: hidden;
   aspect-ratio: 2 / 3;
   border-radius: 8px;
-  border: 0.5px solid rgba(255, 255, 255, 0.09);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.32);
 }
 
@@ -752,6 +938,13 @@ textarea {
   margin-bottom: 18px;
   position: relative;
   z-index: 1;
+  display: block;
+  padding: 0;
+  cursor: pointer;
+}
+
+.detail-cover:disabled {
+  cursor: default;
 }
 
 .detail-hero h1 {
@@ -836,6 +1029,99 @@ dd {
   background-size: cover;
   background-position: center;
   cursor: pointer;
+}
+
+.trailer-player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: block;
+  margin-top: 12px;
+  border-radius: 8px;
+  background: #050608;
+}
+
+.image-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 26px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(18px);
+}
+
+.image-viewer-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-out;
+}
+
+.image-viewer {
+  width: min(1120px, 94vw);
+  height: min(760px, 88vh);
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 12px;
+  z-index: 1;
+}
+
+.image-viewer-head {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.image-viewer-stage {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.image-viewer-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.58);
+}
+
+.image-viewer-arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(10, 11, 13, 0.64);
+  color: var(--text);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.image-viewer-arrow.left {
+  left: 12px;
+}
+
+.image-viewer-arrow.right {
+  right: 12px;
+}
+
+.image-viewer-dots {
+  min-height: 20px;
 }
 
 .muted {
@@ -1111,11 +1397,12 @@ dd {
   .hero {
     margin: -22px -22px 24px;
     padding: 26px;
-    min-height: 280px;
+    height: 330px;
   }
 
   .hero-cover {
-    width: 150px;
+    width: min(40vw, 330px);
+    min-width: 260px;
   }
 
   .hero h1,
@@ -1150,6 +1437,8 @@ dd {
 @media (max-width: 720px) {
   .hero {
     align-items: end;
+    height: 360px;
+    padding-bottom: 40px;
   }
 
   .hero-cover {
