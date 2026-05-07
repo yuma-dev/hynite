@@ -97,8 +97,12 @@ function fallbackArt(game: Game): CSSProperties {
   } as CSSProperties;
 }
 
+function isVerifiedVerticalCoverUrl(value: string | undefined): boolean {
+  return Boolean(value && (/(?:\/|%2f)library_(?:600x900|capsule)(?:_2x)?\.(?:jpg|png|webp)(?:\?|$)/i.test(value) || /steamgriddb\.com\/grid\//i.test(value)));
+}
+
 function primaryCover(game: Game): string | undefined {
-  return game.libraryCapsuleUrl ?? game.coverUrl;
+  return game.libraryCapsuleUrl ?? (isVerifiedVerticalCoverUrl(game.coverUrl) ? game.coverUrl : undefined);
 }
 
 function heroStill(game: Game): string | undefined {
@@ -1551,7 +1555,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
-  async function refresh(options: { awaitHome?: boolean } = {}) {
+  async function refresh() {
     const homePromise = window.hynite.home.get();
     const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
       window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState }),
@@ -1562,14 +1566,11 @@ export function App() {
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     setSettings(nextSettings);
     void homePromise.then(setHome).catch(console.error);
-    if (options.awaitHome) {
-      await homePromise.catch(console.error);
-    }
   }
 
   useEffect(() => {
     const minimumStartupPaint = new Promise((resolve) => setTimeout(resolve, 900));
-    void Promise.all([refresh({ awaitHome: true }), window.hynite.sync.status().then(setSyncStatus), minimumStartupPaint]).finally(() => setInitialLoadComplete(true));
+    void Promise.all([refresh(), window.hynite.sync.status().then(setSyncStatus), minimumStartupPaint]).finally(() => setInitialLoadComplete(true));
     const unsubscribeSync = window.hynite.sync.onStatusChanged((status) => {
       setSyncStatus(status);
       if (!status.active && status.phase === "complete") {

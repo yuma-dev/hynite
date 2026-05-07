@@ -52,6 +52,33 @@ function mergePatch(base: GameMetadataPatch, next: GameMetadataPatch): GameMetad
   return Object.fromEntries(Object.entries(merged).filter(([, value]) => value !== undefined)) as GameMetadataPatch;
 }
 
+export async function fetchSteamAppInfoMetadataWithNativeFallback(
+  game: ImportedGame,
+  fetchImpl: typeof fetch,
+  logger?: MetadataLogger,
+  nativeProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>
+): Promise<GameMetadataPatch> {
+  const nativePatch = await nativeProvider?.(game);
+  if (nativePatch && Object.keys(nativePatch).length > 0) {
+    logger?.({
+      level: "info",
+      providerId: "steam-appinfo",
+      gameTitle: game.title,
+      appid: game.externalId,
+      message: "Steam appinfo loaded through native SteamKit"
+    });
+
+    if (nativePatch.libraryCapsuleUrl) {
+      return nativePatch;
+    }
+
+    const httpPatch = await fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title);
+    return Object.keys(httpPatch).length > 0 ? mergePatch(nativePatch, httpPatch) : nativePatch;
+  }
+
+  return fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title);
+}
+
 function shouldRunProvider(provider: MetadataProvider, fused: GameMetadataPatch): boolean {
   if (provider.id === "steam-cdn") {
     return !fused.coverUrl || !fused.backgroundUrl || !fused.headerUrl;
@@ -89,19 +116,7 @@ function createSteamAppInfoMetadataProvider(logger?: MetadataLogger, nativeProvi
     id: "steam-appinfo",
     label: "Steam appinfo",
     async refresh(game) {
-      const nativePatch = await nativeProvider?.(game);
-      if (nativePatch && Object.keys(nativePatch).length > 0) {
-        logger?.({
-          level: "info",
-          providerId: "steam-appinfo",
-          gameTitle: game.title,
-          appid: game.externalId,
-          message: "Steam appinfo loaded through native SteamKit"
-        });
-        return nativePatch;
-      }
-
-      return fetchSteamAppInfoMetadata(game.externalId, fetch, logger, game.title);
+      return fetchSteamAppInfoMetadataWithNativeFallback(game, fetch, logger, nativeProvider);
     }
   };
 }
@@ -171,7 +186,6 @@ export function createSteamGridDbArtworkProvider(apiKey: string, fetchImpl: type
       const headers = { Authorization: `Bearer ${apiKey}` };
       const appidRequests = [
         `https://www.steamgriddb.com/api/v2/grids/steam/${appid}?dimensions=600x900&types=static`,
-        `https://www.steamgriddb.com/api/v2/grids/steam/${appid}?dimensions=300x450&types=static`,
         `https://www.steamgriddb.com/api/v2/grids/steam/${appid}?types=static`
       ];
 
@@ -251,7 +265,6 @@ export function createSteamGridDbArtworkProvider(apiKey: string, fetchImpl: type
 
       const gameRequests = [
         `https://www.steamgriddb.com/api/v2/grids/game/${foundGame.id}?dimensions=600x900&types=static`,
-        `https://www.steamgriddb.com/api/v2/grids/game/${foundGame.id}?dimensions=300x450&types=static`,
         `https://www.steamgriddb.com/api/v2/grids/game/${foundGame.id}?types=static`
       ];
 

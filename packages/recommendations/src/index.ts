@@ -1,7 +1,7 @@
 import { type Game, type GameDiscovery, type GameMetadataPatch, type HomeModel, type HomeTrendRow, type ImportedGame, gameActivityTime, makeGameId, makeSortTitle } from "@hynite/core";
 import {
   createSteamGridDbArtworkProvider,
-  fetchSteamAppInfoMetadata,
+  fetchSteamAppInfoMetadataWithNativeFallback,
   fetchSteamCdnArtworkMetadata,
   isSteamRateLimitError,
   refreshFusedMetadata,
@@ -67,7 +67,6 @@ type SteamSpyItem = {
 type Candidate = {
   appid: string;
   title?: string;
-  coverUrl?: string;
   headerUrl?: string;
   sources: Set<string>;
   trendRank?: number;
@@ -166,7 +165,6 @@ function mergeCandidate(candidates: Map<string, Candidate>, appid: string, patch
     ...existing,
     ...patch,
     title: existing.title ?? patch.title,
-    coverUrl: existing.coverUrl ?? patch.coverUrl,
     headerUrl: existing.headerUrl ?? patch.headerUrl,
     sources: existing.sources,
     featuredWeight: Math.max(existing.featuredWeight, patch.featuredWeight ?? 0),
@@ -233,7 +231,6 @@ async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candida
       const appid = String(item.id);
       mergeCandidate(candidates, String(item.id), {
         title: item.name,
-        coverUrl: item.large_capsule_image ?? item.small_capsule_image ?? item.header_image,
         headerUrl: item.header_image ?? item.large_capsule_image ?? item.small_capsule_image,
         featuredWeight: categoryWeight * (1 - index / 32),
         newnessWeight,
@@ -275,7 +272,6 @@ async function fetchStoreFeatured(fetchImpl: typeof fetch): Promise<Candidate[]>
       const appid = String(item.id);
       mergeCandidate(candidates, String(item.id), {
         title: item.name,
-        coverUrl: item.large_capsule_image ?? item.small_capsule_image ?? item.header_image,
         headerUrl: item.header_image ?? item.large_capsule_image ?? item.small_capsule_image,
         featuredWeight: 0.65 * (1 - index / 40),
         newnessWeight: 0.25,
@@ -319,7 +315,6 @@ async function fetchSteamSpyTrending(fetchImpl: typeof fetch): Promise<Candidate
   return rows.map((row, index) => ({
     appid: row.groups?.appid ?? "",
     title: decodeHtml(row.groups?.name ?? ""),
-    coverUrl: row.groups?.image,
     headerUrl: row.groups?.image,
     sources: new Set([`steamspy-trending:${index + 1}`]),
     trendRank: index + 1,
@@ -526,8 +521,7 @@ function discoveryMetadataProviders(candidate: Candidate, fetchImpl: typeof fetc
       id: "steam-appinfo",
       label: "Steam appinfo",
       async refresh(game) {
-        const nativePatch = await options.steamAppInfoProvider?.(game);
-        return nativePatch && Object.keys(nativePatch).length > 0 ? nativePatch : fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title);
+        return fetchSteamAppInfoMetadataWithNativeFallback(game, fetchImpl, logger, options.steamAppInfoProvider);
       }
     },
     {
@@ -558,16 +552,14 @@ async function enrichCandidate(
     installState: "not_installed" as const
   };
   const cached = cachedGames.get(base.id);
-  if (cached) {
-    const cachedCoverUrl = usableArtworkUrl(cached.coverUrl);
-    const cachedLibraryCapsuleUrl = usableArtworkUrl(cached.libraryCapsuleUrl);
-    const fallbackCoverUrl = cachedCoverUrl ?? cachedLibraryCapsuleUrl ?? candidate.coverUrl ?? candidate.headerUrl;
-    const fallbackHeaderUrl = cached.headerUrl ?? candidate.headerUrl ?? fallbackCoverUrl;
+  const cachedLibraryCapsuleUrl = usableArtworkUrl(cached?.libraryCapsuleUrl);
+  if (cached && cachedLibraryCapsuleUrl) {
+    const fallbackHeaderUrl = cached.headerUrl ?? candidate.headerUrl ?? cached.backgroundUrl;
     return {
       ...cached,
       discovery,
       libraryCapsuleUrl: cachedLibraryCapsuleUrl,
-      coverUrl: fallbackCoverUrl,
+      coverUrl: cachedLibraryCapsuleUrl,
       headerUrl: fallbackHeaderUrl,
       backgroundUrl: cached.backgroundUrl ?? fallbackHeaderUrl,
       metadataStatus: cached.metadataStatus
@@ -577,18 +569,17 @@ async function enrichCandidate(
   try {
     const metadata = await refreshFusedMetadata(imported, discoveryMetadataProviders(candidate, fetchImpl, options));
     const title = metadata.title ?? fallbackTitle;
-    const fallbackCoverUrl = metadata.coverUrl ?? metadata.libraryCapsuleUrl ?? candidate.coverUrl ?? candidate.headerUrl;
-    const fallbackHeaderUrl = metadata.headerUrl ?? candidate.headerUrl ?? fallbackCoverUrl;
+    const fallbackCoverUrl = usableArtworkUrl(metadata.libraryCapsuleUrl);
+    const fallbackHeaderUrl = metadata.headerUrl ?? candidate.headerUrl ?? metadata.backgroundUrl;
 
     if (!fallbackCoverUrl) {
       options.logger?.({
         level: "warning",
         phase: "metadata:discovery",
-        message: `${title}: discovery metadata has no cover artwork after all providers`,
+        message: `${title}: discovery metadata has no vertical capsule artwork after all providers`,
         details: {
           appid: candidate.appid,
           sources: [...candidate.sources],
-          candidateCoverUrl: candidate.coverUrl,
           storeHeaderUrl: candidate.headerUrl,
           metadataStatus: metadata.metadataStatus
         }
@@ -615,7 +606,7 @@ async function enrichCandidate(
       title,
       sortTitle: makeSortTitle(title),
       coverUrl: fallbackCoverUrl,
-      libraryCapsuleUrl: metadata.libraryCapsuleUrl,
+      libraryCapsuleUrl: fallbackCoverUrl,
       headerUrl: fallbackHeaderUrl,
       backgroundUrl: metadata.backgroundUrl ?? fallbackHeaderUrl,
       discovery,
@@ -654,9 +645,8 @@ async function enrichCandidate(
     });
     return {
       ...base,
-      coverUrl: candidate.coverUrl ?? candidate.headerUrl,
       headerUrl: candidate.headerUrl,
-      backgroundUrl: candidate.headerUrl ?? candidate.coverUrl,
+      backgroundUrl: candidate.headerUrl,
       discovery,
       metadataStatus: "partial"
     };

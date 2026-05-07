@@ -16,7 +16,7 @@ import {
 } from "@hynite/core";
 import { migrations } from "./schema";
 
-export const CURRENT_METADATA_VERSION = 7;
+export const CURRENT_METADATA_VERSION = 8;
 
 type GameRow = {
   id: string;

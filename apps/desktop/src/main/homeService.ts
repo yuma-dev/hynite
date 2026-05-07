@@ -22,6 +22,19 @@ export class HomeService {
     } = {}
   ): Promise<HomeModel> {
     const previous = await this.readCache();
+    if (previous && this.hasUnsafeDiscoveryCache(previous)) {
+      try {
+        return await this.buildAndWrite(games, previous, options);
+      } catch (error) {
+        this.diagnosticLog?.log({
+          level: "error",
+          phase: "home:discovery",
+          message: "Home discovery blocking rebuild failed",
+          details: { error: error instanceof Error ? error.message : String(error) }
+        });
+      }
+    }
+
     this.startBackgroundRebuild(games, previous, options);
     return this.cachedOrLocalModel(games, previous);
   }
@@ -56,13 +69,7 @@ export class HomeService {
     }
   ): Promise<void> {
     try {
-      const model = await buildHomeModel(games, fetch, previous, {
-        steamGridDbApiKey: options.steamGridDbApiKey,
-        steamAppInfoProvider: options.steamAppInfoProvider,
-        logger: (entry) => this.diagnosticLog?.log(entry)
-      });
-      await mkdir(dirname(this.cachePath), { recursive: true });
-      await writeFile(this.cachePath, JSON.stringify(model, null, 2));
+      await this.buildAndWrite(games, previous, options);
     } catch (error) {
       this.diagnosticLog?.log({
         level: "error",
@@ -71,6 +78,24 @@ export class HomeService {
         details: { error: error instanceof Error ? error.message : String(error) }
       });
     }
+  }
+
+  private async buildAndWrite(
+    games: Game[],
+    previous: HomeModel | undefined,
+    options: {
+      steamGridDbApiKey?: string;
+      steamAppInfoProvider?: BuildHomeOptions["steamAppInfoProvider"];
+    }
+  ): Promise<HomeModel> {
+    const model = await buildHomeModel(games, fetch, previous, {
+      steamGridDbApiKey: options.steamGridDbApiKey,
+      steamAppInfoProvider: options.steamAppInfoProvider,
+      logger: (entry) => this.diagnosticLog?.log(entry)
+    });
+    await mkdir(dirname(this.cachePath), { recursive: true });
+    await writeFile(this.cachePath, JSON.stringify(model, null, 2));
+    return model;
   }
 
   private cachedOrLocalModel(games: Game[], previous: HomeModel | undefined): HomeModel {
@@ -118,5 +143,24 @@ export class HomeService {
     } catch {
       return undefined;
     }
+  }
+
+  private hasUnsafeDiscoveryCache(model: HomeModel): boolean {
+    const games = [...model.popularNow, ...model.recommended, ...model.newAndNotable, ...model.trendingRows.flatMap((row) => row.games)];
+    return games.some((game) => {
+      if (this.isLegacyGuessedLibraryCapsuleUrl(game.libraryCapsuleUrl) || this.isLegacyGuessedLibraryCapsuleUrl(game.coverUrl)) {
+        return true;
+      }
+
+      return Boolean(!game.libraryCapsuleUrl && game.coverUrl && !this.isVerifiedVerticalCoverUrl(game.coverUrl));
+    });
+  }
+
+  private isLegacyGuessedLibraryCapsuleUrl(value: string | undefined): boolean {
+    return Boolean(value && /^https:\/\/(?:cdn\.akamai\.steamstatic\.com\/steam|steamcdn-a\.akamaihd\.net\/steam)\/apps\/\d+\/library_600x900(?:_2x)?\.jpg(?:\?.*)?$/i.test(value));
+  }
+
+  private isVerifiedVerticalCoverUrl(value: string | undefined): boolean {
+    return Boolean(value && (/(?:\/|%2f)library_(?:600x900|capsule)(?:_2x)?\.(?:jpg|png|webp)(?:\?|$)/i.test(value) || /steamgriddb\.com\/grid\//i.test(value)));
   }
 }
