@@ -48,7 +48,7 @@ describe("HyniteRepository", () => {
     repository.close();
   });
 
-  it("preserves added time across Steam upserts", () => {
+  it("preserves import time separately from provider added time", () => {
     const repository = createRepository();
     repository.upsertImportedGame({
       provider: "steam",
@@ -56,30 +56,30 @@ describe("HyniteRepository", () => {
       title: "Counter-Strike 2",
       installState: "unknown"
     });
-    const firstAddedAt = repository.getGame("steam:730")?.addedAt;
+    const firstImportAt = repository.getGame("steam:730")?.importedAt;
 
     repository.upsertImportedGame({
       provider: "steam",
       externalId: "730",
       title: "Counter-Strike 2",
       installState: "unknown",
-      playtimeMinutes: 60
+      playtimeMinutes: 60,
+      addedAt: "2024-02-01T00:00:00.000Z"
     });
 
-    expect(repository.getGame("steam:730")?.addedAt).toBe(firstAddedAt);
+    expect(repository.getGame("steam:730")?.importedAt).toBe(firstImportAt);
+    expect(repository.getGame("steam:730")?.addedAt).toBe("2024-02-01T00:00:00.000Z");
     expect(repository.getGame("steam:730")?.playtimeMinutes).toBe(60);
 
     repository.close();
   });
 
-  it("sorts recent games by latest played or added activity", () => {
+  it("sorts recent games by latest provider added or played activity, not import time", () => {
     const repository = createRepository();
-    repository.upsertImportedGame({ provider: "steam", externalId: "1", title: "Old", installState: "unknown" });
+    repository.upsertImportedGame({ provider: "steam", externalId: "1", title: "Imported Only", installState: "unknown" });
     repository.upsertImportedGame({ provider: "steam", externalId: "2", title: "Played", installState: "unknown", lastPlayedAt: "2026-05-05T10:00:00.000Z" });
-    repository.upsertImportedGame({ provider: "steam", externalId: "3", title: "Added", installState: "unknown" });
-    repository.db.prepare("UPDATE games SET added_at = ? WHERE id = ?").run("2026-05-06T10:00:00.000Z", "steam:3");
-    repository.db.prepare("UPDATE games SET added_at = ? WHERE id = ?").run("2026-05-01T10:00:00.000Z", "steam:2");
-    repository.db.prepare("UPDATE games SET added_at = ? WHERE id = ?").run("2026-05-01T10:00:00.000Z", "steam:1");
+    repository.upsertImportedGame({ provider: "steam", externalId: "3", title: "Provider Added", installState: "unknown", addedAt: "2026-05-06T10:00:00.000Z" });
+    repository.db.prepare("UPDATE games SET imported_at = ? WHERE id = ?").run("2026-05-07T10:00:00.000Z", "steam:1");
 
     expect(repository.queryGames("", "all", "recent").map((game) => game.id)).toEqual(["steam:3", "steam:2", "steam:1"]);
 

@@ -2,6 +2,15 @@ import type { SourceImportInput, SourceImportResult, SourceMatch } from "@hynite
 import type { HyniteRepository } from "@hynite/db";
 import { findSourceMatches, prepareSourceImport } from "@hynite/source-search";
 
+const sourceUrlHeaders = {
+  accept: "application/json, text/plain, */*",
+  "accept-language": "en-US,en;q=0.9",
+  "cache-control": "no-cache",
+  pragma: "no-cache",
+  "user-agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+};
+
 export class SourceService {
   constructor(private readonly repository: HyniteRepository) {}
 
@@ -58,7 +67,10 @@ export class SourceService {
       throw new Error("Only HTTPS source URLs are supported.");
     }
 
-    const response = await fetch(parsed);
+    const response = await fetch(parsed, {
+      headers: sourceUrlHeaders,
+      redirect: "follow"
+    });
     if (!response.ok) {
       throw new Error(`Source URL returned ${response.status}.`);
     }

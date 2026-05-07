@@ -76,6 +76,7 @@ button {
 .game-cover,
 .wide-game,
 .hero-cover,
+.trend-hero-frame,
 .close-button,
 .primary-action,
 .secondary-action,
@@ -100,13 +101,16 @@ button {
 }
 
 .app-body {
+  --rail-width: 210px;
+  --rail-expanded-width: 210px;
   min-height: 0;
   display: grid;
-  grid-template-columns: 210px 1fr;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
   position: relative;
 }
 
 .rail {
+  width: var(--rail-expanded-width);
   min-height: 0;
   padding: 20px 12px;
   border-right: 0.5px solid var(--line);
@@ -114,14 +118,45 @@ button {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+  z-index: 5;
+  transition:
+    width 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .rail-brand {
-  margin: 0 10px 18px;
+  min-height: 40px;
+  margin: 0 10px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+.rail-logo {
+  width: 38px;
+  height: 38px;
+  display: block;
+  flex: none;
+  object-fit: contain;
+  filter: drop-shadow(0 0 14px rgba(205, 80, 255, 0.24));
+  user-select: none;
+}
+
+.rail-label {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    max-width 150ms ease,
+    opacity 150ms ease;
 }
 
 .rail button {
@@ -237,15 +272,16 @@ button {
 }
 
 .hero {
-  height: 390px;
+  height: clamp(300px, 43svh, 460px);
   position: relative;
   overflow: hidden;
   border-bottom: 0.5px solid var(--line);
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(300px, min(45vw, 640px)) minmax(260px, 1fr);
   align-items: center;
-  gap: 30px;
+  gap: clamp(18px, 3vw, 34px);
   margin: -28px -36px 30px;
-  padding: 30px 42px;
+  padding: clamp(24px, 4vw, 42px);
 }
 
 .hero-media,
@@ -303,7 +339,8 @@ button {
 }
 
 .hero-cover {
-  width: clamp(380px, 44vw, 640px);
+  width: 100%;
+  max-width: 640px;
   aspect-ratio: 92 / 43;
   border: 0;
   border-radius: 10px;
@@ -334,10 +371,9 @@ button {
 
 .hero-copy {
   position: relative;
-  flex: 1 1 auto;
-  min-width: 280px;
+  min-width: 0;
   max-width: none;
-  max-height: 292px;
+  max-height: calc(100% - 24px);
   overflow: hidden;
   text-shadow: 0 1px 18px rgba(0, 0, 0, 0.72);
 }
@@ -585,7 +621,172 @@ button {
 .hero-empty {
   position: relative;
   display: grid;
-  gap: 10px;
+  gap: 14px;
+  justify-items: start;
+}
+
+.trending-page {
+  padding-bottom: 30px;
+}
+
+.trend-hero {
+  min-height: clamp(320px, 44svh, 470px);
+  position: relative;
+  overflow: hidden;
+  border-bottom: 0.5px solid var(--line);
+  display: grid;
+  grid-template-columns: minmax(360px, min(50vw, 720px)) minmax(280px, 1fr);
+  align-items: center;
+  gap: clamp(20px, 3vw, 38px);
+  margin: -28px -36px 18px;
+  padding: clamp(24px, 4vw, 42px);
+}
+
+.trend-hero-frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: 10px;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  background-color: #050608;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
+}
+
+.trend-hero-frame span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+}
+
+.trend-copy {
+  position: relative;
+  min-width: 0;
+  max-height: calc(100% - 24px);
+  overflow: hidden;
+  text-shadow: 0 1px 18px rgba(0, 0, 0, 0.72);
+}
+
+.trend-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--text-2);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.trend-copy h1 {
+  margin: 0;
+  font-size: 42px;
+  line-height: 0.98;
+  letter-spacing: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.trend-copy p {
+  max-width: 620px;
+  color: var(--text-2);
+  line-height: 1.45;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.trend-stat-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.trend-stat-list span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.trend-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  margin: 0 -36px 24px;
+  padding: 10px 36px;
+  overflow-x: auto;
+  background: rgba(10, 11, 13, 0.82);
+  border-bottom: 0.5px solid var(--line);
+  backdrop-filter: blur(18px);
+  scrollbar-width: none;
+}
+
+.trend-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.trend-tabs button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0 10px 0 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.trend-tabs button:hover,
+.trend-tabs button:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.trend-tabs em {
+  min-width: 22px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-2);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.trend-row-anchor {
+  scroll-margin-top: 58px;
+}
+
+.hero-logo-title {
+  margin: 0;
+  line-height: 0;
+}
+
+.hero-logo {
+  width: clamp(72px, 8vw, 104px);
+  height: clamp(72px, 8vw, 104px);
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 0 26px rgba(205, 80, 255, 0.3));
+  user-select: none;
 }
 
 .section-head,
@@ -606,6 +807,14 @@ button {
   margin: 0;
   font-size: 15px;
   font-weight: 650;
+}
+
+.section-head p {
+  margin: 5px 0 0;
+  max-width: 620px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .game-row {
@@ -1652,28 +1861,51 @@ dd {
   white-space: pre-wrap;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1180px) {
   .app-body {
-    grid-template-columns: 68px 1fr;
+    --rail-width: 68px;
+    --rail-expanded-width: 220px;
   }
 
   .rail {
     padding: 14px 8px;
+    width: var(--rail-width);
+    background: rgba(10, 11, 13, 0.9);
   }
 
-  .rail button {
+  .rail:hover,
+  .rail:focus-within {
+    width: var(--rail-expanded-width);
+    background: rgba(10, 11, 13, 0.98);
+    box-shadow: 18px 0 42px rgba(0, 0, 0, 0.42);
+  }
+
+  .rail:not(:hover):not(:focus-within) .rail-brand {
+    justify-content: center;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .rail:not(:hover):not(:focus-within) button {
     justify-content: center;
     padding: 0;
+    gap: 0;
   }
 
   .rail button:not(.active) {
     color: var(--text-3);
   }
 
-  .rail button span,
-  .rail-brand,
-  .rail-section {
-    display: none;
+  .rail:not(:hover):not(:focus-within) .rail-label {
+    max-width: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .rail:hover .rail-label,
+  .rail:focus-within .rail-label {
+    max-width: 150px;
+    opacity: 1;
   }
 
   .page {
@@ -1682,16 +1914,27 @@ dd {
 
   .hero {
     margin: -22px -22px 24px;
+    grid-template-columns: minmax(250px, 0.95fr) minmax(250px, 1fr);
+    height: clamp(292px, 42svh, 390px);
     padding: 26px;
-    min-height: 280px;
   }
 
-  .hero-cover {
-    width: min(40vw, 330px);
-    min-width: 260px;
+  .trend-hero {
+    margin: -22px -22px 18px;
+    grid-template-columns: minmax(280px, 0.95fr) minmax(250px, 1fr);
+    min-height: clamp(300px, 42svh, 400px);
+    padding: 26px;
+  }
+
+  .trend-tabs {
+    margin-left: -22px;
+    margin-right: -22px;
+    padding-left: 22px;
+    padding-right: 22px;
   }
 
   .hero h1,
+  .trend-copy h1,
   .screen-title h1,
   .library-head h1 {
     font-size: 30px;
@@ -1728,14 +1971,53 @@ dd {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 860px) {
   .hero {
+    grid-template-columns: 1fr;
     align-items: end;
+    height: clamp(286px, 46svh, 360px);
+  }
+
+  .trend-hero {
+    grid-template-columns: 1fr;
+    align-items: end;
+    min-height: clamp(300px, 48svh, 390px);
   }
 
   .hero-cover {
     display: none;
   }
+
+  .trend-hero-frame {
+    display: none;
+  }
+
+  .hero-copy,
+  .trend-copy {
+    max-width: min(580px, 100%);
+  }
+}
+
+@media (max-height: 760px) {
+  .hero {
+    height: clamp(270px, 48svh, 340px);
+  }
+
+  .trend-hero {
+    min-height: clamp(276px, 48svh, 350px);
+  }
+
+  .hero p,
+  .trend-copy p {
+    -webkit-line-clamp: 2;
+  }
+
+  .hero-shot-grid {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
 
   .library-head,
   .section-head,

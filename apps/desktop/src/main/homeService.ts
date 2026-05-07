@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { Game, HomeModel } from "@hynite/core";
+import { type Game, type HomeModel, gameActivityTime } from "@hynite/core";
 import { buildHomeModel } from "@hynite/recommendations";
 
 const HOME_LOCAL_ROW_LIMIT = 72;
@@ -23,7 +23,8 @@ export class HomeService {
       return {
         recentActivity: games
           .slice()
-          .sort((a, b) => Math.max(Date.parse(b.lastPlayedAt ?? "") || 0, Date.parse(b.addedAt ?? "") || 0) - Math.max(Date.parse(a.lastPlayedAt ?? "") || 0, Date.parse(a.addedAt ?? "") || 0))
+          .filter((game) => gameActivityTime(game) > 0)
+          .sort((a, b) => gameActivityTime(b) - gameActivityTime(a))
           .slice(0, 10),
         continuePlaying: games
           .filter((game) => game.lastPlayedAt)
@@ -36,6 +37,7 @@ export class HomeService {
         popularNow: [],
         recommended: [],
         newAndNotable: [],
+        trendingRows: [],
         generatedAt: new Date().toISOString(),
         stale: true
       };

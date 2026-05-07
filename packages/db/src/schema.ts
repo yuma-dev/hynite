@@ -84,5 +84,13 @@ export const migrations = [
     sql: `
       ALTER TABLE games ADD COLUMN metadata_version INTEGER NOT NULL DEFAULT 0;
     `
+  },
+  {
+    id: 4,
+    sql: `
+      ALTER TABLE games ADD COLUMN imported_at TEXT;
+      UPDATE games SET imported_at = added_at WHERE imported_at IS NULL;
+      UPDATE games SET added_at = NULL;
+    `
   }
 ] as const;

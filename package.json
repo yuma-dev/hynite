@@ -13,6 +13,7 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
+    "assets:logos": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-logo-assets.ps1",
     "native:build": "dotnet build native/Hynite.NativeBridge/Hynite.NativeBridge.csproj"
   },
   "dependencies": {

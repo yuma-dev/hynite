@@ -18,6 +18,8 @@ let sourceService: SourceService;
 let nativeBridge: NativeBridge;
 let syncStatusService: SyncStatusService;
 
+const windowIconPath = join(__dirname, "../../assets/icons/app.ico");
+
 function hasReusableMetadata(game: { id: string; metadataStatus: string }): boolean {
   return game.metadataStatus !== "none" && repository.getMetadataVersion(game.id) >= CURRENT_METADATA_VERSION;
 }
@@ -31,6 +33,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: "#0a0b0d",
+    icon: windowIconPath,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: false,

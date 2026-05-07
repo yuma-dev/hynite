@@ -8,6 +8,7 @@ import {
   type GamePlatforms,
   type GameScreenshot,
   type ImportedGame,
+  gameActivityTime,
   makeGameId,
   makeSortTitle,
   type ProviderId,
@@ -49,6 +50,7 @@ type GameRow = {
   playtime_minutes: number | null;
   last_played_at: string | null;
   added_at: string | null;
+  imported_at: string | null;
   metadata_status: Game["metadataStatus"];
   metadata_version: number;
   updated_at: string;
@@ -135,8 +137,8 @@ export class HyniteRepository {
         `INSERT INTO games (
           id, title, sort_title, install_state, install_directory, executable_path,
           community_icon_url, genres_json, tags_json, developers_json, publishers_json,
-          playtime_minutes, last_played_at, added_at, metadata_status, launch_command, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', '[]', ?, ?, ?, 'none', ?, ?)
+          playtime_minutes, last_played_at, added_at, imported_at, metadata_status, launch_command, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', '[]', ?, ?, ?, ?, 'none', ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           title = excluded.title,
           sort_title = excluded.sort_title,
@@ -146,6 +148,7 @@ export class HyniteRepository {
           community_icon_url = COALESCE(excluded.community_icon_url, games.community_icon_url),
           playtime_minutes = COALESCE(excluded.playtime_minutes, games.playtime_minutes),
           last_played_at = COALESCE(excluded.last_played_at, games.last_played_at),
+          added_at = COALESCE(excluded.added_at, games.added_at),
           launch_command = excluded.launch_command,
           updated_at = excluded.updated_at`
       )
@@ -159,6 +162,7 @@ export class HyniteRepository {
         game.communityIconUrl ?? null,
         game.playtimeMinutes ?? null,
         game.lastPlayedAt ?? null,
+        game.addedAt ?? null,
         now,
         game.launchCommand ?? null,
         now
@@ -265,8 +269,8 @@ export class HyniteRepository {
     return games.sort((a, b) => {
       let comparison = 0;
       if (sort === "recent") {
-        const activityA = Math.max(Date.parse(a.lastPlayedAt ?? "") || 0, Date.parse(a.addedAt ?? "") || 0);
-        const activityB = Math.max(Date.parse(b.lastPlayedAt ?? "") || 0, Date.parse(b.addedAt ?? "") || 0);
+        const activityA = gameActivityTime(a);
+        const activityB = gameActivityTime(b);
         comparison = activityA - activityB;
       } else if (sort === "playtime") {
         comparison = (a.playtimeMinutes ?? 0) - (b.playtimeMinutes ?? 0);
@@ -404,6 +408,7 @@ export class HyniteRepository {
       playtimeMinutes: row.playtime_minutes ?? undefined,
       lastPlayedAt: row.last_played_at ?? undefined,
       addedAt: row.added_at ?? undefined,
+      importedAt: row.imported_at ?? undefined,
       updatedAt: row.updated_at,
       metadataStatus: row.metadata_status
     };

@@ -77,6 +77,7 @@ export const gameSchema = z.object({
   playtimeMinutes: z.number().int().nonnegative().optional(),
   lastPlayedAt: z.string().optional(),
   addedAt: z.string().optional(),
+  importedAt: z.string().optional(),
   updatedAt: z.string().optional(),
   metadataStatus: metadataStatusSchema
 });
@@ -92,6 +93,7 @@ export type ImportedGame = {
   launchCommand?: string;
   playtimeMinutes?: number;
   lastPlayedAt?: string;
+  addedAt?: string;
   communityIconUrl?: string;
 };
 
@@ -199,6 +201,13 @@ export type GameDetail = Game & {
   sourceMatches: SourceMatch[];
 };
 
+export type HomeTrendRow = {
+  id: string;
+  title: string;
+  description: string;
+  games: Game[];
+};
+
 export type HomeModel = {
   recentActivity: Game[];
   continuePlaying: Game[];
@@ -206,6 +215,7 @@ export type HomeModel = {
   popularNow: Game[];
   recommended: Game[];
   newAndNotable: Game[];
+  trendingRows: HomeTrendRow[];
   generatedAt: string;
   stale: boolean;
 };
@@ -271,4 +281,8 @@ export function makeGameId(provider: ProviderId, externalId: string): string {
 
 export function makeSortTitle(title: string): string {
   return title.replace(/^(the|a|an)\s+/i, "").toLocaleLowerCase();
+}
+
+export function gameActivityTime(game: Pick<Game, "lastPlayedAt" | "addedAt">): number {
+  return Math.max(Date.parse(game.lastPlayedAt ?? "") || 0, Date.parse(game.addedAt ?? "") || 0);
 }

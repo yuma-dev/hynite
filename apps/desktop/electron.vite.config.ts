@@ -43,6 +43,7 @@ export default defineConfig({
   renderer: {
     plugins: [react()],
     root: fileURLToPath(new URL(".", import.meta.url)),
+    publicDir: fileURLToPath(new URL("../../assets/icons", import.meta.url)),
     resolve: { alias },
     build: {
       rollupOptions: {

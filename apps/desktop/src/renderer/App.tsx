@@ -8,7 +8,7 @@ import {
   Clock3,
   ExternalLink,
   Film,
-  Gamepad2,
+  Flame,
   Globe2,
   Home,
   Images,
@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  TrendingUp,
   Trophy,
   Users,
   X
@@ -31,12 +32,13 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import type { AppSettings, Game, GameDetail, HomeModel, InstallState, SourceImportResult, SourceMatch, SyncStatus } from "@hynite/core";
+import { gameActivityTime, type AppSettings, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceImportResult, type SourceMatch, type SyncStatus } from "@hynite/core";
 
-type Route = "home" | "library" | "settings";
+type Route = "home" | "trending" | "library" | "settings";
 
 const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
   { id: "home", label: "Home", icon: Home },
+  { id: "trending", label: "Trending", icon: Flame },
   { id: "library", label: "Library", icon: Library },
   { id: "settings", label: "Settings", icon: Settings }
 ];
@@ -44,6 +46,24 @@ const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
 const HERO_AUTOPLAY_MS = 9000;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
+const APP_ASSET_BASE_URL = import.meta.env.BASE_URL;
+
+function appAsset(name: string): string {
+  return `${APP_ASSET_BASE_URL}${name}`;
+}
+
+function BrandLogo({ className, sizes }: { className?: string; sizes: string }) {
+  return (
+    <img
+      className={className}
+      src={appAsset("logo-128.png")}
+      srcSet={`${appAsset("logo-64.png")} 64w, ${appAsset("logo-128.png")} 128w, ${appAsset("logo-256.png")} 256w`}
+      sizes={sizes}
+      alt="Hynite"
+      draggable={false}
+    />
+  );
+}
 
 function fallbackArt(game: Game): CSSProperties {
   const seed = [...game.title].reduce((sum, char) => sum + char.charCodeAt(0), 0);
@@ -77,6 +97,14 @@ function formatHours(minutes?: number): string {
 
 function formatNumber(value?: number): string {
   return value === undefined ? "Unknown" : value.toLocaleString();
+}
+
+function formatCompactNumber(value?: number): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function formatDate(value?: string): string | undefined {
@@ -197,7 +225,7 @@ function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (ga
   );
 }
 
-function GameRow({ title, games, onSelect }: { title: string; games: Game[]; onSelect: (game: Game) => void }) {
+function GameRow({ title, description, games, onSelect }: { title: string; description?: string; games: Game[]; onSelect: (game: Game) => void }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const [visibleCount, setVisibleCount] = useState(HOME_ROW_BATCH_SIZE);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -270,7 +298,10 @@ function GameRow({ title, games, onSelect }: { title: string; games: Game[]; onS
   return (
     <motion.section className="game-row" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22 }}>
       <div className="section-head">
-        <h2>{title}</h2>
+        <div>
+          <h2>{title}</h2>
+          {description ? <p>{description}</p> : null}
+        </div>
       </div>
       <div className="cover-strip-shell">
         {canScrollLeft ? (
@@ -493,8 +524,9 @@ function Hero({
         </>
       ) : (
         <div className="hero-empty">
-          <Gamepad2 size={36} />
-          <h1>Hynite</h1>
+          <h1 className="hero-logo-title">
+            <BrandLogo className="hero-logo" sizes="clamp(72px, 8vw, 104px)" />
+          </h1>
           <p>Pair Steam to build the first library view.</p>
           <button className="primary-action" onClick={onSync}>
             <RefreshCw size={16} />
@@ -522,6 +554,111 @@ function HomeScreen({
       <Hero home={home} settings={settings} onSelect={onSelect} onSync={onSync} />
       <GameRow title="Recently played" games={home?.continuePlaying ?? []} onSelect={onSelect} />
       <GameRow title="Most played" games={home?.mostPlayed ?? []} onSelect={onSelect} />
+    </main>
+  );
+}
+
+function trendSummary(game: Game): string {
+  return game.shortDescription || [game.genres[0], game.developers[0], game.releaseDate ? `Released ${formatDate(game.releaseDate)}` : undefined].filter(Boolean).join(" · ") || "Steam trend signal";
+}
+
+function trendStats(game: Game): string[] {
+  const reviewPercent = game.discovery?.reviewScore ? `${Math.round(game.discovery.reviewScore * 100)}% review signal` : undefined;
+  return [
+    game.discovery?.ccu ? `${formatCompactNumber(game.discovery.ccu)} peak players` : undefined,
+    game.discovery?.owners ? `${game.discovery.owners} owners` : undefined,
+    reviewPercent,
+    game.discovery?.discountPercent ? `-${game.discovery.discountPercent}%` : undefined,
+    game.discovery?.priceText,
+    game.discovery?.storeCategory
+  ].filter(Boolean) as string[];
+}
+
+function scrollToTrendRow(row: HomeTrendRow) {
+  document.getElementById(`trend-row-${row.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function TrendingScreen({ home, settings, onSelect }: { home?: HomeModel; settings?: AppSettings; onSelect: (game: Game) => void }) {
+  const rows = home?.trendingRows ?? [];
+  const spotlight = rows.find((row) => row.games.length > 0)?.games[0] ?? home?.popularNow[0];
+  const spotlightImage = spotlight ? heroStill(spotlight) : undefined;
+  const reduceMotion = Boolean(settings?.reduceMotion);
+
+  if (!spotlight || rows.length === 0) {
+    return (
+      <main className="page">
+        <div className="empty-state">
+          <TrendingUp size={34} />
+          <h2>No trend data yet</h2>
+          <p>Discovery will appear when the Steam and SteamSpy endpoints respond.</p>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="page trending-page">
+      <section className="trend-hero">
+        <div className="hero-media">
+          <motion.span
+            style={spotlightImage ? { backgroundImage: `url(${spotlightImage})` } : undefined}
+            initial={reduceMotion ? false : { opacity: 0, scale: 1.03 }}
+            animate={{ opacity: 0.74, scale: 1.08 }}
+            transition={{ duration: reduceMotion ? 0 : 0.36, ease: "easeOut" }}
+          />
+        </div>
+        <div className="hero-shade" />
+        <motion.button
+          className="trend-hero-frame"
+          style={fallbackArt(spotlight)}
+          onClick={() => onSelect(spotlight)}
+          initial={reduceMotion ? false : { opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: reduceMotion ? 0 : 0.24, ease: "easeOut" }}
+        >
+          <span style={spotlightImage ? { backgroundImage: `url(${spotlightImage})` } : undefined} />
+        </motion.button>
+        <motion.div className="trend-copy" initial={reduceMotion ? false : { opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reduceMotion ? 0 : 0.24, ease: "easeOut" }}>
+          <span className="trend-kicker">
+            <TrendingUp size={15} />
+            {spotlight.discovery?.signal ?? "Trending"}
+          </span>
+          <h1>{spotlight.title}</h1>
+          <p>{trendSummary(spotlight)}</p>
+          <div className="trend-stat-list">
+            {trendStats(spotlight).slice(0, 5).map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+          </div>
+          <div className="hero-actions">
+            <button className="secondary-action" onClick={() => onSelect(spotlight)}>
+              <BookOpen size={16} />
+              Info
+            </button>
+            {spotlight.discovery?.storeUrl ? (
+              <button className="secondary-action" onClick={() => openExternalUrl(spotlight.discovery?.storeUrl)}>
+                <ExternalLink size={16} />
+                {spotlight.discovery?.priceText ?? "Store"}
+              </button>
+            ) : null}
+          </div>
+        </motion.div>
+      </section>
+      <nav className="trend-tabs" aria-label="Trending categories">
+        {rows.map((row) => (
+          <button key={row.id} type="button" onClick={() => scrollToTrendRow(row)}>
+            <span>{row.title}</span>
+            <em>{row.games.length}</em>
+          </button>
+        ))}
+      </nav>
+      <div className="trend-rows">
+        {rows.map((row) => (
+          <div key={row.id} id={`trend-row-${row.id}`} className="trend-row-anchor">
+            <GameRow title={row.title} description={row.description} games={row.games} onSelect={onSelect} />
+          </div>
+        ))}
+      </div>
     </main>
   );
 }
@@ -569,7 +706,15 @@ function LibraryScreen({
             <option value="not_installed">Not installed</option>
             <option value="unknown">Unknown</option>
           </select>
-          <select className="plain-select" value={sort} onChange={(event) => setSort(event.target.value as "recent" | "title" | "playtime" | "release")}>
+          <select
+            className="plain-select"
+            value={sort}
+            onChange={(event) => {
+              const nextSort = event.target.value as "recent" | "title" | "playtime" | "release";
+              setSort(nextSort);
+              setSortDirection(nextSort === "title" ? "asc" : "desc");
+            }}
+          >
             <option value="title">Title</option>
             <option value="recent">Recent activity</option>
             <option value="playtime">Playtime</option>
@@ -1259,8 +1404,8 @@ function DetailOverlay({
                   <dd>{formatDate(game.lastPlayedAt) ?? "Never"}</dd>
                 </div>
                 <div>
-                  <dt>Added</dt>
-                  <dd>{formatDate(game.addedAt) ?? "Unknown"}</dd>
+                  <dt>Imported</dt>
+                  <dd>{formatDate(game.importedAt) ?? "Unknown"}</dd>
                 </div>
                 <div>
                   <dt>Installed</dt>
@@ -1373,7 +1518,7 @@ export function App() {
       window.hynite.settings.get()
     ]);
     setGames(nextGames);
-    setRecentGames(nextRecentGames);
+    setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     setHome(nextHome);
     setSettings(nextSettings);
   }
@@ -1417,6 +1562,9 @@ export function App() {
     if (route === "home") {
       return <HomeScreen home={home} settings={settings} onSelect={(game) => void selectGame(game)} onSync={() => void syncSteam()} />;
     }
+    if (route === "trending") {
+      return <TrendingScreen home={home} settings={settings} onSelect={(game) => void selectGame(game)} />;
+    }
     if (route === "library") {
       return (
         <LibraryScreen
@@ -1452,29 +1600,33 @@ export function App() {
     <div className="app-shell">
       <div className="app-body">
         <aside className="rail">
-          <div className="rail-brand">HYNITE</div>
+          <div className="rail-brand">
+            <BrandLogo className="rail-logo" sizes="38px" />
+          </div>
           {routes.map((item) => {
             const Icon = item.icon;
             return (
               <button key={item.id} className={route === item.id ? "active" : ""} onClick={() => setRoute(item.id)}>
                 <Icon size={17} />
-                {item.label}
+                <span className="rail-label">{item.label}</span>
               </button>
             );
           })}
           <button className="rail-sync" disabled={busy} onClick={() => void syncSteam()}>
             <RefreshCw size={15} />
-            {busy ? "Syncing" : "Steam sync"}
+            <span className="rail-label">{busy ? "Syncing" : "Steam sync"}</span>
           </button>
           <div className="rail-section">
-            <p>Recent</p>
+            <p>
+              <span className="rail-label">Recent</span>
+            </p>
             <div className="recent-list">
               {recentGames.slice(0, 30).map((game) => (
                 <button key={game.id} className="recent-link" onClick={() => void selectGame(game)}>
                   <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
                     {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
                   </span>
-                  <span>
+                  <span className="rail-label">
                     <strong>{game.title}</strong>
                     <em>{activityLabel(game)}</em>
                   </span>
