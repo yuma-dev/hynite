@@ -54,14 +54,6 @@ function fallbackArt(game: Game): CSSProperties {
   } as CSSProperties;
 }
 
-function coverGlow(game?: Game): CSSProperties {
-  if (!game) {
-    return { "--glow": "rgba(255,255,255,0.12)" } as CSSProperties;
-  }
-  const seed = [...game.title].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return { "--glow": `oklch(0.58 0.12 ${seed % 360} / 0.55)` } as CSSProperties;
-}
-
 function primaryCover(game: Game): string | undefined {
   return game.libraryCapsuleUrl ?? game.coverUrl;
 }
@@ -194,7 +186,7 @@ function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (ga
   const cover = primaryCover(game);
 
   return (
-    <button className={wide ? "wide-game" : "game-cover"} style={{ ...fallbackArt(game), ...coverGlow(game) }} onClick={() => onSelect(game)}>
+    <button className={wide ? "wide-game" : "game-cover"} style={fallbackArt(game)} onClick={() => onSelect(game)}>
       <span className="cover-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
         <span className="cover-reveal">
           <span className="cover-title">{game.title}</span>
@@ -317,6 +309,7 @@ function Hero({
     return rows.filter((game, index) => rows.findIndex((candidate) => candidate.id === game.id) === index).slice(0, 20);
   }, [home]);
   const [heroIndex, setHeroIndex] = useState(0);
+  const [heroDirection, setHeroDirection] = useState<-1 | 1>(1);
   const [isHeroPaused, setHeroPaused] = useState(false);
   const [activeHeroImage, setActiveHeroImage] = useState<{ gameId: string; image: string } | undefined>();
   const autoTimerRef = useRef<number | undefined>(undefined);
@@ -331,6 +324,7 @@ function Hero({
   const heroImageKey = `${heroGame?.id ?? "empty"}:${heroImage ?? "fallback"}`;
 
   useEffect(() => {
+    setHeroDirection(1);
     setHeroIndex(0);
   }, [heroGames.length]);
 
@@ -362,6 +356,7 @@ function Hero({
     timerStartedAtRef.current = performance.now();
     autoTimerRef.current = window.setTimeout(() => {
       timerRemainingRef.current = HERO_AUTOPLAY_MS;
+      setHeroDirection(1);
       setHeroIndex((index) => (index + 1) % heroGames.length);
     }, timerRemainingRef.current);
   }, [heroGames.length, heroIndex, isHeroPaused, reduceHeroMotion]);
@@ -378,13 +373,21 @@ function Hero({
     if (heroGames.length < 2) {
       return;
     }
+    setHeroDirection(direction);
     setHeroIndex((index) => (index + direction + heroGames.length) % heroGames.length);
+  };
+
+  const selectHero = (index: number) => {
+    if (index === heroIndex) {
+      return;
+    }
+    setHeroDirection(index < heroIndex ? -1 : 1);
+    setHeroIndex(index);
   };
 
   return (
     <section
       className={isHeroPaused ? "hero paused" : "hero"}
-      style={heroGame ? undefined : coverGlow()}
       onPointerEnter={() => setHeroPaused(true)}
       onPointerLeave={() => setHeroPaused(false)}
       onFocus={() => setHeroPaused(true)}
@@ -411,9 +414,9 @@ function Hero({
               className="hero-cover"
               style={fallbackArt(heroGame)}
               onClick={() => onSelect(heroGame)}
-              initial={reduceHeroMotion ? false : { opacity: 0, x: -18, scale: 0.98 }}
+              initial={reduceHeroMotion ? false : { opacity: 0, x: -18 * heroDirection, scale: 0.98 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={reduceHeroMotion ? undefined : { opacity: 0, x: 18, scale: 0.98 }}
+              exit={reduceHeroMotion ? undefined : { opacity: 0, x: 18 * heroDirection, scale: 0.98 }}
               transition={{ duration: reduceHeroMotion ? 0 : 0.28, ease: "easeOut" }}
             >
               <span style={heroImage ? { backgroundImage: `url(${heroImage})` } : undefined} />
@@ -423,9 +426,9 @@ function Hero({
             <motion.div
               key={heroGame.id}
               className="hero-copy"
-              initial={reduceHeroMotion ? false : { opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduceHeroMotion ? undefined : { opacity: 0, y: -8 }}
+              initial={reduceHeroMotion ? false : { opacity: 0, x: -18 * heroDirection }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={reduceHeroMotion ? undefined : { opacity: 0, x: 18 * heroDirection }}
               transition={{ duration: reduceHeroMotion ? 0 : 0.24, ease: "easeOut" }}
             >
               <h1>{heroGame.title}</h1>
@@ -476,7 +479,7 @@ function Hero({
                     type="button"
                     className={index === heroIndex ? (reduceHeroMotion ? "active static" : "active") : undefined}
                     style={index === heroIndex && !reduceHeroMotion ? ({ "--dot-duration": `${HERO_AUTOPLAY_MS}ms` } as CSSProperties) : undefined}
-                    onClick={() => setHeroIndex(index)}
+                    onClick={() => selectHero(index)}
                     aria-label={`Show ${game.title}`}
                     aria-current={index === heroIndex ? "true" : undefined}
                   />
@@ -490,8 +493,6 @@ function Hero({
         </>
       ) : (
         <div className="hero-empty">
-          <div className="hero-glow hero-glow-a" />
-          <div className="hero-glow hero-glow-b" />
           <Gamepad2 size={36} />
           <h1>Hynite</h1>
           <p>Pair Steam to build the first library view.</p>
@@ -1112,13 +1113,20 @@ function DetailOverlay({
     <motion.div className="detail-modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
       <motion.section
         className="detail-modal"
-        style={coverGlow(game)}
         initial={{ y: 34, scale: 0.985, opacity: 0 }}
         animate={{ y: 0, scale: 1, opacity: 1 }}
         exit={{ y: 28, scale: 0.985, opacity: 0 }}
         transition={{ duration: 0.24, ease: "easeOut" }}
         onClick={(event) => event.stopPropagation()}
       >
+        {media ? (
+          <>
+            <div className="detail-media">
+              <span style={{ backgroundImage: `url(${media})` }} />
+            </div>
+            <div className="detail-shade" />
+          </>
+        ) : null}
         <div className="detail-modal-body">
           <main className="detail-main">
             {activeMedia ? (
@@ -1460,17 +1468,19 @@ export function App() {
           </button>
           <div className="rail-section">
             <p>Recent</p>
-            {recentGames.slice(0, 6).map((game) => (
-              <button key={game.id} className="recent-link" onClick={() => void selectGame(game)}>
-                <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
-                  {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
-                </span>
-                <span>
-                  <strong>{game.title}</strong>
-                  <em>{activityLabel(game)}</em>
-                </span>
-              </button>
-            ))}
+            <div className="recent-list">
+              {recentGames.slice(0, 30).map((game) => (
+                <button key={game.id} className="recent-link" onClick={() => void selectGame(game)}>
+                  <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
+                    {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
+                  </span>
+                  <span>
+                    <strong>{game.title}</strong>
+                    <em>{activityLabel(game)}</em>
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </aside>
         <section className="content">{routeContent}</section>
