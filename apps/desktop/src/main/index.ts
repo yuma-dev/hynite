@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, ipcMain, shell } from "electron";
 import { join } from "node:path";
-import { HyniteRepository } from "@hynite/db";
+import { CURRENT_METADATA_VERSION, HyniteRepository } from "@hynite/db";
 import { discoverInstalledSteamApps, SteamImporterProvider } from "@hynite/importers";
 import { makeGameId, type LibraryQuery, type ProviderId, type SourceImportInput } from "@hynite/core";
 import { HomeService } from "./homeService";
@@ -19,7 +19,7 @@ let nativeBridge: NativeBridge;
 let syncStatusService: SyncStatusService;
 
 function hasReusableMetadata(game: { id: string; metadataStatus: string }): boolean {
-  return game.metadataStatus !== "none";
+  return game.metadataStatus !== "none" && repository.getMetadataVersion(game.id) >= CURRENT_METADATA_VERSION;
 }
 
 function createWindow(): void {
@@ -223,8 +223,8 @@ function registerIpc(): void {
   ipcMain.handle("metadata:clearSteamGridDbKey", async () => settingsService.update({ steamGridDbApiKey: undefined }));
   ipcMain.handle("native:openExternal", (_event, url: string) => {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:" || parsed.hostname !== "store.steampowered.com") {
-      throw new Error("Only Steam Store links can be opened externally.");
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("Only web links can be opened externally.");
     }
 
     return shell.openExternal(parsed.toString());

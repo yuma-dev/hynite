@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { HyniteRepository } from "../src/repository";
+import { CURRENT_METADATA_VERSION, HyniteRepository } from "../src/repository";
 
 let tempDir: string | undefined;
 
@@ -109,6 +109,7 @@ describe("HyniteRepository", () => {
       contentDescriptors: ["Violence"],
       discovery: { score: 42, signal: "Trending", sources: ["test"] }
     });
+    expect(repository.getMetadataVersion("steam:1086940")).toBe(CURRENT_METADATA_VERSION);
 
     repository.close();
   });

@@ -15,6 +15,8 @@ import {
 } from "@hynite/core";
 import { migrations } from "./schema";
 
+export const CURRENT_METADATA_VERSION = 3;
+
 type GameRow = {
   id: string;
   title: string;
@@ -203,7 +205,7 @@ export class HyniteRepository {
           publishers_json = COALESCE(?, publishers_json),
           release_date = COALESCE(?, release_date),
           metadata_status = COALESCE(?, metadata_status),
-          metadata_version = 2,
+          metadata_version = ${CURRENT_METADATA_VERSION},
           updated_at = ?
         WHERE id = ?`
       )

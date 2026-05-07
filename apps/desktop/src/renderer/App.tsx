@@ -1,24 +1,36 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Clipboard,
+  Clock3,
   ExternalLink,
+  Film,
   Gamepad2,
+  Globe2,
   Home,
+  Images,
   KeyRound,
   Library,
   Link2,
   LogOut,
+  Monitor,
   Play,
   RefreshCw,
   Search,
   Settings,
+  Trophy,
+  Users,
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
+import remarkGfm from "remark-gfm";
 import type { AppSettings, Game, GameDetail, HomeModel, InstallState, SourceImportResult, SourceMatch, SyncStatus } from "@hynite/core";
 
 type Route = "home" | "library" | "settings";
@@ -60,7 +72,6 @@ function heroStill(game: Game): string | undefined {
 
 type ImageViewerItem = {
   url: string;
-  thumbUrl?: string;
   label: string;
 };
 
@@ -70,6 +81,10 @@ function formatHours(minutes?: number): string {
   }
 
   return `${Math.round(minutes / 60)}h played`;
+}
+
+function formatNumber(value?: number): string {
+  return value === undefined ? "Unknown" : value.toLocaleString();
 }
 
 function formatDate(value?: string): string | undefined {
@@ -83,6 +98,59 @@ function formatDate(value?: string): string | undefined {
   }
 
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: parsed.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+}
+
+function steamStoreUrl(game: Game): string | undefined {
+  const steamId = game.sourceIds.find((source) => source.provider === "steam")?.externalId;
+  return game.discovery?.storeUrl ?? (steamId ? `https://store.steampowered.com/app/${encodeURIComponent(steamId)}` : undefined);
+}
+
+function openExternalUrl(url?: string): void {
+  if (!url || url.startsWith("#")) {
+    return;
+  }
+
+  try {
+    const parsed = new URL(url, "https://store.steampowered.com");
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      void window.hynite.native.openExternal(parsed.toString()).catch(console.error);
+    }
+  } catch {
+    // Ignore malformed provider links.
+  }
+}
+
+const markdownComponents: Components = {
+  a({ node: _node, href, children, ...props }) {
+    return (
+      <a
+        {...props}
+        href={href}
+        onClick={(event) => {
+          if (!href) {
+            return;
+          }
+          event.preventDefault();
+          openExternalUrl(href);
+        }}
+      >
+        {children}
+      </a>
+    );
+  },
+  img({ node: _node, src, alt }) {
+    return src ? <img src={src} alt={alt ?? ""} loading="lazy" /> : null;
+  }
+};
+
+function RichDescription({ value }: { value: string }) {
+  return (
+    <div className="rich-description">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]} components={markdownComponents}>
+        {value}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 function activityLabel(game: Game): string {
@@ -155,6 +223,7 @@ function GameRow({ title, games, onSelect }: { title: string; games: Game[]; onS
 
   const visibleGames = games.slice(0, visibleCount);
   const hasMoreGames = visibleCount < games.length;
+
   const updateScrollState = () => {
     const strip = stripRef.current;
     if (!strip) {
@@ -164,9 +233,11 @@ function GameRow({ title, games, onSelect }: { title: string; games: Game[]; onS
     setCanScrollLeft(strip.scrollLeft > 2);
     setCanScrollRight(strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 2 || visibleCount < games.length);
   };
+
   const revealMore = () => {
     setVisibleCount((current) => Math.min(games.length, current + HOME_ROW_BATCH_SIZE));
   };
+
   const scrollByItems = (direction: -1 | 1) => {
     const strip = stripRef.current;
     if (!strip) {
@@ -183,6 +254,7 @@ function GameRow({ title, games, onSelect }: { title: string; games: Game[]; onS
       strip.scrollBy({ left: itemWidth * HOME_ROW_STEP_ITEMS * direction, behavior: "smooth" });
     });
   };
+
   const onRowScroll = () => {
     const strip = stripRef.current;
     if (!strip) {
@@ -384,7 +456,7 @@ function Hero({
                   Info
                 </button>
                 {heroGame.discovery?.storeUrl ? (
-                  <button className="secondary-action" onClick={() => void window.hynite.native.openExternal(heroGame.discovery?.storeUrl ?? "")}>
+                  <button className="secondary-action" onClick={() => openExternalUrl(heroGame.discovery?.storeUrl)}>
                     <ExternalLink size={16} />
                     {heroGame.discovery?.priceText ?? "Store"}
                   </button>
@@ -995,6 +1067,9 @@ function DetailOverlay({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  type DetailMediaItem =
+    | { kind: "trailer"; label: string; sourceUrl: string; posterUrl?: string }
+    | { kind: "image"; label: string; sourceUrl: string; thumbnailUrl: string };
   const [viewer, setViewer] = useState<{ images: ImageViewerItem[]; index: number } | undefined>();
 
   async function copy(text: string) {
@@ -1003,177 +1078,267 @@ function DetailOverlay({
 
   const cover = primaryCover(game);
   const media = heroStill(game);
+  const storeUrl = steamStoreUrl(game);
+  const description = game.aboutText ?? game.shortDescription;
+  const mediaItems: DetailMediaItem[] = [
+    ...(game.trailerUrl ? [{ kind: "trailer" as const, label: "Trailer", sourceUrl: game.trailerUrl, posterUrl: game.trailerPosterUrl ?? media }] : []),
+    ...game.screenshots.slice(0, 8).map((screenshot, index) => ({
+      kind: "image" as const,
+      label: `Screenshot ${index + 1}`,
+      sourceUrl: screenshot.fullUrl,
+      thumbnailUrl: screenshot.thumbnailUrl
+    }))
+  ];
+  const imageViewerItems = mediaItems
+    .filter((item): item is Extract<DetailMediaItem, { kind: "image" }> => item.kind === "image")
+    .map((item) => ({ url: item.sourceUrl, label: item.label }));
+  const coverViewerItems = cover ? [{ url: cover, label: `${game.title} cover` }] : [];
+  const [mediaIndex, setMediaIndex] = useState(0);
+  const activeMediaIndex = mediaItems.length ? mediaIndex % mediaItems.length : 0;
+  const activeMedia = mediaItems[activeMediaIndex];
   const platforms = [
     game.platforms?.windows ? "Windows" : undefined,
     game.platforms?.mac ? "macOS" : undefined,
     game.platforms?.linux ? "Linux" : undefined
   ].filter(Boolean);
-  const coverViewerImages = cover ? [{ url: cover, label: `${game.title} cover` }] : [];
-  const screenshotViewerImages = game.screenshots.map((screenshot, index) => ({
-    url: screenshot.fullUrl,
-    thumbUrl: screenshot.thumbnailUrl,
-    label: `${game.title} screenshot ${index + 1}`
-  }));
+  const detailMeta = [game.developers[0], game.genres[0], game.releaseDate ? formatDate(game.releaseDate) : undefined].filter(Boolean).join(" / ");
+
+  useEffect(() => {
+    setMediaIndex(0);
+  }, [game.id]);
 
   return (
     <>
-      <AnimatePresence>
-        <motion.aside className="detail-overlay" style={coverGlow(game)} initial={{ x: 460 }} animate={{ x: 0 }} exit={{ x: 460 }} transition={{ duration: 0.26 }}>
-        <div className="detail-hero">
-          <div className="detail-media">
-            {game.trailerUrl ? (
-              <video muted autoPlay loop playsInline poster={media}>
-                <source src={game.trailerUrl} />
-              </video>
-            ) : null}
-            <span style={media ? { backgroundImage: `url(${media})` } : undefined} />
-          </div>
-          <div className="detail-shade" />
-          <button className="close-button" onClick={onClose}>
-            <X size={18} />
-          </button>
-          <button
-            className="detail-cover"
-            style={fallbackArt(game)}
-            disabled={!cover}
-            onClick={() => (cover ? setViewer({ images: coverViewerImages, index: 0 }) : undefined)}
-            aria-label={`Open ${game.title} cover`}
-          >
-            <span style={cover ? { backgroundImage: `url(${cover})` } : undefined} />
-          </button>
-          <p className="eyebrow">{game.discovery?.signal ?? "Game info"}</p>
-          <h1>{game.title}</h1>
-          <p>{[game.developers[0], game.genres[0], game.releaseDate].filter(Boolean).join(" · ") || game.shortDescription}</p>
-          <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void window.hynite.games.launch(game.id)}>
-            <Play size={16} />
-            Play
-          </button>
-        </div>
-        {game.shortDescription || game.aboutText ? (
-          <div className="detail-section">
-            <h2>Overview</h2>
-            <p className="detail-copy">{game.shortDescription ?? game.aboutText}</p>
-          </div>
-        ) : null}
-        {game.trailerUrl ? (
-          <div className="detail-section">
-            <h2>Trailer</h2>
-            <video className="trailer-player" controls preload="metadata" poster={game.trailerPosterUrl ?? media}>
-              <source src={game.trailerUrl} />
-            </video>
-          </div>
-        ) : null}
-        <div className="detail-section">
-          <h2>Activity</h2>
-          <dl>
-            <div>
-              <dt>Playtime</dt>
-              <dd>{formatHours(game.playtimeMinutes)}</dd>
-            </div>
-            <div>
-              <dt>Last played</dt>
-              <dd>{formatDate(game.lastPlayedAt) ?? "Never"}</dd>
-            </div>
-            <div>
-              <dt>Added</dt>
-              <dd>{formatDate(game.addedAt) ?? "Unknown"}</dd>
-            </div>
-            <div>
-              <dt>Release</dt>
-              <dd>{formatDate(game.releaseDate) ?? "Unknown"}</dd>
-            </div>
-          </dl>
-        </div>
-        <div className="detail-section">
-          <h2>Steam data</h2>
-          <dl>
-            <div>
-              <dt>Developers</dt>
-              <dd>{game.developers.join(", ") || "Unknown"}</dd>
-            </div>
-            <div>
-              <dt>Publishers</dt>
-              <dd>{game.publishers.join(", ") || "Unknown"}</dd>
-            </div>
-            <div>
-              <dt>Achievements</dt>
-              <dd>{game.achievementCount ?? "Unknown"}</dd>
-            </div>
-            <div>
-              <dt>Recommendations</dt>
-              <dd>{game.recommendationCount?.toLocaleString() ?? "Unknown"}</dd>
-            </div>
-          </dl>
-          <div className="tag-list">
-            {[...game.genres, ...game.tags].slice(0, 12).map((tag) => (
-              <span key={tag}>{tag}</span>
-            ))}
-          </div>
-          {platforms.length ? (
-            <div className="platform-list">
-              {platforms.map((platform) => (
-                <span key={platform}>{platform}</span>
-              ))}
-            </div>
-          ) : null}
-          <div className="detail-links">
-            {game.websiteUrl ? (
-              <button className="icon-action" onClick={() => window.open(game.websiteUrl, "_blank")}>
-                <ExternalLink size={15} />
-                Website
-              </button>
-            ) : null}
-            {game.supportUrl ? (
-              <button className="icon-action" onClick={() => window.open(game.supportUrl, "_blank")}>
-                <ExternalLink size={15} />
-                Support
-              </button>
-            ) : null}
-          </div>
-        </div>
-        {game.screenshots.length ? (
-          <div className="detail-section">
-            <h2>Screenshots</h2>
-            <div className="screenshot-strip">
-              {game.screenshots.slice(0, 6).map((screenshot, index) => (
-                <button
-                  key={screenshot.fullUrl}
-                  style={{ backgroundImage: `url(${screenshot.thumbnailUrl})` }}
-                  onClick={() => setViewer({ images: screenshotViewerImages, index })}
-                  aria-label={`Open screenshot ${index + 1} for ${game.title}`}
-                />
-              ))}
-            </div>
-          </div>
-        ) : null}
-        <div className="detail-section source-matches">
-          <h2>Download options</h2>
-          {game.sourceMatches.length === 0 ? (
-            <p className="muted">No source matches.</p>
-          ) : (
-            game.sourceMatches.map((match) => (
-              <div className="match-row" key={match.id}>
-                <div>
-                  <strong>{match.title}</strong>
-                  <span>
-                    {match.sourceName} · {match.confidence} · {match.fileSize ?? "size unknown"}
-                  </span>
+    <motion.div className="detail-modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+      <motion.section
+        className="detail-modal"
+        style={coverGlow(game)}
+        initial={{ y: 34, scale: 0.985, opacity: 0 }}
+        animate={{ y: 0, scale: 1, opacity: 1 }}
+        exit={{ y: 28, scale: 0.985, opacity: 0 }}
+        transition={{ duration: 0.24, ease: "easeOut" }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="detail-modal-body">
+          <main className="detail-main">
+            {activeMedia ? (
+              <section className="detail-block media-carousel-block">
+                <div className="detail-block-head">
+                  {activeMedia.kind === "trailer" ? <Film size={17} /> : <Images size={17} />}
+                  <h2>Media</h2>
+                  <span>{activeMedia.label}</span>
                 </div>
-                <div className="uri-actions">
-                  {match.uris.slice(0, 3).map((uri) => (
-                    <button key={uri} className="icon-action" title={uri} onClick={() => void copy(uri).then(onChanged)}>
-                      <Clipboard size={15} />
-                      {uri.startsWith("magnet:") ? "Copy magnet" : "Copy link"}
+                <div className="media-carousel">
+                  {activeMedia.kind === "trailer" ? (
+                    <video controls playsInline poster={activeMedia.posterUrl}>
+                      <source src={activeMedia.sourceUrl} />
+                    </video>
+                  ) : (
+                    <button
+                      className="media-image"
+                      style={{ backgroundImage: `url(${activeMedia.sourceUrl})` }}
+                      onClick={() => setViewer({ images: imageViewerItems, index: Math.max(0, imageViewerItems.findIndex((item) => item.url === activeMedia.sourceUrl)) })}
+                    />
+                  )}
+                  {mediaItems.length > 1 ? (
+                    <div className="media-carousel-nav">
+                      <button
+                        className="icon-action"
+                        onClick={() => setMediaIndex((index) => (index - 1 + mediaItems.length) % mediaItems.length)}
+                        aria-label="Previous media"
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <span>
+                        {activeMediaIndex + 1} / {mediaItems.length}
+                      </span>
+                      <button className="icon-action" onClick={() => setMediaIndex((index) => (index + 1) % mediaItems.length)} aria-label="Next media">
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                {mediaItems.length > 1 ? (
+                  <div className="media-thumbs">
+                    {mediaItems.map((item, index) => (
+                      <button
+                        key={`${item.kind}-${item.sourceUrl}`}
+                        className={index === activeMediaIndex ? "active" : ""}
+                        style={
+                          item.kind === "image"
+                            ? { backgroundImage: `url(${item.thumbnailUrl})` }
+                            : item.posterUrl
+                              ? { backgroundImage: `url(${item.posterUrl})` }
+                              : fallbackArt(game)
+                        }
+                        onClick={() => setMediaIndex(index)}
+                        aria-label={`Show ${item.label}`}
+                      >
+                        {item.kind === "trailer" ? <Film size={14} /> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
+            {description ? (
+              <section className="detail-block">
+                <h2>About</h2>
+                <RichDescription value={description} />
+              </section>
+            ) : null}
+
+          </main>
+
+          <aside className="detail-sidebar">
+            <section className="detail-side-identity" style={fallbackArt(game)}>
+              <button
+                className="detail-side-cover"
+                disabled={!cover}
+                onClick={() => (cover ? setViewer({ images: coverViewerItems, index: 0 }) : undefined)}
+                aria-label={`Open ${game.title} cover`}
+              >
+                <span style={cover ? { backgroundImage: `url(${cover})` } : undefined} />
+              </button>
+              <div>
+                <p className="eyebrow">{game.discovery?.signal ?? "Steam library"}</p>
+                <h1>{game.title}</h1>
+                <p>{detailMeta || game.shortDescription || "Game details"}</p>
+                <div className="detail-action-row">
+                  <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void window.hynite.games.launch(game.id)}>
+                    <Play size={16} />
+                    Play
+                  </button>
+                  {storeUrl ? (
+                    <button className="secondary-action" onClick={() => openExternalUrl(storeUrl)}>
+                      <ExternalLink size={16} />
+                      Store
                     </button>
-                  ))}
+                  ) : null}
+                  {game.websiteUrl ? (
+                    <button className="secondary-action" onClick={() => openExternalUrl(game.websiteUrl)}>
+                      <Globe2 size={16} />
+                      Website
+                    </button>
+                  ) : null}
                 </div>
               </div>
-            ))
-          )}
+            </section>
+            <section className="detail-block compact">
+              <h2>Activity</h2>
+              <div className="detail-hero-stats">
+                <span>
+                  <Clock3 size={15} />
+                  {formatHours(game.playtimeMinutes)}
+                </span>
+                <span>
+                  <CalendarDays size={15} />
+                  {formatDate(game.releaseDate) ?? "Release unknown"}
+                </span>
+                <span>
+                  <Users size={15} />
+                  {formatNumber(game.recommendationCount)} recs
+                </span>
+              </div>
+              <dl>
+                <div>
+                  <dt>Playtime</dt>
+                  <dd>{formatHours(game.playtimeMinutes)}</dd>
+                </div>
+                <div>
+                  <dt>Last played</dt>
+                  <dd>{formatDate(game.lastPlayedAt) ?? "Never"}</dd>
+                </div>
+                <div>
+                  <dt>Added</dt>
+                  <dd>{formatDate(game.addedAt) ?? "Unknown"}</dd>
+                </div>
+                <div>
+                  <dt>Installed</dt>
+                  <dd>{game.installState === "installed" ? "Yes" : game.installState === "not_installed" ? "No" : "Unknown"}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section className="detail-block compact">
+              <h2>Steam data</h2>
+              <dl>
+                <div>
+                  <dt>Developers</dt>
+                  <dd>{game.developers.join(", ") || "Unknown"}</dd>
+                </div>
+                <div>
+                  <dt>Publishers</dt>
+                  <dd>{game.publishers.join(", ") || "Unknown"}</dd>
+                </div>
+                <div>
+                  <dt>Achievements</dt>
+                  <dd>
+                    <Trophy size={14} />
+                    {formatNumber(game.achievementCount)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Platforms</dt>
+                  <dd>
+                    <Monitor size={14} />
+                    {platforms.join(", ") || "Unknown"}
+                  </dd>
+                </div>
+              </dl>
+              <div className="tag-list">
+                {[...game.genres, ...game.tags].slice(0, 16).map((tag) => (
+                  <span key={tag}>{tag}</span>
+                ))}
+              </div>
+              {game.contentDescriptors.length ? (
+                <div className="content-notes">
+                  {game.contentDescriptors.map((descriptor) => (
+                    <p key={descriptor}>{descriptor}</p>
+                  ))}
+                </div>
+              ) : null}
+              <div className="detail-links">
+                {game.supportUrl ? (
+                  <button className="icon-action" onClick={() => openExternalUrl(game.supportUrl)}>
+                    <ExternalLink size={15} />
+                    Support
+                  </button>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="detail-block compact source-matches">
+              <h2>Download options</h2>
+              {game.sourceMatches.length === 0 ? (
+                <p className="muted">No source matches.</p>
+              ) : (
+                game.sourceMatches.map((match) => (
+                  <div className="match-row" key={match.id}>
+                    <div>
+                      <strong>{match.title}</strong>
+                      <span>
+                        {match.sourceName} / {match.confidence} / {match.fileSize ?? "size unknown"}
+                      </span>
+                    </div>
+                    <div className="uri-actions">
+                      {match.uris.slice(0, 3).map((uri) => (
+                        <button key={uri} className="icon-action" title={uri} onClick={() => void copy(uri).then(onChanged)}>
+                          <Clipboard size={15} />
+                          {uri.startsWith("magnet:") ? "Copy magnet" : "Copy link"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </section>
+          </aside>
         </div>
-        </motion.aside>
-      </AnimatePresence>
-      {viewer ? <ImageViewer images={viewer.images} initialIndex={viewer.index} reduceMotion={reduceMotion} onClose={() => setViewer(undefined)} /> : null}
+      </motion.section>
+    </motion.div>
+    {viewer ? <ImageViewer images={viewer.images} initialIndex={viewer.index} reduceMotion={reduceMotion} onClose={() => setViewer(undefined)} /> : null}
     </>
   );
 }
@@ -1309,7 +1474,9 @@ export function App() {
           </div>
         </aside>
         <section className="content">{routeContent}</section>
-        {selected ? <DetailOverlay game={selected} reduceMotion={settings?.reduceMotion} onClose={() => setSelected(undefined)} onChanged={() => void refresh()} /> : null}
+        <AnimatePresence>
+          {selected ? <DetailOverlay game={selected} reduceMotion={settings?.reduceMotion} onClose={() => setSelected(undefined)} onChanged={() => void refresh()} /> : null}
+        </AnimatePresence>
       </div>
       <footer className="statusbar">
         <span className="status-dot" />

@@ -36,7 +36,7 @@ describe("fetchSteamMetadata", () => {
     await expect(fetchSteamMetadata("730", fetchMock as typeof fetch)).resolves.toMatchObject({
       title: "Counter-Strike 2",
       shortDescription: "Tactical action.",
-      aboutText: "Play rounds.\nWin matches.",
+      aboutText: "<p>Play rounds.<br>Win matches.</p>",
       headerUrl: "header.jpg",
       backgroundUrl: "background.jpg",
       trailerUrl: "trailer.mp4",

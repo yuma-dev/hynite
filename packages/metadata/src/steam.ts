@@ -118,7 +118,7 @@ export async function fetchSteamMetadata(appid: string, fetchImpl: typeof fetch 
             fullUrl: screenshot.path_full as string
           })) ?? [],
       shortDescription: stripHtml(data.short_description),
-      aboutText: stripHtml(data.about_the_game ?? data.detailed_description),
+      aboutText: data.about_the_game ?? data.detailed_description,
       websiteUrl: data.website,
       supportUrl: data.support_info?.url,
       platforms: data.platforms
