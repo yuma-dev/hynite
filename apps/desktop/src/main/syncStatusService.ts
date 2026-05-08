@@ -148,7 +148,12 @@ export class SyncStatusService {
   }
 
   private emit(): void {
-    this.getWindow()?.webContents.send("sync:statusChanged", this.get());
+    const window = this.getWindow();
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+      return;
+    }
+
+    window.webContents.send("sync:statusChanged", this.get());
   }
 
   private scheduleEmit(): void {

@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
+import Hls from "hls.js";
 import {
   BookOpen,
   ChevronDown,
@@ -7,6 +8,7 @@ import {
   ChevronRight,
   Clipboard,
   Clock3,
+  Download,
   ExternalLink,
   Film,
   Flame,
@@ -36,7 +38,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { gameActivityTime, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { gameActivityTime, makeGameId, makeSortTitle, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 
 type Route = "home" | "trending" | "library" | "search" | "settings";
 
@@ -161,6 +163,27 @@ function heroStill(game: Game): string | undefined {
   return game.headerUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.fullUrl ?? game.backgroundUrl;
 }
 
+function plainSummary(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const text = value
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text || undefined;
+}
+
+function heroDescription(game: Game): string | undefined {
+  return plainSummary(game.shortDescription) ?? plainSummary(game.aboutText);
+}
+
 type ImageViewerItem = {
   url: string;
   label: string;
@@ -199,9 +222,56 @@ function formatDate(value?: string): string | undefined {
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: parsed.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
 }
 
+function twoDigit(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatUploadedAt(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+
+  return [
+    `${twoDigit(parsed.getDate())}.${twoDigit(parsed.getMonth() + 1)}.${twoDigit(parsed.getFullYear() % 100)}`,
+    `${twoDigit(parsed.getHours())}:${twoDigit(parsed.getMinutes())}`
+  ].join(" ");
+}
+
 function steamStoreUrl(game: Game): string | undefined {
   const steamId = game.sourceIds.find((source) => source.provider === "steam")?.externalId;
   return game.discovery?.storeUrl ?? (steamId ? `https://store.steampowered.com/app/${encodeURIComponent(steamId)}` : undefined);
+}
+
+function gameFromSteamSearchResult(result: SteamSearchResult): Game {
+  return {
+    id: makeGameId("steam", result.appId),
+    title: result.title,
+    sortTitle: makeSortTitle(result.title),
+    sourceIds: [{ provider: "steam", externalId: result.appId }],
+    installState: "not_installed",
+    headerUrl: result.capsuleUrl,
+    screenshots: [],
+    shortDescription: result.reviewSummary,
+    contentDescriptors: [],
+    discovery: {
+      score: 0,
+      signal: "Steam Store",
+      priceText: result.price,
+      storeUrl: `https://store.steampowered.com/app/${encodeURIComponent(result.appId)}/`,
+      sources: ["Steam Store"]
+    },
+    genres: [],
+    tags: [],
+    developers: [],
+    publishers: [],
+    releaseDate: result.releaseDate,
+    metadataStatus: "partial"
+  };
 }
 
 function openExternalUrl(url?: string): void {
@@ -274,10 +344,10 @@ function canLaunch(game: Game): boolean {
 
 function heroMeta(game: Game): string[] {
   return [
-    game.discovery?.storeCategory ?? game.discovery?.signal,
-    game.discovery?.priceText,
     game.releaseDate ? `Released ${formatDate(game.releaseDate)}` : undefined,
-    game.genres[0]
+    game.genres[0],
+    game.developers[0],
+    game.discovery?.storeCategory && game.discovery.storeCategory !== game.discovery.signal ? game.discovery.storeCategory : undefined
   ].filter(Boolean) as string[];
 }
 
@@ -441,9 +511,77 @@ function SourceAvailabilityTag({ game, libraryGameIds }: { game: Game; libraryGa
   const sourceText = matches.map((match) => `${match.sourceName} (${match.count})`).join(", ");
   return (
     <span className="source-match-tag" title={sourceText}>
-      <Link2 size={13} />
+      <Download size={13} />
       Available in sources
     </span>
+  );
+}
+
+function isHlsUrl(value: string): boolean {
+  return /\.m3u8(?:[?#]|$)/i.test(value);
+}
+
+function TrailerPlayer({ sourceUrl, posterUrl, label }: { sourceUrl: string; posterUrl?: string; label: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    let hls: Hls | undefined;
+    setFailed(false);
+    video.removeAttribute("src");
+
+    if (isHlsUrl(sourceUrl)) {
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = sourceUrl;
+      } else if (Hls.isSupported()) {
+        hls = new Hls({ enableWorker: true });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) {
+            setFailed(true);
+          }
+        });
+        hls.loadSource(sourceUrl);
+        hls.attachMedia(video);
+      } else {
+        setFailed(true);
+      }
+    } else {
+      video.src = sourceUrl;
+    }
+
+    const onCanPlay = () => setFailed(false);
+    const onError = () => setFailed(true);
+    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("error", onError);
+    video.load();
+
+    return () => {
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("error", onError);
+      hls?.destroy();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [sourceUrl]);
+
+  return (
+    <>
+      <video ref={videoRef} controls playsInline preload="metadata" poster={posterUrl} aria-label={label} />
+      {failed ? (
+        <div className="media-error">
+          <span>Trailer unavailable</span>
+          <button className="secondary-action" type="button" onClick={() => openExternalUrl(sourceUrl)}>
+            <ExternalLink size={15} />
+            Open video
+          </button>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -476,6 +614,7 @@ function Hero({
   const selectedHeroImage = activeHeroImage && activeHeroImage.gameId === heroGame?.id ? activeHeroImage.image : undefined;
   const heroImage = selectedHeroImage ?? (heroGame ? heroStill(heroGame) : undefined);
   const heroShots = (heroGame?.screenshots ?? []).slice(0, 3);
+  const description = heroGame ? heroDescription(heroGame) : undefined;
   const reduceHeroMotion = Boolean(settings?.reduceMotion);
   const heroImageKey = `${heroGame?.id ?? "empty"}:${heroImage ?? "fallback"}`;
 
@@ -587,9 +726,12 @@ function Hero({
               exit={reduceHeroMotion ? undefined : { opacity: 0, x: 18 * heroDirection }}
               transition={{ duration: reduceHeroMotion ? 0 : 0.24, ease: "easeOut" }}
             >
-              <h1>{heroGame.title}</h1>
-              <p>{heroGame.shortDescription || heroMeta(heroGame).join(" · ") || "Steam Store feature"}</p>
-              <SourceAvailabilityTag game={heroGame} libraryGameIds={libraryGameIds} />
+              <h1>
+                <button className="hero-title-button" type="button" onClick={() => onSelect(heroGame)}>
+                  {heroGame.title}
+                </button>
+              </h1>
+              {description ? <p>{description}</p> : null}
               <div className="hero-meta-grid">
                 {heroMeta(heroGame).map((item) => (
                   <span key={item}>{item}</span>
@@ -611,16 +753,13 @@ function Hero({
                 </div>
               ) : null}
               <div className="hero-actions">
-                <button className="secondary-action" onClick={() => onSelect(heroGame)}>
-                  <BookOpen size={16} />
-                  Info
-                </button>
                 {heroGame.discovery?.storeUrl ? (
                   <button className="secondary-action" onClick={() => openExternalUrl(heroGame.discovery?.storeUrl)}>
                     <ExternalLink size={16} />
                     {heroGame.discovery?.priceText ?? "Store"}
                   </button>
                 ) : null}
+                <SourceAvailabilityTag game={heroGame} libraryGameIds={libraryGameIds} />
               </div>
             </motion.div>
           </AnimatePresence>
@@ -1132,24 +1271,27 @@ function SourcesScreen() {
         {searchError && <p className="error-line">{searchError}</p>}
         <div className="source-results">
           {matches.length === 0 ? <p className="muted">No matches yet.</p> : null}
-          {matches.map((match) => (
-            <div className="match-row" key={match.id}>
-              <div>
-                <strong>{match.title}</strong>
-                <span>
-                  {match.sourceName} · {match.confidence} · {match.fileSize ?? "size unknown"}
-                </span>
+          {matches.map((match) => {
+            const uploadedAt = formatUploadedAt(match.uploadDate);
+            return (
+              <div className="match-row" key={match.id}>
+                <div>
+                  <strong>{match.title}</strong>
+                  <span>
+                    {[match.sourceName, match.confidence, match.fileSize ?? "size unknown", uploadedAt ? `uploaded ${uploadedAt}` : undefined].filter(Boolean).join(" · ")}
+                  </span>
+                </div>
+                <div className="uri-actions">
+                  {match.uris.slice(0, 3).map((uri) => (
+                    <button key={uri} className="icon-action" title={uri} onClick={() => void copy(uri)}>
+                      <Clipboard size={15} />
+                      {uri.startsWith("magnet:") ? "Copy magnet" : "Copy link"}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="uri-actions">
-                {match.uris.slice(0, 3).map((uri) => (
-                  <button key={uri} className="icon-action" title={uri} onClick={() => void copy(uri)}>
-                    <Clipboard size={15} />
-                    {uri.startsWith("magnet:") ? "Copy magnet" : "Copy link"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>
@@ -1716,9 +1858,7 @@ function DetailOverlay({
                 </div>
                 <div className="media-carousel">
                   {activeMedia.kind === "trailer" ? (
-                    <video controls playsInline poster={activeMedia.posterUrl}>
-                      <source src={activeMedia.sourceUrl} />
-                    </video>
+                    <TrailerPlayer sourceUrl={activeMedia.sourceUrl} posterUrl={activeMedia.posterUrl} label={`${game.title} ${activeMedia.label}`} />
                   ) : (
                     <button
                       className="media-image"
@@ -1935,24 +2075,27 @@ function DetailOverlay({
                         </button>
                         {expanded ? (
                           <div className="source-match-list">
-                            {visibleMatches.map((match) => (
-                              <div className="match-row" key={match.id}>
-                                <div>
-                                  <strong>{match.title}</strong>
-                                  <span>
-                                    {match.confidence} / {match.fileSize ?? "size unknown"}
-                                  </span>
+                            {visibleMatches.map((match) => {
+                              const uploadedAt = formatUploadedAt(match.uploadDate);
+                              return (
+                                <div className="match-row" key={match.id}>
+                                  <div>
+                                    <strong>{match.title}</strong>
+                                    <span>
+                                      {[match.confidence, match.fileSize ?? "size unknown", uploadedAt ? `uploaded ${uploadedAt}` : undefined].filter(Boolean).join(" / ")}
+                                    </span>
+                                  </div>
+                                  <div className="uri-actions">
+                                    {match.uris.slice(0, 3).map((uri) => (
+                                      <button key={uri} className="icon-action" title={uri} onClick={() => void copy(uri).then(onChanged)}>
+                                        <Clipboard size={15} />
+                                        {uri.startsWith("magnet:") ? "Copy magnet" : "Copy link"}
+                                      </button>
+                                    ))}
+                                  </div>
                                 </div>
-                                <div className="uri-actions">
-                                  {match.uris.slice(0, 3).map((uri) => (
-                                    <button key={uri} className="icon-action" title={uri} onClick={() => void copy(uri).then(onChanged)}>
-                                      <Clipboard size={15} />
-                                      {uri.startsWith("magnet:") ? "Copy magnet" : "Copy link"}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                             {hasMore ? (
                               <button className="icon-action show-more-matches" type="button" onClick={() => showMoreSourceMatches(group.sourceId)}>
                                 Show more
@@ -2086,13 +2229,7 @@ export function App() {
       );
     }
     if (route === "search") {
-      return (
-        <SteamSearchScreen
-          onSelect={(result) => {
-            void window.hynite.native.openExternal(`https://store.steampowered.com/app/${result.appId}/`);
-          }}
-        />
-      );
+      return <SteamSearchScreen onSelect={(result) => void selectGame(gameFromSteamSearchResult(result))} />;
     }
     return (
       <SettingsScreen

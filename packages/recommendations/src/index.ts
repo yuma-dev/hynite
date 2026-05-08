@@ -3,6 +3,7 @@ import {
   createSteamGridDbArtworkProvider,
   fetchSteamAppInfoMetadataWithNativeFallback,
   fetchSteamCdnArtworkMetadata,
+  fetchSteamMetadata,
   isSteamRateLimitError,
   refreshFusedMetadata,
   steamRateLimitedFetch,
@@ -532,7 +533,14 @@ function discoveryMetadataProviders(candidate: Candidate, fetchImpl: typeof fetc
     ...(options.steamGridDbApiKey ? [createSteamGridDbArtworkProvider(options.steamGridDbApiKey, fetchImpl, logger)] : [])
   ];
 
-  return fastProviders;
+  return [
+    ...fastProviders,
+    {
+      id: "steam-store",
+      label: "Steam Store",
+      refresh: (game) => fetchSteamMetadata(game.externalId, fetchImpl, logger, game.title)
+    }
+  ];
 }
 
 async function enrichCandidate(

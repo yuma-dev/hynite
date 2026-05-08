@@ -237,6 +237,7 @@ button {
 .game-cover,
 .wide-game,
 .hero-cover,
+.hero-title-button,
 .trend-hero-frame,
 .close-button,
 .primary-action,
@@ -580,6 +581,28 @@ button {
   -webkit-line-clamp: 2;
 }
 
+.hero-title-button {
+  display: inline;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-shadow: inherit;
+}
+
+.hero-title-button:hover,
+.hero-title-button:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 5px;
+  outline: 0;
+}
+
 .hero p {
   -webkit-line-clamp: 3;
 }
@@ -616,6 +639,14 @@ button {
   color: rgba(190, 255, 215, 0.95);
   font-size: 12px;
   font-weight: 650;
+}
+
+.source-match-tag svg {
+  flex: none;
+}
+
+.hero-actions .source-match-tag {
+  margin-top: 0;
 }
 
 .hero-meta-grid span,
@@ -1723,7 +1754,7 @@ textarea {
 .media-carousel-nav {
   position: absolute;
   right: 0.7vw;
-  bottom: 0.7vw;
+  top: 0.7vw;
   display: flex;
   align-items: center;
   gap: 0.45vw;
@@ -1731,6 +1762,19 @@ textarea {
   padding: 0.25vw;
   background: rgba(0, 0, 0, 0.58);
   backdrop-filter: blur(0.8vw);
+}
+
+.media-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 0.8vw;
+  border-radius: 0.55vw;
+  background: rgba(5, 6, 8, 0.78);
+  color: var(--text-2);
+  font-size: 0.78vw;
 }
 
 .media-carousel-nav span {

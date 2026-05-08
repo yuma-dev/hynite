@@ -87,6 +87,13 @@ function confidenceFor(score: number): SourceMatchConfidence {
   return "low";
 }
 
+function uploadTime(value?: string): number {
+  if (!value) {
+    return 0;
+  }
+  return Date.parse(value) || 0;
+}
+
 export function findSourceMatches(game: Game, entries: SearchableDownloadEntry[], limit = 20): SourceMatch[] {
   return entries
     .map((entry) => {
@@ -104,7 +111,7 @@ export function findSourceMatches(game: Game, entries: SearchableDownloadEntry[]
       } satisfies SourceMatch;
     })
     .filter((match) => match.score >= 0.58)
-    .sort((a, b) => b.score - a.score || a.sourceName.localeCompare(b.sourceName) || a.title.localeCompare(b.title))
+    .sort((a, b) => uploadTime(b.uploadDate) - uploadTime(a.uploadDate) || b.score - a.score || a.sourceName.localeCompare(b.sourceName) || a.title.localeCompare(b.title))
     .slice(0, limit);
 }
 

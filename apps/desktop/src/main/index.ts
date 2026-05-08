@@ -383,6 +383,9 @@ function createWindow(): void {
 
   mainWindow.on("maximize", () => mainWindow?.webContents.send("window:maximizeChanged", true));
   mainWindow.on("unmaximize", () => mainWindow?.webContents.send("window:maximizeChanged", false));
+  mainWindow.on("closed", () => {
+    mainWindow = undefined;
+  });
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     console.error(`Renderer failed to load (${errorCode}): ${errorDescription}`);

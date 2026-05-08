@@ -68,4 +68,37 @@ describe("source search", () => {
 
     expect(matches[0]?.confidence).toMatch(/high|medium/);
   });
+
+  it("lists newest uploaded source matches first", () => {
+    const matches = findSourceMatches(game, [
+      {
+        id: "entry-old",
+        sourceId: "source-1",
+        sourceName: "Local",
+        title: "Baldur's Gate 3",
+        normalizedTitle: "baldurs gate 3",
+        uploadDate: "2026-05-07T01:39:32.000Z",
+        uris: ["magnet:?xt=urn:btih:old"]
+      },
+      {
+        id: "entry-new",
+        sourceId: "source-1",
+        sourceName: "Local",
+        title: "Baldur's Gate 3",
+        normalizedTitle: "baldurs gate 3",
+        uploadDate: "2026-05-08T01:39:32.000Z",
+        uris: ["magnet:?xt=urn:btih:new"]
+      },
+      {
+        id: "entry-undated",
+        sourceId: "source-1",
+        sourceName: "Local",
+        title: "Baldur's Gate 3",
+        normalizedTitle: "baldurs gate 3",
+        uris: ["magnet:?xt=urn:btih:undated"]
+      }
+    ]);
+
+    expect(matches.map((match) => match.id)).toEqual(["entry-new", "entry-old", "entry-undated"]);
+  });
 });
