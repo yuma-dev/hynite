@@ -32,8 +32,8 @@ import {
   Users,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
@@ -351,7 +351,339 @@ function heroMeta(game: Game): string[] {
   ].filter(Boolean) as string[];
 }
 
+const GLOW_REACH_MULTIPLIER = 1.25;
+
+type SpotlightDiag = {
+  pointerOvers: number;
+  schedules: number;
+  applies: number;
+  clears: number;
+  cacheRefreshes: number;
+};
+
+const spotlightDiag: SpotlightDiag = {
+  pointerOvers: 0,
+  schedules: 0,
+  applies: 0,
+  clears: 0,
+  cacheRefreshes: 0
+};
+
+let spotlightDiagInstalled = false;
+function installSpotlightDiagnostics() {
+  if (spotlightDiagInstalled || typeof window === "undefined") {
+    return;
+  }
+  spotlightDiagInstalled = true;
+
+  let frames = 0;
+  let frameTimeMax = 0;
+  let lastFrame = performance.now();
+  let lastReport = performance.now();
+  let droppedFrames = 0;
+
+  const tick = () => {
+    const now = performance.now();
+    const delta = now - lastFrame;
+    lastFrame = now;
+    frames += 1;
+    if (delta > frameTimeMax) {
+      frameTimeMax = delta;
+    }
+    if (delta > 20) {
+      droppedFrames += 1;
+    }
+    if (now - lastReport >= 1000) {
+      const fps = Math.round((frames * 1000) / (now - lastReport));
+      const dropped = droppedFrames;
+      const worst = frameTimeMax.toFixed(1);
+      const diag = { ...spotlightDiag };
+      if (dropped > 0 || diag.pointerOvers > 0 || diag.applies > 0) {
+        console.log(
+          `[diag] fps=${fps} worstFrame=${worst}ms dropped=${dropped}/sec ` +
+          `pointerOvers=${diag.pointerOvers} schedules=${diag.schedules} ` +
+          `applies=${diag.applies} clears=${diag.clears} cacheRefreshes=${diag.cacheRefreshes}`
+        );
+      }
+      frames = 0;
+      droppedFrames = 0;
+      frameTimeMax = 0;
+      lastReport = now;
+      spotlightDiag.pointerOvers = 0;
+      spotlightDiag.schedules = 0;
+      spotlightDiag.applies = 0;
+      spotlightDiag.clears = 0;
+      spotlightDiag.cacheRefreshes = 0;
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+
+  const root = document.documentElement;
+  const toggle = (className: string, on: boolean) => {
+    root.classList.toggle(className, !on);
+    console.log(`[diag] ${className.replace("diag-no-", "")} = ${on ? "on" : "off"}`);
+  };
+  // @ts-expect-error attach diagnostic toggles to window for console use
+  window.__diag = {
+    backdrop: (on: boolean) => toggle("diag-no-backdrop", on),
+    glow: (on: boolean) => toggle("diag-no-glow", on),
+    hoverTransform: (on: boolean) => toggle("diag-no-hover-transform", on),
+    hoverShadow: (on: boolean) => toggle("diag-no-hover-shadow", on),
+    coverReveal: (on: boolean) => toggle("diag-no-cover-reveal", on),
+    contain: (on: boolean) => toggle("diag-no-contain", on),
+    everything: (on: boolean) => {
+      toggle("diag-no-backdrop", on);
+      toggle("diag-no-glow", on);
+      toggle("diag-no-hover-transform", on);
+      toggle("diag-no-hover-shadow", on);
+      toggle("diag-no-cover-reveal", on);
+      toggle("diag-no-contain", on);
+    }
+  };
+  console.log("[diag] toggles ready: __diag.backdrop(false), __diag.glow(false), __diag.coverReveal(false), __diag.hoverTransform(false), __diag.hoverShadow(false), __diag.contain(false), __diag.everything(false)");
+
+  if ("PerformanceObserver" in window) {
+    try {
+      const longTaskObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          console.warn(`[diag] LONG TASK: ${entry.duration.toFixed(1)}ms at ${entry.startTime.toFixed(0)}`);
+        }
+      });
+      longTaskObserver.observe({ type: "longtask", buffered: true });
+    } catch (e) {
+      // longtask not supported
+    }
+    try {
+      const eventObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration > 16) {
+            console.warn(`[diag] slow event: ${entry.name} ${entry.duration.toFixed(1)}ms`);
+          }
+        }
+      });
+      eventObserver.observe({ type: "event", durationThreshold: 16, buffered: true } as PerformanceObserverInit);
+    } catch (e) {
+      // event timing not supported
+    }
+  }
+}
+
+type CardGeom = { el: HTMLElement; x: number; y: number; w: number; h: number; cx: number; cy: number };
+
+function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
+  installSpotlightDiagnostics();
+  const sourceCardRef = useRef<HTMLElement | null>(null);
+  const targetsRef = useRef<Set<HTMLElement>>(new Set());
+  const pendingRef = useRef<HTMLElement | null | "clear">(null);
+  const rafRef = useRef<number | null>(null);
+  const cacheRef = useRef<CardGeom[]>([]);
+  const cacheIndexRef = useRef<Map<HTMLElement, CardGeom>>(new Map());
+  const cacheDirtyRef = useRef(true);
+  const cardSetWrittenRef = useRef<Set<HTMLElement>>(new Set());
+
+  const refreshCache = useCallback(() => {
+    const grid = ref.current;
+    if (!grid) {
+      cacheRef.current = [];
+      cacheIndexRef.current = new Map();
+      return;
+    }
+    const t0 = performance.now();
+    const gridRect = grid.getBoundingClientRect();
+    const sl = grid.scrollLeft;
+    const st = grid.scrollTop;
+    const list: CardGeom[] = [];
+    const index = new Map<HTMLElement, CardGeom>();
+    const nodes = grid.querySelectorAll<HTMLElement>(".game-cover, .wide-game");
+    nodes.forEach((card) => {
+      const r = card.getBoundingClientRect();
+      const entry: CardGeom = {
+        el: card,
+        x: r.left - gridRect.left + sl,
+        y: r.top - gridRect.top + st,
+        w: r.width,
+        h: r.height,
+        cx: r.left + r.width / 2,
+        cy: r.top + r.height / 2
+      };
+      list.push(entry);
+      index.set(card, entry);
+    });
+    cacheRef.current = list;
+    cacheIndexRef.current = index;
+    cacheDirtyRef.current = false;
+    cardSetWrittenRef.current = new Set();
+    spotlightDiag.cacheRefreshes += 1;
+    const dt = performance.now() - t0;
+    if (dt > 5) {
+      console.warn(`[diag] slow cache refresh: ${dt.toFixed(2)}ms (${nodes.length} cards)`);
+    }
+  }, [ref]);
+
+  const applyClear = useCallback(() => {
+    if (sourceCardRef.current) {
+      sourceCardRef.current.classList.remove("is-glow-source");
+      sourceCardRef.current = null;
+    }
+    targetsRef.current.forEach((c) => c.classList.remove("is-glow-target"));
+    targetsRef.current.clear();
+  }, []);
+
+  const applySet = useCallback((card: HTMLElement) => {
+    const grid = ref.current;
+    if (!grid || sourceCardRef.current === card) {
+      return;
+    }
+    const cover = card.dataset.coverSrc;
+    if (!cover) {
+      applyClear();
+      return;
+    }
+    const tStart = performance.now();
+    if (cacheDirtyRef.current) {
+      refreshCache();
+    }
+    let source = cacheIndexRef.current.get(card);
+    if (!source) {
+      refreshCache();
+      source = cacheIndexRef.current.get(card);
+      if (!source) {
+        return;
+      }
+    }
+    const tCacheReady = performance.now();
+
+    const reach = Math.max(source.w, source.h) * GLOW_REACH_MULTIPLIER;
+    const reachSq = reach * reach;
+    const list = cacheRef.current;
+    const next = new Set<HTMLElement>();
+    const writtenCards = cardSetWrittenRef.current;
+    let writeCount = 0;
+
+    for (let i = 0; i < list.length; i++) {
+      const entry = list[i];
+      if (entry.el === card) {
+        continue;
+      }
+      const dx = entry.cx - source.cx;
+      const dy = entry.cy - source.cy;
+      if (dx * dx + dy * dy > reachSq) {
+        continue;
+      }
+      next.add(entry.el);
+      if (!writtenCards.has(entry.el)) {
+        entry.el.style.setProperty("--card-x", `${entry.x}px`);
+        entry.el.style.setProperty("--card-y", `${entry.y}px`);
+        writtenCards.add(entry.el);
+        writeCount += 1;
+      }
+    }
+    const tScanDone = performance.now();
+
+    if (sourceCardRef.current && sourceCardRef.current !== card) {
+      sourceCardRef.current.classList.remove("is-glow-source");
+    }
+    card.classList.add("is-glow-source");
+    sourceCardRef.current = card;
+
+    grid.style.setProperty("--source-bg", `url("${cover.replace(/"/g, '\\"')}")`);
+    grid.style.setProperty("--source-x", `${source.x}px`);
+    grid.style.setProperty("--source-y", `${source.y}px`);
+    grid.style.setProperty("--source-w", `${source.w}px`);
+    grid.style.setProperty("--source-h", `${source.h}px`);
+
+    const prev = targetsRef.current;
+    let removed = 0;
+    let added = 0;
+    prev.forEach((p) => {
+      if (!next.has(p)) {
+        p.classList.remove("is-glow-target");
+        removed += 1;
+      }
+    });
+    next.forEach((n) => {
+      if (!prev.has(n)) {
+        n.classList.add("is-glow-target");
+        added += 1;
+      }
+    });
+    targetsRef.current = next;
+    const tDone = performance.now();
+    spotlightDiag.applies += 1;
+    if (tDone - tStart > 4) {
+      console.warn(
+        `[diag] slow applySet: total=${(tDone - tStart).toFixed(2)}ms ` +
+        `(cache=${(tCacheReady - tStart).toFixed(2)} scan=${(tScanDone - tCacheReady).toFixed(2)} ` +
+        `dom=${(tDone - tScanDone).toFixed(2)}) targets=${next.size} writes=${writeCount}`
+      );
+    }
+  }, [ref, applyClear, refreshCache]);
+
+  const flush = useCallback(() => {
+    rafRef.current = null;
+    const next = pendingRef.current;
+    pendingRef.current = null;
+    if (next === "clear") {
+      spotlightDiag.clears += 1;
+      applyClear();
+    } else if (next) {
+      applySet(next);
+    }
+  }, [applySet, applyClear]);
+
+  const schedule = useCallback((next: HTMLElement | "clear") => {
+    pendingRef.current = next;
+    spotlightDiag.schedules += 1;
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(flush);
+    }
+  }, [flush]);
+
+  const clear = useCallback(() => schedule("clear"), [schedule]);
+
+  const onPointerOver = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    spotlightDiag.pointerOvers += 1;
+    const card = (e.target as HTMLElement | null)?.closest<HTMLElement>(".game-cover, .wide-game");
+    if (card) {
+      schedule(card);
+    } else {
+      schedule("clear");
+    }
+  }, [schedule]);
+
+  useEffect(() => {
+    const grid = ref.current;
+    if (!grid) {
+      return;
+    }
+    const invalidate = () => {
+      cacheDirtyRef.current = true;
+    };
+    const ro = new ResizeObserver(invalidate);
+    ro.observe(grid);
+    const mo = new MutationObserver(invalidate);
+    mo.observe(grid, { childList: true, subtree: false });
+    grid.addEventListener("scroll", invalidate, { passive: true });
+    window.addEventListener("resize", invalidate);
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+      grid.removeEventListener("scroll", invalidate);
+      window.removeEventListener("resize", invalidate);
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [ref]);
+
+  return { onPointerOver, onPointerLeave: clear };
+}
+
 function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (game: Game) => void; wide?: boolean }) {
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const cover = primaryCover(game);
   const info = [
     game.installState === "installed" ? "Installed" : "Not installed",
     game.genres[0],
@@ -360,22 +692,50 @@ function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (ga
   ]
     .filter(Boolean)
     .join(" · ");
-  const cover = primaryCover(game);
 
   return (
-    <button className={wide ? "wide-game" : "game-cover"} style={fallbackArt(game)} onClick={() => onSelect(game)}>
-      <span className="cover-art" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>
+    <div
+      className={wide ? "wide-game" : "game-cover"}
+      style={fallbackArt(game)}
+      data-cover-src={cover ?? ""}
+      role="button"
+      tabIndex={0}
+      aria-label={game.title}
+      onClick={() => onSelect(game)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(game); } }}
+    >
+      <span className="cover-art">
+        {cover ? (
+          <img
+            className={imgLoaded ? "cover-img loaded" : "cover-img"}
+            src={cover}
+            alt=""
+            loading="lazy"
+            onLoad={() => setImgLoaded(true)}
+          />
+        ) : null}
         <span className="cover-reveal">
+          {canLaunch(game) ? (
+            <button
+              className="cover-play"
+              type="button"
+              onClick={(e) => { e.stopPropagation(); void window.hynite.games.launch(game.id); }}
+              aria-label={`Play ${game.title}`}
+            >
+              <Play size={22} fill="currentColor" />
+            </button>
+          ) : null}
           <span className="cover-title">{game.title}</span>
           <span className="cover-meta">{info}</span>
         </span>
       </span>
-    </button>
+    </div>
   );
 }
 
 function GameRow({ title, description, games, onSelect }: { title: string; description?: string; games: Game[]; onSelect: (game: Game) => void }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
+  const spotlight = useSpotlightGrid(stripRef);
   const [visibleCount, setVisibleCount] = useState(HOME_ROW_BATCH_SIZE);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -458,7 +818,7 @@ function GameRow({ title, description, games, onSelect }: { title: string; descr
             <ChevronLeft size={18} />
           </button>
         ) : null}
-        <div className="cover-strip" ref={stripRef} onScroll={onRowScroll}>
+        <div className="cover-strip" ref={stripRef} onScroll={onRowScroll} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
           {visibleGames.map((game) => (
             <GameCover key={game.id} game={game} onSelect={onSelect} />
           ))}
@@ -687,6 +1047,10 @@ function Hero({
       onPointerLeave={() => setHeroPaused(false)}
       onFocus={() => setHeroPaused(true)}
       onBlur={() => setHeroPaused(false)}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft") { e.preventDefault(); stepHero(-1); }
+        if (e.key === "ArrowRight") { e.preventDefault(); stepHero(1); }
+      }}
     >
       {heroGame ? (
         <>
@@ -956,6 +1320,8 @@ function LibraryScreen({
   onSelect: (game: Game) => void;
   onSync: () => void;
 }) {
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const spotlight = useSpotlightGrid(gridRef);
   return (
     <main className="page">
       <div className="library-head">
@@ -1008,7 +1374,7 @@ function LibraryScreen({
           </button>
         </div>
       ) : (
-        <div className="library-grid">
+        <div className="library-grid" ref={gridRef} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
           {games.map((game) => (
             <GameCover key={game.id} game={game} onSelect={onSelect} />
           ))}
@@ -2134,6 +2500,11 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [startupDone, setStartupDone] = useState(false);
+  const contentRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    contentRef.current?.scrollTo({ top: 0 });
+  }, [route]);
 
   async function refresh() {
     const homePromise = window.hynite.home.get();
@@ -2286,7 +2657,19 @@ export function App() {
             </div>
           </div>
         </aside>
-        <section className="content">{routeContent}</section>
+        <section className="content" ref={contentRef}>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={route}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+            >
+              {routeContent}
+            </motion.div>
+          </AnimatePresence>
+        </section>
         <AnimatePresence>
           {selected ? <DetailOverlay game={selected} reduceMotion={settings?.reduceMotion} onClose={() => setSelected(undefined)} onChanged={() => void refresh()} /> : null}
         </AnimatePresence>
