@@ -42,6 +42,7 @@ describe("source search", () => {
     const matches = findSourceMatches(game, [
       {
         id: "entry-1",
+        sourceId: "source-1",
         sourceName: "Local",
         title: "Baldurs Gate 3",
         normalizedTitle: "baldurs gate 3",
@@ -50,6 +51,21 @@ describe("source search", () => {
     ]);
 
     expect(matches[0]?.confidence).toBe("high");
+    expect(matches[0]?.sourceId).toBe("source-1");
+  });
+
+  it("scores partial source title matches without requiring exact titles", () => {
+    const matches = findSourceMatches(game, [
+      {
+        id: "entry-1",
+        sourceId: "source-1",
+        sourceName: "Local",
+        title: "Baldurs Gate III Complete",
+        normalizedTitle: "baldurs gate iii",
+        uris: ["magnet:?xt=urn:btih:test"]
+      }
+    ]);
+
+    expect(matches[0]?.confidence).toMatch(/high|medium/);
   });
 });
-

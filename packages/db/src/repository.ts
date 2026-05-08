@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  type DownloadSourceInfo,
   type Game,
   type GameDiscovery,
   type GameMetadataPatch,
@@ -12,6 +13,7 @@ import {
   makeGameId,
   makeSortTitle,
   type ProviderId,
+  type SourceExactMatch,
   type SourceMatch
 } from "@hynite/core";
 import { migrations } from "./schema";
@@ -305,6 +307,7 @@ export class HyniteRepository {
   saveDownloadSource(input: {
     id: string;
     name: string;
+    url?: string;
     rawHash: string;
     entries: Array<{
       id: string;
@@ -314,30 +317,82 @@ export class HyniteRepository {
       uploadDate?: string;
       uris: string[];
     }>;
-  }): void {
+  }): boolean {
     const now = new Date().toISOString();
-    this.db
-      .prepare("INSERT OR REPLACE INTO download_sources (id, name, raw_hash, imported_at) VALUES (?, ?, ?, ?)")
-      .run(input.id, input.name, input.rawHash, now);
 
-    this.db.prepare("DELETE FROM download_entries WHERE source_id = ?").run(input.id);
-    const insert = this.db.prepare(
-      `INSERT INTO download_entries (
-        id, source_id, title, normalized_title, file_size, upload_date, uris_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
-
-    for (const entry of input.entries) {
-      insert.run(
-        entry.id,
-        input.id,
-        entry.title,
-        entry.normalizedTitle,
-        entry.fileSize ?? null,
-        entry.uploadDate ?? null,
-        JSON.stringify(entry.uris)
-      );
+    // Skip re-import if content hasn't changed — only bump last_fetched_at.
+    const existing = this.db.prepare("SELECT raw_hash FROM download_sources WHERE id = ?").get(input.id) as
+      | { raw_hash: string }
+      | undefined;
+    if (existing?.raw_hash === input.rawHash) {
+      this.db.prepare("UPDATE download_sources SET last_fetched_at = ? WHERE id = ?").run(now, input.id);
+      return false;
     }
+
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO download_sources (id, name, url, raw_hash, imported_at, last_fetched_at) VALUES (?, ?, ?, ?, ?, ?)"
+      )
+      .run(input.id, input.name, input.url ?? null, input.rawHash, now, now);
+
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM download_entries WHERE source_id = ?").run(input.id);
+      const insert = this.db.prepare(
+        `INSERT INTO download_entries (
+          id, source_id, title, normalized_title, file_size, upload_date, uris_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const entry of input.entries) {
+        insert.run(
+          entry.id,
+          input.id,
+          entry.title,
+          entry.normalizedTitle,
+          entry.fileSize ?? null,
+          entry.uploadDate ?? null,
+          JSON.stringify(entry.uris)
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+    return true;
+  }
+
+  listSources(): DownloadSourceInfo[] {
+    const rows = this.db
+      .prepare(
+        `SELECT s.id, s.name, s.url, s.imported_at, s.last_fetched_at,
+                COUNT(e.id) as entry_count
+         FROM download_sources s
+         LEFT JOIN download_entries e ON e.source_id = s.id
+         GROUP BY s.id
+         ORDER BY s.imported_at DESC`
+      )
+      .all() as Array<{
+      id: string;
+      name: string;
+      url: string | null;
+      imported_at: string;
+      last_fetched_at: string | null;
+      entry_count: number;
+    }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      url: row.url ?? undefined,
+      entryCount: row.entry_count,
+      importedAt: row.imported_at,
+      lastFetchedAt: row.last_fetched_at ?? undefined
+    }));
+  }
+
+  removeSource(id: string): void {
+    this.db.prepare("DELETE FROM download_sources WHERE id = ?").run(id);
   }
 
   listDownloadEntries(): PersistedDownloadEntry[] {
@@ -367,6 +422,64 @@ export class HyniteRepository {
       fileSize: row.file_size ?? undefined,
       uploadDate: row.upload_date ?? undefined,
       uris: parseArray(row.uris_json)
+    }));
+  }
+
+  searchDownloadEntries(normalizedWords: string[]): PersistedDownloadEntry[] {
+    if (normalizedWords.length === 0) return this.listDownloadEntries();
+    const conditions = normalizedWords.map(() => "e.normalized_title LIKE ?").join(" OR ");
+    const params = normalizedWords.map((w) => `%${w}%`);
+    const rows = this.db
+      .prepare(
+        `SELECT e.*, s.name as source_name
+         FROM download_entries e
+         INNER JOIN download_sources s ON s.id = e.source_id
+         WHERE ${conditions}`
+      )
+      .all(...params) as Array<{
+      id: string;
+      source_id: string;
+      source_name: string;
+      title: string;
+      normalized_title: string;
+      file_size: string | null;
+      upload_date: string | null;
+      uris_json: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      sourceId: row.source_id,
+      sourceName: row.source_name,
+      title: row.title,
+      normalizedTitle: row.normalized_title,
+      fileSize: row.file_size ?? undefined,
+      uploadDate: row.upload_date ?? undefined,
+      uris: parseArray(row.uris_json)
+    }));
+  }
+
+  exactDownloadTitleMatches(normalizedTitle: string): SourceExactMatch[] {
+    const trimmed = normalizedTitle.trim();
+    if (!trimmed) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT s.id as source_id, s.name as source_name, COUNT(e.id) as match_count
+         FROM download_entries e
+         INNER JOIN download_sources s ON s.id = e.source_id
+         WHERE e.normalized_title = ?
+         GROUP BY s.id, s.name
+         ORDER BY match_count DESC, s.name ASC`
+      )
+      .all(trimmed) as Array<{
+      source_id: string;
+      source_name: string;
+      match_count: number;
+    }>;
+
+    return rows.map((row) => ({
+      sourceId: row.source_id,
+      sourceName: row.source_name,
+      count: row.match_count
     }));
   }
 

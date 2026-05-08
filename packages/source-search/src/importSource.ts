@@ -18,7 +18,7 @@ export type PreparedSourceImport = {
   }>;
 };
 
-export function prepareSourceImport(json: string): PreparedSourceImport {
+export function prepareSourceImport(json: string, stableId?: string): PreparedSourceImport {
   const source = parseDownloadSourceJson(json);
   const rawHash = createHash("sha256").update(json).digest("hex");
   const entries = source.downloads.flatMap((download) => {
@@ -40,7 +40,7 @@ export function prepareSourceImport(json: string): PreparedSourceImport {
   });
 
   return {
-    id: randomUUID(),
+    id: stableId ?? randomUUID(),
     name: source.name,
     rawHash,
     importedEntries: entries.length,

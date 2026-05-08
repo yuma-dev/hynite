@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
+  ChevronDown,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -16,6 +17,9 @@ import {
   Library,
   Link2,
   LogOut,
+  Maximize2,
+  Minimize2,
+  Minus,
   Monitor,
   Play,
   RefreshCw,
@@ -32,21 +36,25 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { gameActivityTime, type AppSettings, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceImportResult, type SourceMatch, type SyncStatus } from "@hynite/core";
+import { gameActivityTime, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 
-type Route = "home" | "trending" | "library" | "settings";
+type Route = "home" | "trending" | "library" | "search" | "settings";
 
 const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
   { id: "home", label: "Home", icon: Home },
   { id: "trending", label: "Trending", icon: Flame },
   { id: "library", label: "Library", icon: Library },
+  { id: "search", label: "Search", icon: Search },
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
 const HERO_AUTOPLAY_MS = 9000;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
+const DOWNLOAD_MATCH_BATCH_SIZE = 20;
+const DOWNLOAD_MATCH_SEARCH_LIMIT = 500;
 const APP_ASSET_BASE_URL = import.meta.env.BASE_URL;
+const sourceAvailabilityCache = new Map<string, SourceExactMatch[]>();
 
 function appAsset(name: string): string {
   return `${APP_ASSET_BASE_URL}${name}`;
@@ -62,6 +70,50 @@ function BrandLogo({ className, sizes }: { className?: string; sizes: string }) 
       alt="Hynite"
       draggable={false}
     />
+  );
+}
+
+function TitleBar() {
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    void window.hynite.window.isMaximized().then(setMaximized);
+    return window.hynite.window.onMaximizeChanged(setMaximized);
+  }, []);
+
+  return (
+    <header className="titlebar">
+      <span className="titlebar-drag" />
+      <div className="titlebar-controls">
+        <button
+          type="button"
+          className="titlebar-btn"
+          tabIndex={-1}
+          onClick={() => void window.hynite.window.minimize()}
+          aria-label="Minimize"
+        >
+          <Minus size={11} />
+        </button>
+        <button
+          type="button"
+          className="titlebar-btn"
+          tabIndex={-1}
+          onClick={() => void window.hynite.window.maximize()}
+          aria-label={maximized ? "Restore" : "Maximize"}
+        >
+          {maximized ? <Minimize2 size={10} /> : <Maximize2 size={10} />}
+        </button>
+        <button
+          type="button"
+          className="titlebar-btn close"
+          tabIndex={-1}
+          onClick={() => void window.hynite.window.close()}
+          aria-label="Close"
+        >
+          <X size={12} />
+        </button>
+      </div>
+    </header>
   );
 }
 
@@ -351,14 +403,60 @@ function GameRow({ title, description, games, onSelect }: { title: string; descr
   );
 }
 
+function SourceAvailabilityTag({ game, libraryGameIds }: { game: Game; libraryGameIds: Set<string> }) {
+  const [matches, setMatches] = useState<SourceExactMatch[]>(() => sourceAvailabilityCache.get(game.title) ?? []);
+  const isLibraryGame = libraryGameIds.has(game.id);
+
+  useEffect(() => {
+    if (isLibraryGame) {
+      setMatches([]);
+      return;
+    }
+
+    const cached = sourceAvailabilityCache.get(game.title);
+    if (cached) {
+      setMatches(cached);
+      return;
+    }
+
+    let cancelled = false;
+    void window.hynite.sources.exactTitleMatches(game.title)
+      .then((nextMatches) => {
+        sourceAvailabilityCache.set(game.title, nextMatches);
+        if (!cancelled) {
+          setMatches(nextMatches);
+        }
+      })
+      .catch(console.error);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [game.id, game.title, isLibraryGame]);
+
+  if (isLibraryGame || matches.length === 0) {
+    return null;
+  }
+
+  const sourceText = matches.map((match) => `${match.sourceName} (${match.count})`).join(", ");
+  return (
+    <span className="source-match-tag" title={sourceText}>
+      <Link2 size={13} />
+      Available in sources
+    </span>
+  );
+}
+
 function Hero({
   home,
   settings,
+  libraryGameIds,
   onSelect,
   onSync
 }: {
   home?: HomeModel;
   settings?: AppSettings;
+  libraryGameIds: Set<string>;
   onSelect: (game: Game) => void;
   onSync: () => void;
 }) {
@@ -491,6 +589,7 @@ function Hero({
             >
               <h1>{heroGame.title}</h1>
               <p>{heroGame.shortDescription || heroMeta(heroGame).join(" · ") || "Steam Store feature"}</p>
+              <SourceAvailabilityTag game={heroGame} libraryGameIds={libraryGameIds} />
               <div className="hero-meta-grid">
                 {heroMeta(heroGame).map((item) => (
                   <span key={item}>{item}</span>
@@ -568,17 +667,19 @@ function Hero({
 function HomeScreen({
   home,
   settings,
+  libraryGameIds,
   onSelect,
   onSync
 }: {
   home?: HomeModel;
   settings?: AppSettings;
+  libraryGameIds: Set<string>;
   onSelect: (game: Game) => void;
   onSync: () => void;
 }) {
   return (
     <main className="page">
-      <Hero home={home} settings={settings} onSelect={onSelect} onSync={onSync} />
+      <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onSync={onSync} />
       <GameRow title="Recently played" games={home?.continuePlaying ?? []} onSelect={onSelect} />
       <GameRow title="Most played" games={home?.mostPlayed ?? []} onSelect={onSelect} />
     </main>
@@ -605,7 +706,7 @@ function scrollToTrendRow(row: HomeTrendRow) {
   document.getElementById(`trend-row-${row.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function TrendingScreen({ home, settings, onSelect }: { home?: HomeModel; settings?: AppSettings; onSelect: (game: Game) => void }) {
+function TrendingScreen({ home, settings, libraryGameIds, onSelect }: { home?: HomeModel; settings?: AppSettings; libraryGameIds: Set<string>; onSelect: (game: Game) => void }) {
   const rows = home?.trendingRows ?? [];
   const spotlight = rows.find((row) => row.games.length > 0)?.games[0] ?? home?.popularNow[0];
   const spotlightImage = spotlight ? heroStill(spotlight) : undefined;
@@ -652,6 +753,7 @@ function TrendingScreen({ home, settings, onSelect }: { home?: HomeModel; settin
           </span>
           <h1>{spotlight.title}</h1>
           <p>{trendSummary(spotlight)}</p>
+          <SourceAvailabilityTag game={spotlight} libraryGameIds={libraryGameIds} />
           <div className="trend-stat-list">
             {trendStats(spotlight).slice(0, 5).map((item) => (
               <span key={item}>{item}</span>
@@ -778,48 +880,114 @@ function LibraryScreen({
 }
 
 function SourcesScreen() {
-  const [json, setJson] = useState("");
-  const [url, setUrl] = useState("");
+  const [sources, setSources] = useState<DownloadSourceInfo[]>([]);
+  const [addUrl, setAddUrl] = useState("");
+  const [addPhase, setAddPhase] = useState<"idle" | "open">("idle");
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState<string | undefined>();
+  const [addResult, setAddResult] = useState<SourceImportResult | undefined>();
+  const addJsonRef = useRef<HTMLTextAreaElement>(null);
+  const [refreshingId, setRefreshingId] = useState<string | undefined>();
+  const [refreshSaving, setRefreshSaving] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | undefined>();
+  const [refreshResult, setRefreshResult] = useState<SourceImportResult | undefined>();
+  const refreshJsonRef = useRef<HTMLTextAreaElement>(null);
   const [searchTitle, setSearchTitle] = useState("");
   const [matches, setMatches] = useState<SourceMatch[]>([]);
-  const [result, setResult] = useState<SourceImportResult | undefined>();
-  const [error, setError] = useState<string | undefined>();
+  const [searchError, setSearchError] = useState<string | undefined>();
 
-  async function importJson(value: string) {
-    setError(undefined);
-    setResult(undefined);
+  useEffect(() => {
+    void window.hynite.sources.list().then(setSources).catch(console.error);
+  }, []);
+
+  async function reloadSources() {
+    sourceAvailabilityCache.clear();
+    setSources(await window.hynite.sources.list());
+  }
+
+  function openAddUrl() {
+    const trimmed = addUrl.trim();
+    if (!trimmed) return;
+    void window.hynite.native.openExternal(trimmed);
+    setAddPhase("open");
+    setAddError(undefined);
+    setAddResult(undefined);
+  }
+
+  async function saveAddJson() {
+    const json = addJsonRef.current?.value.trim() ?? "";
+    const urlTrimmed = addUrl.trim();
+    if (!json) return;
+    setAddSaving(true);
+    setAddError(undefined);
+    setAddResult(undefined);
     try {
-      setResult(await window.hynite.sources.import({ kind: "json", value }));
-      setJson("");
+      const result = await window.hynite.sources.import({ kind: "json", value: json, url: urlTrimmed || undefined });
+      setAddResult(result);
+      setAddUrl("");
+      setAddPhase("idle");
+      if (addJsonRef.current) addJsonRef.current.value = "";
+      await reloadSources();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Source import failed.");
+      setAddError(err instanceof Error ? err.message : "Import failed.");
+    } finally {
+      setAddSaving(false);
     }
   }
 
-  async function importUrl() {
-    setError(undefined);
-    setResult(undefined);
+  function cancelAdd() {
+    setAddPhase("idle");
+    setAddError(undefined);
+    setAddResult(undefined);
+    if (addJsonRef.current) addJsonRef.current.value = "";
+  }
+
+  function openRefreshUrl(source: DownloadSourceInfo) {
+    if (!source.url) return;
+    void window.hynite.native.openExternal(source.url);
+    setRefreshingId(source.id);
+    setRefreshError(undefined);
+    setRefreshResult(undefined);
+  }
+
+  async function saveRefreshJson(sourceId: string) {
+    const json = refreshJsonRef.current?.value.trim() ?? "";
+    if (!json) return;
+    setRefreshSaving(true);
+    setRefreshError(undefined);
+    setRefreshResult(undefined);
     try {
-      setResult(await window.hynite.sources.import({ kind: "url", value: url }));
-      setUrl("");
+      const result = await window.hynite.sources.refreshSource(sourceId, json);
+      setRefreshResult(result);
+      setRefreshingId(undefined);
+      if (refreshJsonRef.current) refreshJsonRef.current.value = "";
+      await reloadSources();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Source import failed.");
+      setRefreshError(err instanceof Error ? err.message : "Refresh failed.");
+    } finally {
+      setRefreshSaving(false);
     }
   }
 
-  async function onFile(file?: File) {
-    if (!file) {
-      return;
-    }
-    await importJson(await file.text());
+  function cancelRefresh() {
+    setRefreshingId(undefined);
+    setRefreshError(undefined);
+    setRefreshResult(undefined);
+    if (refreshJsonRef.current) refreshJsonRef.current.value = "";
+  }
+
+  async function removeSource(id: string) {
+    if (refreshingId === id) cancelRefresh();
+    await window.hynite.sources.remove(id);
+    await reloadSources();
   }
 
   async function searchSources() {
-    setError(undefined);
+    setSearchError(undefined);
     try {
       setMatches(await window.hynite.sources.searchTitle(searchTitle));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Source search failed.");
+      setSearchError(err instanceof Error ? err.message : "Search failed.");
     }
   }
 
@@ -831,49 +999,137 @@ function SourcesScreen() {
     <div className="source-page settings-source-tab">
       <div className="screen-title">
         <h1>Sources</h1>
-        <p>User-managed Hydra-compatible JSON sources. Imported links are only shown and copied.</p>
+        <p>Hydra-compatible JSON sources for download links.</p>
       </div>
-      <section className="source-layout">
-        <div className="source-panel">
-          <h2>Import JSON</h2>
-          <textarea value={json} onChange={(event) => setJson(event.target.value)} placeholder='{"name":"My source","downloads":[...]}' />
-          <div className="source-actions">
-            <label className="file-action">
-              File
-              <input type="file" accept="application/json,.json" onChange={(event) => void onFile(event.currentTarget.files?.[0])} />
-            </label>
-            <button className="primary-action" disabled={!json.trim()} onClick={() => void importJson(json)}>
-              Import
+
+      <section className="source-add-section source-panel">
+        <h2>Add source</h2>
+        <p className="muted source-add-hint">Enter a URL, open it in your browser, then paste the JSON back here.</p>
+        <div className="source-url-row">
+          <input
+            className="plain-input"
+            value={addUrl}
+            onChange={(e) => setAddUrl(e.target.value)}
+            placeholder="https://example.com/source.json"
+            onKeyDown={(e) => { if (e.key === "Enter" && addUrl.trim() && addPhase === "idle") openAddUrl(); }}
+          />
+          {addPhase === "idle" ? (
+            <button className="icon-action" disabled={!addUrl.trim()} onClick={openAddUrl}>
+              <ExternalLink size={14} />
+              Open in browser
             </button>
+          ) : (
+            <button className="icon-action" onClick={cancelAdd}>
+              <X size={14} />
+              Cancel
+            </button>
+          )}
+        </div>
+        {addPhase === "open" && (
+          <div className="source-paste-area">
+            <textarea
+              ref={addJsonRef}
+              placeholder="Paste the JSON from the page here…"
+              autoFocus
+            />
+            <div className="source-actions">
+              <button className="primary-action" disabled={addSaving} onClick={() => void saveAddJson()}>
+                {addSaving ? "Saving…" : "Save source"}
+              </button>
+            </div>
+            {addError && <p className="error-line">{addError}</p>}
           </div>
-        </div>
-        <div className="source-panel">
-          <h2>Import URL</h2>
-          <input className="plain-input" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/source.json" />
-          <button className="primary-action" disabled={!url.trim()} onClick={() => void importUrl()}>
-            Import URL
-          </button>
-          {result ? (
-            <p className="result-line">
-              Imported {result.importedEntries} entries from {result.name}. Skipped {result.skippedEntries}.
-            </p>
-          ) : null}
-          {error ? <p className="error-line">{error}</p> : null}
-        </div>
+        )}
+        {addResult && (
+          <p className="result-line">
+            Saved <strong>{addResult.name}</strong> — {addResult.importedEntries.toLocaleString()} entries imported, {addResult.skippedEntries} skipped.
+          </p>
+        )}
       </section>
-      <section className="source-search">
+
+      {sources.length > 0 && (
+        <section className="source-active">
+          <div className="section-head">
+            <h2>Active sources</h2>
+          </div>
+          <div className="source-list">
+            {sources.map((source) => (
+              <div className="source-card" key={source.id}>
+                <div className="source-row">
+                  <div className="source-row-info">
+                    <strong>{source.name}</strong>
+                    <span>
+                      {source.entryCount.toLocaleString()} entries
+                      {source.url ? (
+                        <>
+                          {" · "}
+                          <span className="source-url" title={source.url}>{source.url}</span>
+                        </>
+                      ) : " · manual import"}
+                      {source.lastFetchedAt ? ` · updated ${formatDate(source.lastFetchedAt)}` : ""}
+                    </span>
+                  </div>
+                  <div className="source-row-actions">
+                    {source.url && refreshingId !== source.id && (
+                      <button className="icon-action" title="Refresh source" onClick={() => openRefreshUrl(source)}>
+                        <RefreshCw size={14} />
+                        Refresh
+                      </button>
+                    )}
+                    {source.url && refreshingId === source.id && (
+                      <button className="icon-action" onClick={cancelRefresh}>
+                        <X size={14} />
+                        Cancel
+                      </button>
+                    )}
+                    <button className="icon-action danger" title="Remove source" onClick={() => void removeSource(source.id)}>
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+                {refreshingId === source.id && (
+                  <div className="source-paste-area">
+                    <p className="muted source-refresh-hint">
+                      The page is open in your browser. Copy the raw JSON and paste it below.
+                    </p>
+                    <textarea
+                      ref={refreshJsonRef}
+                      placeholder="Paste the updated JSON here…"
+                      autoFocus
+                    />
+                    <div className="source-actions">
+                      <button className="primary-action" disabled={refreshSaving} onClick={() => void saveRefreshJson(source.id)}>
+                        {refreshSaving ? "Saving…" : "Update source"}
+                      </button>
+                    </div>
+                    {refreshError && <p className="error-line">{refreshError}</p>}
+                    {refreshResult && (
+                      <p className="result-line">
+                        Updated <strong>{refreshResult.name}</strong> — {refreshResult.importedEntries.toLocaleString()} entries imported, {refreshResult.skippedEntries} skipped.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="source-search source-panel">
         <div className="section-head">
           <h2>Search sources</h2>
         </div>
         <div className="source-searchbar">
           <label className="search-box">
             <Search size={15} />
-            <input value={searchTitle} onChange={(event) => setSearchTitle(event.target.value)} placeholder="Search by game title" />
+            <input value={searchTitle} onChange={(e) => setSearchTitle(e.target.value)} placeholder="Search by game title" onKeyDown={(e) => { if (e.key === "Enter" && searchTitle.trim()) void searchSources(); }} />
           </label>
           <button className="primary-action" disabled={!searchTitle.trim()} onClick={() => void searchSources()}>
             Search
           </button>
         </div>
+        {searchError && <p className="error-line">{searchError}</p>}
         <div className="source-results">
           {matches.length === 0 ? <p className="muted">No matches yet.</p> : null}
           {matches.map((match) => (
@@ -896,6 +1152,76 @@ function SourcesScreen() {
           ))}
         </div>
       </section>
+    </div>
+  );
+}
+
+function SteamSearchScreen({ onSelect }: { onSelect: (game: SteamSearchResult) => void }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SteamSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const [searched, setSearched] = useState(false);
+
+  async function doSearch(q: string) {
+    const trimmed = q.trim();
+    if (!trimmed) return;
+    setSearching(true);
+    setError(undefined);
+    setSearched(false);
+    try {
+      const found = await window.hynite.steam.search(trimmed);
+      setResults(found);
+      setSearched(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Search failed.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  return (
+    <div className="steam-search-screen">
+      <div className="screen-title">
+        <h1>Search Steam</h1>
+        <p>Browse the Steam catalog.</p>
+      </div>
+      <div className="steam-search-bar">
+        <label className="search-box">
+          <Search size={15} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search games…"
+            onKeyDown={(e) => { if (e.key === "Enter" && query.trim()) void doSearch(query); }}
+            autoFocus
+          />
+        </label>
+        <button className="primary-action" disabled={!query.trim() || searching} onClick={() => void doSearch(query)}>
+          {searching ? "Searching…" : "Search"}
+        </button>
+      </div>
+      {error && <p className="error-line">{error}</p>}
+      {searched && results.length === 0 && !searching && (
+        <p className="muted steam-search-empty">No results for "{query}".</p>
+      )}
+      <div className="steam-search-grid">
+        {results.map((result) => (
+          <button key={result.appId} className="steam-search-card" onClick={() => onSelect(result)}>
+            <div className="steam-search-capsule">
+              <img src={result.capsuleUrl} alt={result.title} loading="lazy" />
+            </div>
+            <div className="steam-search-info">
+              <strong>{result.title}</strong>
+              <div className="steam-search-meta">
+                {result.releaseDate && <span>{result.releaseDate}</span>}
+                {result.reviewSummary && <span className="steam-review">{result.reviewSummary}</span>}
+                {result.price && <span className="steam-price">{result.price}</span>}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1261,9 +1587,55 @@ function DetailOverlay({
     | { kind: "trailer"; label: string; sourceUrl: string; posterUrl?: string }
     | { kind: "image"; label: string; sourceUrl: string; thumbnailUrl: string };
   const [viewer, setViewer] = useState<{ images: ImageViewerItem[]; index: number } | undefined>();
+  const [downloadQuery, setDownloadQuery] = useState(game.title);
+  const [downloadMatches, setDownloadMatches] = useState<SourceMatch[]>(game.sourceMatches);
+  const [downloadSearching, setDownloadSearching] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | undefined>();
+  const [expandedSourceIds, setExpandedSourceIds] = useState<Set<string>>(() => new Set());
+  const [visibleBySource, setVisibleBySource] = useState<Record<string, number>>({});
 
   async function copy(text: string) {
     await window.hynite.clipboard.copy(text);
+  }
+
+  async function searchDownloadOptions() {
+    const trimmed = downloadQuery.trim();
+    if (!trimmed) return;
+    setDownloadSearching(true);
+    setDownloadError(undefined);
+    try {
+      const nextMatches = await window.hynite.sources.searchTitle(trimmed, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT });
+      setDownloadMatches(nextMatches);
+      setExpandedSourceIds(new Set());
+      setVisibleBySource({});
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "Search failed.");
+    } finally {
+      setDownloadSearching(false);
+    }
+  }
+
+  function toggleSource(sourceId: string) {
+    const expanding = !expandedSourceIds.has(sourceId);
+    setExpandedSourceIds((current) => {
+      const next = new Set(current);
+      if (next.has(sourceId)) {
+        next.delete(sourceId);
+      } else {
+        next.add(sourceId);
+      }
+      return next;
+    });
+    if (expanding) {
+      setVisibleBySource((current) => ({ ...current, [sourceId]: current[sourceId] ?? DOWNLOAD_MATCH_BATCH_SIZE }));
+    }
+  }
+
+  function showMoreSourceMatches(sourceId: string) {
+    setVisibleBySource((current) => ({
+      ...current,
+      [sourceId]: (current[sourceId] ?? DOWNLOAD_MATCH_BATCH_SIZE) + DOWNLOAD_MATCH_BATCH_SIZE
+    }));
   }
 
   const cover = primaryCover(game);
@@ -1292,9 +1664,26 @@ function DetailOverlay({
     game.platforms?.linux ? "Linux" : undefined
   ].filter(Boolean);
   const detailMeta = [game.developers[0], game.genres[0], game.releaseDate ? formatDate(game.releaseDate) : undefined].filter(Boolean).join(" / ");
+  const downloadGroups = useMemo(() => {
+    const groups = new Map<string, { sourceId: string; sourceName: string; matches: SourceMatch[] }>();
+    for (const match of downloadMatches) {
+      const existing = groups.get(match.sourceId);
+      if (existing) {
+        existing.matches.push(match);
+      } else {
+        groups.set(match.sourceId, { sourceId: match.sourceId, sourceName: match.sourceName, matches: [match] });
+      }
+    }
+    return [...groups.values()];
+  }, [downloadMatches]);
 
   useEffect(() => {
     setMediaIndex(0);
+    setDownloadQuery(game.title);
+    setDownloadMatches(game.sourceMatches);
+    setDownloadError(undefined);
+    setExpandedSourceIds(new Set());
+    setVisibleBySource({});
   }, [game.id]);
 
   return (
@@ -1508,27 +1897,73 @@ function DetailOverlay({
 
             <section className="detail-block compact source-matches">
               <h2>Download options</h2>
-              {game.sourceMatches.length === 0 ? (
+              <div className="download-search-row">
+                <label className="search-box">
+                  <Search size={14} />
+                  <input
+                    value={downloadQuery}
+                    onChange={(event) => setDownloadQuery(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Enter" && downloadQuery.trim()) void searchDownloadOptions(); }}
+                    placeholder="Search sources"
+                  />
+                </label>
+                <button className="icon-action" disabled={!downloadQuery.trim() || downloadSearching} onClick={() => void searchDownloadOptions()}>
+                  {downloadSearching ? "Searching..." : "Search"}
+                </button>
+              </div>
+              {downloadError ? <p className="error-line">{downloadError}</p> : null}
+              {downloadGroups.length === 0 ? (
                 <p className="muted">No source matches.</p>
               ) : (
-                game.sourceMatches.map((match) => (
-                  <div className="match-row" key={match.id}>
-                    <div>
-                      <strong>{match.title}</strong>
-                      <span>
-                        {match.sourceName} / {match.confidence} / {match.fileSize ?? "size unknown"}
-                      </span>
-                    </div>
-                    <div className="uri-actions">
-                      {match.uris.slice(0, 3).map((uri) => (
-                        <button key={uri} className="icon-action" title={uri} onClick={() => void copy(uri).then(onChanged)}>
-                          <Clipboard size={15} />
-                          {uri.startsWith("magnet:") ? "Copy magnet" : "Copy link"}
+                <div className="source-match-groups">
+                  {downloadGroups.map((group) => {
+                    const expanded = expandedSourceIds.has(group.sourceId);
+                    const visibleCount = visibleBySource[group.sourceId] ?? DOWNLOAD_MATCH_BATCH_SIZE;
+                    const visibleMatches = group.matches.slice(0, visibleCount);
+                    const hasMore = visibleCount < group.matches.length;
+                    const bestConfidence = group.matches.some((match) => match.score >= 1) ? "exact" : group.matches[0]?.confidence;
+                    return (
+                      <div className="source-match-group" key={group.sourceId}>
+                        <button className="source-match-toggle" type="button" onClick={() => toggleSource(group.sourceId)} aria-expanded={expanded}>
+                          <div>
+                            <strong>{group.sourceName}</strong>
+                            <span>
+                              {group.matches.length.toLocaleString()} matches / {bestConfidence}
+                            </span>
+                          </div>
+                          <ChevronDown size={16} />
                         </button>
-                      ))}
-                    </div>
-                  </div>
-                ))
+                        {expanded ? (
+                          <div className="source-match-list">
+                            {visibleMatches.map((match) => (
+                              <div className="match-row" key={match.id}>
+                                <div>
+                                  <strong>{match.title}</strong>
+                                  <span>
+                                    {match.confidence} / {match.fileSize ?? "size unknown"}
+                                  </span>
+                                </div>
+                                <div className="uri-actions">
+                                  {match.uris.slice(0, 3).map((uri) => (
+                                    <button key={uri} className="icon-action" title={uri} onClick={() => void copy(uri).then(onChanged)}>
+                                      <Clipboard size={15} />
+                                      {uri.startsWith("magnet:") ? "Copy magnet" : "Copy link"}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                            {hasMore ? (
+                              <button className="icon-action show-more-matches" type="button" onClick={() => showMoreSourceMatches(group.sourceId)}>
+                                Show more
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </section>
           </aside>
@@ -1545,6 +1980,7 @@ export function App() {
   const [home, setHome] = useState<HomeModel | undefined>();
   const [games, setGames] = useState<Game[]>([]);
   const [recentGames, setRecentGames] = useState<Game[]>([]);
+  const [libraryGameIds, setLibraryGameIds] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<GameDetail | undefined>();
   const [settings, setSettings] = useState<AppSettings | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
@@ -1554,6 +1990,7 @@ export function App() {
   const [libraryInstallState, setLibraryInstallState] = useState<InstallState | "all">("all");
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const [startupDone, setStartupDone] = useState(false);
 
   async function refresh() {
     const homePromise = window.hynite.home.get();
@@ -1563,14 +2000,20 @@ export function App() {
       window.hynite.settings.get()
     ]);
     setGames(nextGames);
+    setLibraryGameIds(new Set(nextRecentGames.map((game) => game.id)));
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     setSettings(nextSettings);
     void homePromise.then(setHome).catch(console.error);
   }
 
   useEffect(() => {
-    const minimumStartupPaint = new Promise((resolve) => setTimeout(resolve, 900));
-    void Promise.all([refresh(), window.hynite.sync.status().then(setSyncStatus), minimumStartupPaint]).finally(() => setInitialLoadComplete(true));
+    if (!initialLoadComplete) return;
+    // Wait for two animation frames so the main content has actually painted before hiding the overlay.
+    requestAnimationFrame(() => requestAnimationFrame(() => setStartupDone(true)));
+  }, [initialLoadComplete]);
+
+  useEffect(() => {
+    void Promise.all([refresh(), window.hynite.sync.status().then(setSyncStatus)]).finally(() => setInitialLoadComplete(true));
     const unsubscribeSync = window.hynite.sync.onStatusChanged((status) => {
       setSyncStatus(status);
       if (!status.active && status.phase === "complete") {
@@ -1580,6 +2023,7 @@ export function App() {
     const unsubscribeGameUpdated = window.hynite.games.onUpdated((game) => {
       setGames((current) => current.map((item) => (item.id === game.id ? game : item)));
       setRecentGames((current) => current.map((item) => (item.id === game.id ? game : item)));
+      setLibraryGameIds((current) => new Set([...current, game.id]));
       setSelected((current) => (current?.id === game.id ? game : current));
       void window.hynite.home.get().then(setHome).catch(console.error);
     });
@@ -1612,17 +2056,17 @@ export function App() {
       try {
         setSelected(await window.hynite.games.hydrateDiscovery(game));
       } catch {
-        setSelected({ ...game, sourceMatches: await window.hynite.sources.searchTitle(game.title) });
+        setSelected({ ...game, sourceMatches: await window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT }) });
       }
     }
   }
 
   const routeContent = useMemo(() => {
     if (route === "home") {
-      return <HomeScreen home={home} settings={settings} onSelect={(game) => void selectGame(game)} onSync={() => void syncSteam()} />;
+      return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onSync={() => void syncSteam()} />;
     }
     if (route === "trending") {
-      return <TrendingScreen home={home} settings={settings} onSelect={(game) => void selectGame(game)} />;
+      return <TrendingScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} />;
     }
     if (route === "library") {
       return (
@@ -1641,6 +2085,15 @@ export function App() {
         />
       );
     }
+    if (route === "search") {
+      return (
+        <SteamSearchScreen
+          onSelect={(result) => {
+            void window.hynite.native.openExternal(`https://store.steampowered.com/app/${result.appId}/`);
+          }}
+        />
+      );
+    }
     return (
       <SettingsScreen
         settings={settings}
@@ -1653,14 +2106,12 @@ export function App() {
         onSeed={() => void window.hynite.debug.seed().then(() => refresh())}
       />
     );
-  }, [route, home, games, query, settings, syncStatus, librarySort, librarySortDirection, libraryInstallState]);
-
-  if (!initialLoadComplete) {
-    return <StartupLoading syncStatus={syncStatus} />;
-  }
+  }, [route, home, games, query, settings, syncStatus, libraryGameIds, librarySort, librarySortDirection, libraryInstallState]);
 
   return (
+    <>
     <div className="app-shell">
+      <TitleBar />
       <div className="app-body">
         <aside className="rail">
           <div className="rail-brand">
@@ -1710,5 +2161,11 @@ export function App() {
         <span>v0.1.0</span>
       </footer>
     </div>
+    {!startupDone && (
+      <div className="startup-overlay">
+        <StartupLoading syncStatus={syncStatus} />
+      </div>
+    )}
+    </>
   );
 }

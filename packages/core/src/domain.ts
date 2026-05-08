@@ -179,8 +179,7 @@ export type SyncStatus = {
 };
 
 export type SourceImportInput =
-  | { kind: "json"; value: string }
-  | { kind: "url"; value: string };
+  | { kind: "json"; value: string; url?: string };
 
 export type SourceImportResult = {
   sourceId: string;
@@ -189,10 +188,30 @@ export type SourceImportResult = {
   skippedEntries: number;
 };
 
+export type DownloadSourceInfo = {
+  id: string;
+  name: string;
+  url?: string;
+  entryCount: number;
+  importedAt: string;
+  lastFetchedAt?: string;
+};
+
 export type SourceMatchConfidence = "high" | "medium" | "low";
+
+export type SourceSearchOptions = {
+  limit?: number;
+};
+
+export type SourceExactMatch = {
+  sourceId: string;
+  sourceName: string;
+  count: number;
+};
 
 export type SourceMatch = {
   id: string;
+  sourceId: string;
   sourceName: string;
   title: string;
   fileSize?: string;
@@ -268,6 +287,15 @@ export type ProcessEvent = {
   pid: number;
   type: "started" | "exited";
   exitCode?: number;
+};
+
+export type SteamSearchResult = {
+  appId: string;
+  title: string;
+  capsuleUrl: string;
+  price?: string;
+  reviewSummary?: string;
+  releaseDate?: string;
 };
 
 export type SecretInput = {

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CURRENT_METADATA_VERSION, HyniteRepository } from "../src/repository";
+import { normalizeTitle } from "@hynite/source-search";
 
 let tempDir: string | undefined;
 
@@ -70,6 +71,55 @@ describe("HyniteRepository", () => {
     expect(repository.getGame("steam:730")?.importedAt).toBe(firstImportAt);
     expect(repository.getGame("steam:730")?.addedAt).toBe("2024-02-01T00:00:00.000Z");
     expect(repository.getGame("steam:730")?.playtimeMinutes).toBe(60);
+
+    repository.close();
+  });
+
+  it("groups exact normalized download title matches by source", () => {
+    const repository = createRepository();
+    repository.saveDownloadSource({
+      id: "source-1",
+      name: "Source A",
+      rawHash: "hash-a",
+      entries: [
+        {
+          id: "entry-1",
+          title: "Baldur's Gate 3",
+          normalizedTitle: normalizeTitle("Baldur's Gate 3"),
+          uris: ["magnet:?xt=urn:btih:a"]
+        },
+        {
+          id: "entry-2",
+          title: "BALDURS GATE 3 Deluxe Edition",
+          normalizedTitle: normalizeTitle("BALDURS GATE 3 Deluxe Edition"),
+          uris: ["magnet:?xt=urn:btih:b"]
+        }
+      ]
+    });
+    repository.saveDownloadSource({
+      id: "source-2",
+      name: "Source B",
+      rawHash: "hash-b",
+      entries: [
+        {
+          id: "entry-3",
+          title: "Baldurs Gate 3 - PC",
+          normalizedTitle: normalizeTitle("Baldurs Gate 3 - PC"),
+          uris: ["magnet:?xt=urn:btih:c"]
+        },
+        {
+          id: "entry-4",
+          title: "Baldurs Gate 2",
+          normalizedTitle: normalizeTitle("Baldurs Gate 2"),
+          uris: ["magnet:?xt=urn:btih:d"]
+        }
+      ]
+    });
+
+    expect(repository.exactDownloadTitleMatches(normalizeTitle("baldurs gate 3"))).toEqual([
+      { sourceId: "source-1", sourceName: "Source A", count: 2 },
+      { sourceId: "source-2", sourceName: "Source B", count: 1 }
+    ]);
 
     repository.close();
   });

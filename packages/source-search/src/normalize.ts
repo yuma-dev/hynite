@@ -1,4 +1,5 @@
 const editionWords = [
+  "dlc",
   "deluxe",
   "ultimate",
   "complete",
@@ -22,10 +23,11 @@ export function normalizeTitle(title: string): string {
     .toLocaleLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/['’]/g, "")
+    .replace(/['\u2019]/g, "")
     .replace(/&/g, " and ")
     .replace(/\b(vr|hd|dx\d+|x64|x86)\b/g, " ")
-    .replace(/[\[\]().:_\-+/\\|]/g, " ")
+    .replace(/[\u2013\u2014]/g, " ")
+    .replace(/[\[\]().:_\-+/\\|,!?"]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -35,4 +37,3 @@ export function normalizeTitle(title: string): string {
 
   return value.replace(/\s+/g, " ").trim();
 }
-

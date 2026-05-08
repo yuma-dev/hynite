@@ -1,16 +1,20 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppSettings,
+  DownloadSourceInfo,
   Game,
   GameDetail,
   HomeModel,
   LaunchSession,
   LibraryQuery,
   ProviderId,
+  SourceExactMatch,
   SourceImportInput,
   SourceImportResult,
   SourceMatch,
+  SourceSearchOptions,
   SteamPairingResult,
+  SteamSearchResult,
   SyncStatus,
   SyncResult
 } from "@hynite/core";
@@ -44,8 +48,13 @@ const api = {
   },
   sources: {
     import: (input: SourceImportInput): Promise<SourceImportResult> => ipcRenderer.invoke("sources:import", input),
+    list: (): Promise<DownloadSourceInfo[]> => ipcRenderer.invoke("sources:list"),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke("sources:remove", id),
+    refreshSource: (id: string, json: string): Promise<SourceImportResult> =>
+      ipcRenderer.invoke("sources:refreshSource", id, json),
     search: (gameId: string): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:search", gameId),
-    searchTitle: (title: string): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:searchTitle", title)
+    searchTitle: (title: string, options?: SourceSearchOptions): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:searchTitle", title, options),
+    exactTitleMatches: (title: string): Promise<SourceExactMatch[]> => ipcRenderer.invoke("sources:exactTitleMatches", title)
   },
   clipboard: {
     copy: (text: string): Promise<void> => ipcRenderer.invoke("clipboard:copy", text)
@@ -60,7 +69,8 @@ const api = {
   steam: {
     pair: (): Promise<SteamPairingResult> => ipcRenderer.invoke("steam:pair"),
     saveApiKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("steam:saveApiKey", apiKey),
-    disconnect: (): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnect")
+    disconnect: (): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnect"),
+    search: (query: string): Promise<SteamSearchResult[]> => ipcRenderer.invoke("steam:search", query)
   },
   metadata: {
     saveSteamGridDbKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("metadata:saveSteamGridDbKey", apiKey),
@@ -68,6 +78,17 @@ const api = {
   },
   debug: {
     seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed")
+  },
+  window: {
+    minimize: (): Promise<void> => ipcRenderer.invoke("window:minimize"),
+    maximize: (): Promise<void> => ipcRenderer.invoke("window:maximize"),
+    close: (): Promise<void> => ipcRenderer.invoke("window:close"),
+    isMaximized: (): Promise<boolean> => ipcRenderer.invoke("window:isMaximized"),
+    onMaximizeChanged: (callback: (isMaximized: boolean) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: boolean) => callback(value);
+      ipcRenderer.on("window:maximizeChanged", listener);
+      return () => ipcRenderer.removeListener("window:maximizeChanged", listener);
+    }
   }
 };
 

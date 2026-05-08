@@ -93,4 +93,26 @@ export const migrations = [
       UPDATE games SET added_at = NULL;
     `
   }
+  ,
+  {
+    id: 5,
+    sql: `
+      -- Recreate download_sources without the UNIQUE constraint on raw_hash,
+      -- and add url + last_fetched_at for auto-refresh support.
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE download_sources_v2 (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        url TEXT,
+        raw_hash TEXT NOT NULL,
+        imported_at TEXT NOT NULL,
+        last_fetched_at TEXT
+      );
+      INSERT INTO download_sources_v2 (id, name, raw_hash, imported_at)
+        SELECT id, name, raw_hash, imported_at FROM download_sources;
+      DROP TABLE download_sources;
+      ALTER TABLE download_sources_v2 RENAME TO download_sources;
+      PRAGMA foreign_keys = ON;
+    `
+  }
 ] as const;

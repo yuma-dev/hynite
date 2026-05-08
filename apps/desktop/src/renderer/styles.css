@@ -62,14 +62,91 @@ button {
 }
 
 .app-shell {
+  --rail-width: 210px;
+  --rail-expanded-width: 210px;
   width: 100vw;
   height: 100vh;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 34%),
     var(--bg-0);
   display: grid;
-  grid-template-rows: 1fr 24px;
+  grid-template-rows: 32px 1fr 24px;
   overflow: hidden;
+}
+
+/* The titlebar's left portion (over the rail) mirrors the rail background and its right
+   border, making the sidebar appear to extend flush to the top of the window. */
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  flex: none;
+  -webkit-app-region: drag;
+  user-select: none;
+  position: relative;
+  z-index: 200;
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.015) var(--rail-width),
+    transparent var(--rail-width)
+  );
+}
+
+.titlebar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(var(--rail-width) - 0.5px);
+  width: 0.5px;
+  height: 100%;
+  background: var(--line);
+  pointer-events: none;
+}
+
+.titlebar-drag {
+  flex: 1;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: stretch;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-btn {
+  width: 46px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition:
+    background 0.1s,
+    color 0.1s;
+}
+
+.titlebar-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.titlebar-btn.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.titlebar-btn:active {
+  opacity: 0.65;
+}
+
+.startup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  -webkit-app-region: drag;
 }
 
 .startup-screen {
@@ -221,6 +298,7 @@ button {
   font-weight: 700;
   letter-spacing: 0.12em;
   white-space: nowrap;
+  -webkit-app-region: drag;
 }
 
 .rail-logo {
@@ -522,6 +600,22 @@ button {
   gap: 8px;
   flex-wrap: wrap;
   margin: 16px 0 12px;
+}
+
+.source-match-tag {
+  width: max-content;
+  max-width: 100%;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(130, 220, 170, 0.14);
+  color: rgba(190, 255, 215, 0.95);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .hero-meta-grid span,
@@ -1125,6 +1219,65 @@ textarea::placeholder {
   color: var(--text-2);
 }
 
+.source-active {
+  border-top: 0.5px solid var(--line);
+  padding-top: 18px;
+  margin-bottom: 28px;
+  display: grid;
+  gap: 12px;
+}
+
+.source-list {
+  display: grid;
+  gap: 6px;
+}
+
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 0.5px solid rgba(255, 255, 255, 0.07);
+}
+
+.source-card > .source-row {
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+.source-row-info {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.source-row-info strong {
+  font-size: 13px;
+}
+
+.source-row-info span {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-url {
+  opacity: 0.7;
+  font-family: monospace;
+  font-size: 10px;
+}
+
+.icon-action.danger:hover {
+  color: #ff6b6b;
+  background: rgba(255, 80, 80, 0.12);
+}
+
 .source-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
@@ -1141,6 +1294,67 @@ textarea::placeholder {
   gap: 14px;
 }
 
+.source-add-section {
+  margin-bottom: 28px;
+}
+
+.source-add-hint,
+.source-refresh-hint {
+  font-size: 12px;
+  margin: 0;
+}
+
+.source-url-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.source-url-row .plain-input {
+  flex: 1;
+}
+
+.source-paste-area {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+}
+
+.source-paste-area textarea {
+  min-height: 140px;
+}
+
+.source-card {
+  display: grid;
+  gap: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 0.5px solid rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.source-card .source-row {
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+.source-card .source-paste-area {
+  border-radius: 0;
+  border: none;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.source-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .source-searchbar {
   display: flex;
   align-items: center;
@@ -1150,6 +1364,100 @@ textarea::placeholder {
 
 .source-results {
   display: grid;
+}
+
+.steam-search-screen {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 20px;
+  padding: 28px 32px;
+  overflow-y: auto;
+}
+
+.steam-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.steam-search-bar .search-box {
+  flex: 1;
+  max-width: 480px;
+}
+
+.steam-search-empty {
+  font-size: 13px;
+}
+
+.steam-search-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.steam-search-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.steam-search-card:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.steam-search-capsule {
+  width: 100%;
+  aspect-ratio: 231 / 87;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.steam-search-capsule img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.steam-search-info {
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.steam-search-info strong {
+  font-size: 13px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.steam-search-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.steam-review {
+  color: var(--text-2);
+}
+
+.steam-price {
+  color: var(--accent, #7eb8f7);
 }
 
 .steam-account-row {
@@ -1736,6 +2044,7 @@ dd {
   gap: 10px;
   padding: 14px 0;
   border-top: 0.5px solid var(--line);
+  min-width: 0;
 }
 
 .match-row:first-of-type {
@@ -1757,6 +2066,95 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.download-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.download-search-row .search-box {
+  min-width: 0;
+  flex: 1;
+}
+
+.source-match-groups {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.source-match-group {
+  min-width: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.source-match-toggle {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.source-match-toggle div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.source-match-toggle strong,
+.source-match-toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-match-toggle strong {
+  font-size: 12px;
+}
+
+.source-match-toggle span {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.source-match-toggle svg {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 0.16s ease;
+}
+
+.source-match-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.source-match-list {
+  display: grid;
+  padding: 0 10px 10px;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.07);
+}
+
+.source-match-list .match-row {
+  padding: 11px 0;
+}
+
+.show-more-matches {
+  justify-self: start;
+  margin-top: 4px;
 }
 
 .icon-action {
@@ -1993,6 +2391,11 @@ dd {
 }
 
 @media (max-width: 1180px) {
+  .app-shell {
+    --rail-width: 68px;
+    --rail-expanded-width: 220px;
+  }
+
   .app-body {
     --rail-width: 68px;
     --rail-expanded-width: 220px;
@@ -2170,4 +2573,3 @@ dd {
     padding: 1.4vw;
   }
 }
-

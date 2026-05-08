@@ -1,14 +1,15 @@
-import { app, BrowserWindow, clipboard, ipcMain, shell } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, net, shell } from "electron";
 import { join } from "node:path";
 import { CURRENT_METADATA_VERSION, HyniteRepository } from "@hynite/db";
 import { discoverInstalledSteamApps, SteamImporterProvider } from "@hynite/importers";
-import { makeGameId, type Game, type GameMetadataPatch, type ImportedGame, type LibraryQuery, type ProviderId, type SourceImportInput, type SyncResult } from "@hynite/core";
+import { makeGameId, type Game, type GameMetadataPatch, type ImportedGame, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamSearchResult, type SyncResult } from "@hynite/core";
 import { fetchSteamMetadata, metadataFromSteamAppInfo, refreshFusedMetadata } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
 import { HomeService } from "./homeService";
 import { NativeBridge } from "./nativeBridge";
 import { SettingsService } from "./settingsService";
 import { SourceService } from "./sourceService";
+import { searchSteamStore } from "./steamSearchService";
 import { SyncStatusService } from "./syncStatusService";
 import { pairSteamAccount } from "./steamAuthService";
 
@@ -358,6 +359,7 @@ function createWindow(): void {
     minWidth: 980,
     minHeight: 680,
     show: true,
+    frame: false,
     autoHideMenuBar: true,
     backgroundColor: "#0a0b0d",
     icon: windowIconPath,
@@ -378,6 +380,9 @@ function createWindow(): void {
   mainWindow.once("ready-to-show", () => {
     mainWindow?.focus();
   });
+
+  mainWindow.on("maximize", () => mainWindow?.webContents.send("window:maximizeChanged", true));
+  mainWindow.on("unmaximize", () => mainWindow?.webContents.send("window:maximizeChanged", false));
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     console.error(`Renderer failed to load (${errorCode}): ${errorDescription}`);
@@ -614,8 +619,12 @@ function registerIpc(): void {
   });
   ipcMain.handle("sync:status", () => syncStatusService.get());
   ipcMain.handle("sources:import", (_event, input: SourceImportInput) => sourceService.import(input));
+  ipcMain.handle("sources:list", () => sourceService.list());
+  ipcMain.handle("sources:remove", (_event, id: string) => sourceService.remove(id));
+  ipcMain.handle("sources:refreshSource", (_event, id: string, json: string) => sourceService.refreshSource(id, json));
   ipcMain.handle("sources:search", (_event, gameId: string) => sourceService.search(gameId));
-  ipcMain.handle("sources:searchTitle", (_event, title: string) => sourceService.searchTitle(title));
+  ipcMain.handle("sources:searchTitle", (_event, title: string, options) => sourceService.searchTitle(title, options));
+  ipcMain.handle("sources:exactTitleMatches", (_event, title: string) => sourceService.exactTitleMatches(title));
   ipcMain.handle("clipboard:copy", (_event, text: string) => clipboard.writeText(text));
   ipcMain.handle("settings:get", () => settingsService.get());
   ipcMain.handle("settings:update", (_event, patch) => settingsService.update(patch));
@@ -651,6 +660,9 @@ function registerIpc(): void {
     });
   });
   ipcMain.handle("steam:disconnect", async () => settingsService.update({ steamAccount: undefined }));
+  ipcMain.handle("steam:search", async (_event, query: string): Promise<SteamSearchResult[]> => {
+    return searchSteamStore(query, net.fetch);
+  });
   ipcMain.handle("metadata:saveSteamGridDbKey", async (_event, apiKey: string) => {
     const trimmed = apiKey.trim();
     if (!trimmed) {
@@ -670,6 +682,16 @@ function registerIpc(): void {
     return shell.openExternal(parsed.toString());
   });
   ipcMain.handle("native:openFolder", (_event, path: string) => shell.openPath(path));
+  ipcMain.handle("window:minimize", () => mainWindow?.minimize());
+  ipcMain.handle("window:maximize", () => {
+    if (mainWindow?.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow?.maximize();
+    }
+  });
+  ipcMain.handle("window:close", () => mainWindow?.close());
+  ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
   ipcMain.handle("debug:seed", () => {
     const seeded = repository.upsertImportedGame({
       provider: "steam",

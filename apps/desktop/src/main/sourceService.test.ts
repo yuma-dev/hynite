@@ -6,7 +6,10 @@ function makeRepository() {
   return {
     saveDownloadSource: vi.fn(),
     getGame: vi.fn(),
-    listDownloadEntries: vi.fn(() => [])
+    listSources: vi.fn(() => []),
+    listDownloadEntries: vi.fn(() => []),
+    searchDownloadEntries: vi.fn(() => []),
+    exactDownloadTitleMatches: vi.fn(() => [])
   } as unknown as HyniteRepository;
 }
 
@@ -15,30 +18,44 @@ describe("SourceService", () => {
     vi.restoreAllMocks();
   });
 
-  it("fetches remote sources with browser-compatible headers", async () => {
+  it("imports pasted JSON without a URL", async () => {
     const repository = makeRepository();
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          name: "Remote",
-          downloads: []
-        }),
-        { status: 200 }
-      )
-    );
+    const json = JSON.stringify({ name: "Local", downloads: [] });
 
-    await new SourceService(repository).import({ kind: "url", value: "https://example.com/source.json" });
+    await new SourceService(repository).import({ kind: "json", value: json });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      new URL("https://example.com/source.json"),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          accept: "application/json, text/plain, */*",
-          "user-agent": expect.stringContaining("Mozilla/5.0")
-        }),
-        redirect: "follow"
-      })
+    expect(repository.saveDownloadSource).toHaveBeenCalledWith(expect.objectContaining({ name: "Local", url: undefined }));
+  });
+
+  it("imports pasted JSON and persists the source URL", async () => {
+    const repository = makeRepository();
+    const json = JSON.stringify({ name: "Remote", downloads: [] });
+
+    await new SourceService(repository).import({ kind: "json", value: json, url: "https://example.com/source.json" });
+
+    expect(repository.saveDownloadSource).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Remote", url: "https://example.com/source.json" })
     );
-    expect(repository.saveDownloadSource).toHaveBeenCalledWith(expect.objectContaining({ name: "Remote" }));
+  });
+
+  it("refreshSource re-saves with the existing url", () => {
+    const repository = makeRepository();
+    (repository.listSources as ReturnType<typeof vi.fn>).mockReturnValue([
+      { id: "abc123", url: "https://example.com/source.json" }
+    ]);
+    const json = JSON.stringify({ name: "Remote", downloads: [] });
+
+    new SourceService(repository).refreshSource("abc123", json);
+
+    expect(repository.saveDownloadSource).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://example.com/source.json" })
+    );
+  });
+
+  it("looks up exact title matches with normalized titles", () => {
+    const repository = makeRepository();
+    new SourceService(repository).exactTitleMatches("Baldur's Gate 3 Deluxe Edition");
+
+    expect(repository.exactDownloadTitleMatches).toHaveBeenCalledWith("baldurs gate 3");
   });
 });
