@@ -270,7 +270,8 @@ public sealed class SteamAppInfoClient : IDisposable
             },
             libraryAssets = Children(common["library_assets"]),
             storeTags = Children(common["store_tags"]),
-            extended = Children(values["extended"])
+            extended = Children(values["extended"]),
+            raw = ToPlainObject(values)
         };
     }
 
@@ -335,6 +336,46 @@ public sealed class SteamAppInfoClient : IDisposable
         }
 
         return result.ToArray();
+    }
+
+    private static object? ToPlainObject(KeyValue value)
+    {
+        if (value.Children.Count == 0)
+        {
+            return Value(value);
+        }
+
+        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(value.Value))
+        {
+            result["_value"] = value.Value;
+        }
+
+        foreach (var child in value.Children)
+        {
+            if (string.IsNullOrWhiteSpace(child.Name))
+            {
+                continue;
+            }
+
+            var mapped = ToPlainObject(child);
+            if (!result.TryGetValue(child.Name, out var existing))
+            {
+                result[child.Name] = mapped;
+                continue;
+            }
+
+            if (existing is List<object?> list)
+            {
+                list.Add(mapped);
+            }
+            else
+            {
+                result[child.Name] = new List<object?> { existing, mapped };
+            }
+        }
+
+        return result;
     }
 
     public void Dispose()

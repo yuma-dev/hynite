@@ -26,6 +26,7 @@ function mergePatch(base: GameMetadataPatch, next: GameMetadataPatch): GameMetad
     sortTitle: base.sortTitle ?? next.sortTitle,
     coverUrl: base.coverUrl ?? next.coverUrl,
     backgroundUrl: base.backgroundUrl ?? next.backgroundUrl,
+    logoUrl: base.logoUrl ?? next.logoUrl,
     communityIconUrl: base.communityIconUrl ?? next.communityIconUrl,
     libraryCapsuleUrl: base.libraryCapsuleUrl ?? next.libraryCapsuleUrl,
     headerUrl: base.headerUrl ?? next.headerUrl,
@@ -56,7 +57,8 @@ export async function fetchSteamAppInfoMetadataWithNativeFallback(
   game: ImportedGame,
   fetchImpl: typeof fetch,
   logger?: MetadataLogger,
-  nativeProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>
+  nativeProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>,
+  rawMetadataRecorder?: (game: ImportedGame, source: string, raw: unknown) => void | Promise<void>
 ): Promise<GameMetadataPatch> {
   const nativePatch = await nativeProvider?.(game);
   if (nativePatch && Object.keys(nativePatch).length > 0) {
@@ -72,11 +74,13 @@ export async function fetchSteamAppInfoMetadataWithNativeFallback(
       return nativePatch;
     }
 
-    const httpPatch = await fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title);
+    const httpPatch = await fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title, (raw) =>
+      rawMetadataRecorder?.(game, "steam_appinfo", raw)
+    );
     return Object.keys(httpPatch).length > 0 ? mergePatch(nativePatch, httpPatch) : nativePatch;
   }
 
-  return fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title);
+  return fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title, (raw) => rawMetadataRecorder?.(game, "steam_appinfo", raw));
 }
 
 function shouldRunProvider(provider: MetadataProvider, fused: GameMetadataPatch): boolean {
@@ -97,11 +101,14 @@ export const steamStoreMetadataProvider: MetadataProvider = {
   refresh: (game) => fetchSteamMetadata(game.externalId, fetch, undefined, game.title)
 };
 
-function createSteamStoreMetadataProvider(logger?: MetadataLogger): MetadataProvider {
+function createSteamStoreMetadataProvider(
+  logger?: MetadataLogger,
+  rawMetadataRecorder?: (game: ImportedGame, source: string, raw: unknown) => void | Promise<void>
+): MetadataProvider {
   return {
     id: "steam-store",
     label: "Steam Store",
-    refresh: (game) => fetchSteamMetadata(game.externalId, fetch, logger, game.title)
+    refresh: (game) => fetchSteamMetadata(game.externalId, fetch, logger, game.title, (raw) => rawMetadataRecorder?.(game, "steam_appdetails", raw))
   };
 }
 
@@ -111,12 +118,16 @@ export const steamAppInfoMetadataProvider: MetadataProvider = {
   refresh: (game) => fetchSteamAppInfoMetadata(game.externalId, fetch, undefined, game.title)
 };
 
-function createSteamAppInfoMetadataProvider(logger?: MetadataLogger, nativeProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>): MetadataProvider {
+function createSteamAppInfoMetadataProvider(
+  logger?: MetadataLogger,
+  nativeProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>,
+  rawMetadataRecorder?: (game: ImportedGame, source: string, raw: unknown) => void | Promise<void>
+): MetadataProvider {
   return {
     id: "steam-appinfo",
     label: "Steam appinfo",
     async refresh(game) {
-      return fetchSteamAppInfoMetadataWithNativeFallback(game, fetch, logger, nativeProvider);
+      return fetchSteamAppInfoMetadataWithNativeFallback(game, fetch, logger, nativeProvider, rawMetadataRecorder);
     }
   };
 }
@@ -322,12 +333,13 @@ export type MetadataFusionOptions = {
   steamGridDbApiKey?: string;
   logger?: MetadataLogger;
   steamAppInfoProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>;
+  rawMetadataRecorder?: (game: ImportedGame, source: string, raw: unknown) => void | Promise<void>;
   mode?: "fast" | "full";
 };
 
 export function defaultMetadataProviders(options: MetadataFusionOptions = {}): MetadataProvider[] {
   const fastProviders = [
-    createSteamAppInfoMetadataProvider(options.logger, options.steamAppInfoProvider),
+    createSteamAppInfoMetadataProvider(options.logger, options.steamAppInfoProvider, options.rawMetadataRecorder),
     createSteamCdnArtworkProvider(options.logger),
     ...(options.steamGridDbApiKey ? [createSteamGridDbArtworkProvider(options.steamGridDbApiKey, fetch, options.logger)] : [])
   ];
@@ -336,7 +348,7 @@ export function defaultMetadataProviders(options: MetadataFusionOptions = {}): M
     return fastProviders;
   }
 
-  return [createSteamStoreMetadataProvider(options.logger), ...fastProviders];
+  return [createSteamStoreMetadataProvider(options.logger, options.rawMetadataRecorder), ...fastProviders];
 }
 
 export async function refreshFusedMetadata(

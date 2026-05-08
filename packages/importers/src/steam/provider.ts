@@ -11,6 +11,7 @@ export type SteamProviderOptions = {
   steamGridDbApiKey?: string;
   metadataLogger?: MetadataLogger;
   steamAppInfoProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>;
+  rawMetadataRecorder?: MetadataFusionOptions["rawMetadataRecorder"];
   metadataMode?: MetadataFusionOptions["mode"];
   signal?: AbortSignal;
 };
@@ -41,6 +42,7 @@ export class SteamImporterProvider implements ImporterProvider {
       steamGridDbApiKey: this.options.steamGridDbApiKey,
       logger: this.options.metadataLogger,
       steamAppInfoProvider: this.options.steamAppInfoProvider,
+      rawMetadataRecorder: this.options.rawMetadataRecorder,
       mode: this.options.metadataMode
     });
   }

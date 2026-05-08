@@ -114,5 +114,24 @@ export const migrations = [
       ALTER TABLE download_sources_v2 RENAME TO download_sources;
       PRAGMA foreign_keys = ON;
     `
+  },
+  {
+    id: 6,
+    sql: `
+      ALTER TABLE games ADD COLUMN logo_url TEXT;
+
+      CREATE TABLE IF NOT EXISTS game_metadata_raw (
+        game_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        raw_json TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        PRIMARY KEY (provider, external_id, source),
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_game_metadata_raw_game_id ON game_metadata_raw(game_id);
+    `
   }
 ] as const;

@@ -142,6 +142,7 @@ describe("HyniteRepository", () => {
     repository.applyMetadata("steam:1086940", {
       libraryCapsuleUrl: "library.jpg",
       coverUrl: "library.jpg",
+      logoUrl: "logo.png",
       trailerUrl: "trailer.m3u8",
       screenshots: [{ thumbnailUrl: "thumb.jpg", fullUrl: "full.jpg" }],
       platforms: { windows: true, mac: true, linux: false },
@@ -153,6 +154,7 @@ describe("HyniteRepository", () => {
     expect(repository.getGame("steam:1086940")).toMatchObject({
       libraryCapsuleUrl: "library.jpg",
       coverUrl: "library.jpg",
+      logoUrl: "logo.png",
       trailerUrl: "trailer.m3u8",
       screenshots: [{ thumbnailUrl: "thumb.jpg", fullUrl: "full.jpg" }],
       platforms: { windows: true, mac: true, linux: false },
@@ -160,6 +162,31 @@ describe("HyniteRepository", () => {
       discovery: { score: 42, signal: "Trending", sources: ["test"] }
     });
     expect(repository.getMetadataVersion("steam:1086940")).toBe(CURRENT_METADATA_VERSION);
+
+    repository.close();
+  });
+
+  it("persists raw provider metadata separately from normalized game fields", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({ provider: "steam", externalId: "1086940", title: "Baldur's Gate 3", installState: "unknown" });
+
+    repository.saveRawGameMetadata({
+      gameId: "steam:1086940",
+      provider: "steam",
+      externalId: "1086940",
+      source: "steam_appinfo",
+      raw: { common: { name: "Baldur's Gate 3", store_tags: { "0": "122" } } },
+      fetchedAt: "2026-05-08T00:00:00.000Z"
+    });
+
+    expect(repository.getRawGameMetadata("steam", "1086940", "steam_appinfo")).toEqual({
+      gameId: "steam:1086940",
+      provider: "steam",
+      externalId: "1086940",
+      source: "steam_appinfo",
+      raw: { common: { name: "Baldur's Gate 3", store_tags: { "0": "122" } } },
+      fetchedAt: "2026-05-08T00:00:00.000Z"
+    });
 
     repository.close();
   });

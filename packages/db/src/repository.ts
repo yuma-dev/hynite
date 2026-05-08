@@ -18,7 +18,7 @@ import {
 } from "@hynite/core";
 import { migrations } from "./schema";
 
-export const CURRENT_METADATA_VERSION = 8;
+export const CURRENT_METADATA_VERSION = 9;
 
 type GameRow = {
   id: string;
@@ -29,6 +29,7 @@ type GameRow = {
   executable_path: string | null;
   cover_url: string | null;
   background_url: string | null;
+  logo_url: string | null;
   community_icon_url: string | null;
   library_capsule_url: string | null;
   header_url: string | null;
@@ -67,6 +68,15 @@ export type PersistedDownloadEntry = {
   fileSize?: string;
   uploadDate?: string;
   uris: string[];
+};
+
+export type RawGameMetadata = {
+  gameId: string;
+  provider: ProviderId;
+  externalId: string;
+  source: string;
+  raw: unknown;
+  fetchedAt: string;
 };
 
 function parseArray(value: string): string[] {
@@ -194,6 +204,7 @@ export class HyniteRepository {
           sort_title = COALESCE(?, sort_title),
           cover_url = COALESCE(?, cover_url),
           background_url = COALESCE(?, background_url),
+          logo_url = COALESCE(?, logo_url),
           community_icon_url = COALESCE(?, community_icon_url),
           library_capsule_url = COALESCE(?, library_capsule_url),
           header_url = COALESCE(?, header_url),
@@ -224,6 +235,7 @@ export class HyniteRepository {
         patch.title ? makeSortTitle(patch.title) : (patch.sortTitle ?? null),
         patch.coverUrl ?? null,
         patch.backgroundUrl ?? null,
+        patch.logoUrl ?? null,
         patch.communityIconUrl ?? null,
         patch.libraryCapsuleUrl ?? null,
         patch.headerUrl ?? null,
@@ -248,6 +260,55 @@ export class HyniteRepository {
         new Date().toISOString(),
         gameId
       );
+  }
+
+  saveRawGameMetadata(input: {
+    gameId: string;
+    provider: ProviderId;
+    externalId: string;
+    source: string;
+    raw: unknown;
+    fetchedAt?: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO game_metadata_raw (
+          game_id, provider, external_id, source, raw_json, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, external_id, source) DO UPDATE SET
+          game_id = excluded.game_id,
+          raw_json = excluded.raw_json,
+          fetched_at = excluded.fetched_at`
+      )
+      .run(input.gameId, input.provider, input.externalId, input.source, JSON.stringify(input.raw), input.fetchedAt ?? new Date().toISOString());
+  }
+
+  getRawGameMetadata(provider: ProviderId, externalId: string, source: string): RawGameMetadata | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM game_metadata_raw WHERE provider = ? AND external_id = ? AND source = ?")
+      .get(provider, externalId, source) as
+      | {
+          game_id: string;
+          provider: ProviderId;
+          external_id: string;
+          source: string;
+          raw_json: string;
+          fetched_at: string;
+        }
+      | undefined;
+
+    if (!row) {
+      return undefined;
+    }
+
+    return {
+      gameId: row.game_id,
+      provider: row.provider,
+      externalId: row.external_id,
+      source: row.source,
+      raw: parseJson<unknown>(row.raw_json, undefined),
+      fetchedAt: row.fetched_at
+    };
   }
 
   listGames(): Game[] {
@@ -505,6 +566,7 @@ export class HyniteRepository {
       executablePath: row.executable_path ?? undefined,
       coverUrl,
       backgroundUrl: row.background_url ?? undefined,
+      logoUrl: row.logo_url ?? undefined,
       communityIconUrl: row.community_icon_url ?? undefined,
       libraryCapsuleUrl,
       headerUrl: row.header_url ?? undefined,

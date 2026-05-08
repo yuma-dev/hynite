@@ -73,10 +73,13 @@ describe("fetchSteamMetadata", () => {
                     image: { english: "capsule-hash/library_600x900.jpg" },
                     image2x: { english: "capsule-hash/library_600x900_2x.jpg" }
                   },
-                  library_hero: {
-                    image: { english: "hero-hash/library_hero.jpg" }
-                  }
+                library_hero: {
+                  image: { english: "hero-hash/library_hero.jpg" }
+                },
+                library_logo: {
+                  image: { english: "logo-hash/logo.png" }
                 }
+              }
               },
               extended: {
                 homepage: "https://example.test"
@@ -92,6 +95,7 @@ describe("fetchSteamMetadata", () => {
       coverUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3743800/capsule-hash/library_600x900.jpg",
       libraryCapsuleUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3743800/capsule-hash/library_600x900.jpg",
       backgroundUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3743800/hero-hash/library_hero.jpg",
+      logoUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3743800/logo-hash/logo.png",
       headerUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3743800/header-hash/header.jpg",
       communityIconUrl: "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/3743800/client-icon-hash.ico",
       developers: ["Studio A"],

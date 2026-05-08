@@ -12,6 +12,7 @@ export type SteamMetadataLog = {
 };
 
 export type SteamMetadataLogger = (entry: SteamMetadataLog) => void;
+export type RawSteamMetadataRecorder = (raw: unknown) => void | Promise<void>;
 
 const STEAM_REQUEST_MIN_INTERVAL_MS = 900;
 const STEAM_RETRY_DELAYS_MS = [5_000, 15_000, 45_000];
@@ -188,7 +189,8 @@ export async function fetchSteamMetadata(
   appid: string,
   fetchImpl: typeof fetch = fetch,
   logger?: SteamMetadataLogger,
-  gameTitle = appid
+  gameTitle = appid,
+  rawRecorder?: RawSteamMetadataRecorder
 ): Promise<GameMetadataPatch> {
   const requestFetch = steamFetch(fetchImpl);
   try {
@@ -206,6 +208,7 @@ export async function fetchSteamMetadata(
     }
 
     const json = (await response.json()) as SteamAppDetailsResponse;
+    await rawRecorder?.(json);
     const details = json[appid];
     if (!details?.success || !details.data) {
       logger?.({
@@ -413,10 +416,12 @@ function summarizeAppInfoAssets(common: SteamAppInfoCommon | undefined): Record<
 function appInfoLibraryAssets(common: SteamAppInfoCommon | undefined): {
   capsule?: SteamAppInfoAsset;
   hero?: SteamAppInfoAsset;
+  logo?: SteamAppInfoAsset;
 } {
   return {
     capsule: common?.library_assets_full?.library_capsule ?? common?.libraryAssetsFull?.libraryCapsule,
-    hero: common?.library_assets_full?.library_hero ?? common?.libraryAssetsFull?.libraryHero
+    hero: common?.library_assets_full?.library_hero ?? common?.libraryAssetsFull?.libraryHero,
+    logo: common?.library_assets_full?.library_logo ?? common?.libraryAssetsFull?.libraryLogo
   };
 }
 
@@ -440,8 +445,10 @@ export function metadataFromSteamAppInfo(
   const assets = appInfoLibraryAssets(common);
   const capsulePath = chooseLocalizedAsset(assets.capsule?.image) ?? chooseLocalizedAsset(assets.capsule?.image2x);
   const heroPath = chooseLocalizedAsset(assets.hero?.image) ?? chooseLocalizedAsset(assets.hero?.image2x);
+  const logoPath = chooseLocalizedAsset(assets.logo?.image) ?? chooseLocalizedAsset(assets.logo?.image2x);
   const capsuleUrl = assetUrl(appid, capsulePath);
   const heroUrl = assetUrl(appid, heroPath);
+  const logoUrl = assetUrl(appid, logoPath);
   const headerPath = chooseLocalizedAsset(common.header_image ?? common.headerImage);
   const headerUrl = assetUrl(appid, headerPath);
   const smallCapsuleUrl = assetUrl(appid, chooseLocalizedAsset(common.small_capsule ?? common.smallCapsule));
@@ -475,13 +482,14 @@ export function metadataFromSteamAppInfo(
     coverUrl: fallbackCoverUrl,
     libraryCapsuleUrl: capsuleUrl,
     backgroundUrl: fallbackBackgroundUrl,
+    logoUrl,
     headerUrl,
     communityIconUrl: clientIconUrl,
     developers: developers.length ? developers : extendedDevelopers.length ? extendedDevelopers : undefined,
     publishers: publishers.length ? publishers : extendedPublishers.length ? extendedPublishers : undefined,
     releaseDate: parseSteamReleaseTimestamp(common.steam_release_date ?? common.steamReleaseDate),
     websiteUrl: common.extended?.homepage,
-    metadataStatus: fallbackCoverUrl || fallbackBackgroundUrl || common.name ? "partial" : undefined
+    metadataStatus: fallbackCoverUrl || fallbackBackgroundUrl || logoUrl || common.name ? "partial" : undefined
   };
 }
 
@@ -489,7 +497,8 @@ export async function fetchSteamAppInfoMetadata(
   appid: string,
   fetchImpl: typeof fetch = fetch,
   logger?: SteamMetadataLogger,
-  gameTitle = appid
+  gameTitle = appid,
+  rawRecorder?: RawSteamMetadataRecorder
 ): Promise<GameMetadataPatch> {
   const requestFetch = steamFetch(fetchImpl);
   try {
@@ -507,6 +516,7 @@ export async function fetchSteamAppInfoMetadata(
     }
 
     const json = (await response.json()) as SteamAppInfoResponse;
+    await rawRecorder?.(json);
     const appInfo = json.data?.[appid];
     const common = appInfo?.common ? { ...appInfo.common, extended: appInfo.extended } : undefined;
     if (!common) {

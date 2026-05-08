@@ -15,6 +15,7 @@ import {
   Globe2,
   Home,
   Images,
+  Info,
   KeyRound,
   Library,
   Link2,
@@ -438,7 +439,7 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>, hoverDelayMs = 
 
     for (let i = 0; i < list.length; i++) {
       const entry = list[i];
-      if (entry.el === card) {
+      if (!entry || entry.el === card) {
         continue;
       }
       const dx = entry.cx - source.cx;
@@ -565,14 +566,8 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>, hoverDelayMs = 
 function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (game: Game) => void; wide?: boolean }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const cover = primaryCover(game);
-  const info = [
-    game.installState === "installed" ? "Installed" : "Not installed",
-    game.genres[0],
-    game.discovery?.signal,
-    game.playtimeMinutes ? `${Math.round(game.playtimeMinutes / 60)}h` : undefined
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const isInstalled = game.installState === "installed";
+  const playtimeLabel = formatHours(game.playtimeMinutes);
 
   return (
     <div
@@ -596,18 +591,39 @@ function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (ga
           />
         ) : null}
         <span className="cover-reveal">
-          {canLaunch(game) ? (
+          <span className="cover-logo">
+            {game.logoUrl ? (
+              <img
+                className="cover-logo-img"
+                src={game.logoUrl}
+                alt={game.title}
+                loading="lazy"
+                decoding="async"
+              />
+            ) : (
+              <span className="cover-logo-fallback">{game.title}</span>
+            )}
+          </span>
+          {isInstalled ? (
             <button
-              className="cover-play"
+              className="cover-action cover-action-play"
               type="button"
               onClick={(e) => { e.stopPropagation(); void window.hynite.games.launch(game.id); }}
               aria-label={`Play ${game.title}`}
             >
               <Play size={22} fill="currentColor" />
             </button>
-          ) : null}
-          <span className="cover-title">{game.title}</span>
-          <span className="cover-meta">{info}</span>
+          ) : (
+            <button
+              className="cover-action cover-action-details"
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onSelect(game); }}
+              aria-label={`View details for ${game.title}`}
+            >
+              <Info size={22} />
+            </button>
+          )}
+          <span className="cover-playtime">{playtimeLabel}</span>
         </span>
       </span>
     </div>

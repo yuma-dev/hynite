@@ -46,6 +46,7 @@ export type NativeSteamAppInfo = {
     publisher?: string;
     homepage?: string;
   };
+  raw?: unknown;
 };
 
 export class NativeBridge {

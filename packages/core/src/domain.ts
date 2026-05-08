@@ -54,6 +54,7 @@ export const gameSchema = z.object({
   executablePath: z.string().optional(),
   coverUrl: z.string().optional(),
   backgroundUrl: z.string().optional(),
+  logoUrl: z.string().optional(),
   communityIconUrl: z.string().optional(),
   libraryCapsuleUrl: z.string().optional(),
   headerUrl: z.string().optional(),
@@ -104,6 +105,7 @@ export type GameMetadataPatch = Partial<
     | "sortTitle"
     | "coverUrl"
     | "backgroundUrl"
+    | "logoUrl"
     | "communityIconUrl"
     | "libraryCapsuleUrl"
     | "headerUrl"

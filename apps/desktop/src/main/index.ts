@@ -87,8 +87,30 @@ function hasReusableMetadata(game: { id: string; metadataStatus: string }): bool
   return game.metadataStatus !== "none" && repository.getMetadataVersion(game.id) >= CURRENT_METADATA_VERSION;
 }
 
+function saveSteamRawMetadata(gameId: string, externalId: string, source: string, raw: unknown): void {
+  try {
+    repository.saveRawGameMetadata({
+      gameId,
+      provider: "steam",
+      externalId,
+      source,
+      raw
+    });
+  } catch (error) {
+    diagnosticLogService?.log({
+      level: "warning",
+      phase: "metadata:raw",
+      message: `Raw Steam metadata cache write failed for ${externalId}`,
+      details: { source, error: error instanceof Error ? error.message : String(error) }
+    });
+  }
+}
+
 async function fetchNativeSteamAppInfoMetadata(game: ImportedGame) {
   const appInfo = await nativeBridge.getSteamAppInfo(game.externalId);
+  if (appInfo) {
+    saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, "steam_appinfo", appInfo.raw ?? appInfo);
+  }
   return metadataFromSteamAppInfo(
     game.externalId,
     appInfo
@@ -167,7 +189,7 @@ async function hydrateRichDetailMetadata(game: Game): Promise<Game> {
           ...entry.details
         }
       });
-    }, imported.title);
+    }, imported.title, (raw) => saveSteamRawMetadata(game.id, imported.externalId, "steam_appdetails", raw));
     if (metadata.metadataStatus === "failed") {
       return game;
     }
@@ -457,6 +479,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
     steamGridDbApiKey,
     steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
     metadataMode: "fast",
+    rawMetadataRecorder: (game, source, raw) => saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, source, raw),
     signal: options.signal,
     metadataLogger: (entry) => {
       diagnosticLogService.log({
