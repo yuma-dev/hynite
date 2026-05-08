@@ -353,130 +353,14 @@ function heroMeta(game: Game): string[] {
 
 const GLOW_REACH_MULTIPLIER = 1.25;
 
-type SpotlightDiag = {
-  pointerOvers: number;
-  schedules: number;
-  applies: number;
-  clears: number;
-  cacheRefreshes: number;
-};
-
-const spotlightDiag: SpotlightDiag = {
-  pointerOvers: 0,
-  schedules: 0,
-  applies: 0,
-  clears: 0,
-  cacheRefreshes: 0
-};
-
-let spotlightDiagInstalled = false;
-function installSpotlightDiagnostics() {
-  if (spotlightDiagInstalled || typeof window === "undefined") {
-    return;
-  }
-  spotlightDiagInstalled = true;
-
-  let frames = 0;
-  let frameTimeMax = 0;
-  let lastFrame = performance.now();
-  let lastReport = performance.now();
-  let droppedFrames = 0;
-
-  const tick = () => {
-    const now = performance.now();
-    const delta = now - lastFrame;
-    lastFrame = now;
-    frames += 1;
-    if (delta > frameTimeMax) {
-      frameTimeMax = delta;
-    }
-    if (delta > 20) {
-      droppedFrames += 1;
-    }
-    if (now - lastReport >= 1000) {
-      const fps = Math.round((frames * 1000) / (now - lastReport));
-      const dropped = droppedFrames;
-      const worst = frameTimeMax.toFixed(1);
-      const diag = { ...spotlightDiag };
-      if (dropped > 0 || diag.pointerOvers > 0 || diag.applies > 0) {
-        console.log(
-          `[diag] fps=${fps} worstFrame=${worst}ms dropped=${dropped}/sec ` +
-          `pointerOvers=${diag.pointerOvers} schedules=${diag.schedules} ` +
-          `applies=${diag.applies} clears=${diag.clears} cacheRefreshes=${diag.cacheRefreshes}`
-        );
-      }
-      frames = 0;
-      droppedFrames = 0;
-      frameTimeMax = 0;
-      lastReport = now;
-      spotlightDiag.pointerOvers = 0;
-      spotlightDiag.schedules = 0;
-      spotlightDiag.applies = 0;
-      spotlightDiag.clears = 0;
-      spotlightDiag.cacheRefreshes = 0;
-    }
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-
-  const root = document.documentElement;
-  const toggle = (className: string, on: boolean) => {
-    root.classList.toggle(className, !on);
-    console.log(`[diag] ${className.replace("diag-no-", "")} = ${on ? "on" : "off"}`);
-  };
-  // @ts-expect-error attach diagnostic toggles to window for console use
-  window.__diag = {
-    backdrop: (on: boolean) => toggle("diag-no-backdrop", on),
-    glow: (on: boolean) => toggle("diag-no-glow", on),
-    hoverTransform: (on: boolean) => toggle("diag-no-hover-transform", on),
-    hoverShadow: (on: boolean) => toggle("diag-no-hover-shadow", on),
-    coverReveal: (on: boolean) => toggle("diag-no-cover-reveal", on),
-    contain: (on: boolean) => toggle("diag-no-contain", on),
-    everything: (on: boolean) => {
-      toggle("diag-no-backdrop", on);
-      toggle("diag-no-glow", on);
-      toggle("diag-no-hover-transform", on);
-      toggle("diag-no-hover-shadow", on);
-      toggle("diag-no-cover-reveal", on);
-      toggle("diag-no-contain", on);
-    }
-  };
-  console.log("[diag] toggles ready: __diag.backdrop(false), __diag.glow(false), __diag.coverReveal(false), __diag.hoverTransform(false), __diag.hoverShadow(false), __diag.contain(false), __diag.everything(false)");
-
-  if ("PerformanceObserver" in window) {
-    try {
-      const longTaskObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          console.warn(`[diag] LONG TASK: ${entry.duration.toFixed(1)}ms at ${entry.startTime.toFixed(0)}`);
-        }
-      });
-      longTaskObserver.observe({ type: "longtask", buffered: true });
-    } catch (e) {
-      // longtask not supported
-    }
-    try {
-      const eventObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (entry.duration > 16) {
-            console.warn(`[diag] slow event: ${entry.name} ${entry.duration.toFixed(1)}ms`);
-          }
-        }
-      });
-      eventObserver.observe({ type: "event", durationThreshold: 16, buffered: true } as PerformanceObserverInit);
-    } catch (e) {
-      // event timing not supported
-    }
-  }
-}
-
 type CardGeom = { el: HTMLElement; x: number; y: number; w: number; h: number; cx: number; cy: number };
 
-function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
-  installSpotlightDiagnostics();
+function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>, hoverDelayMs = 0) {
   const sourceCardRef = useRef<HTMLElement | null>(null);
   const targetsRef = useRef<Set<HTMLElement>>(new Set());
   const pendingRef = useRef<HTMLElement | null | "clear">(null);
   const rafRef = useRef<number | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
   const cacheRef = useRef<CardGeom[]>([]);
   const cacheIndexRef = useRef<Map<HTMLElement, CardGeom>>(new Map());
   const cacheDirtyRef = useRef(true);
@@ -489,7 +373,6 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
       cacheIndexRef.current = new Map();
       return;
     }
-    const t0 = performance.now();
     const gridRect = grid.getBoundingClientRect();
     const sl = grid.scrollLeft;
     const st = grid.scrollTop;
@@ -514,11 +397,6 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
     cacheIndexRef.current = index;
     cacheDirtyRef.current = false;
     cardSetWrittenRef.current = new Set();
-    spotlightDiag.cacheRefreshes += 1;
-    const dt = performance.now() - t0;
-    if (dt > 5) {
-      console.warn(`[diag] slow cache refresh: ${dt.toFixed(2)}ms (${nodes.length} cards)`);
-    }
   }, [ref]);
 
   const applyClear = useCallback(() => {
@@ -540,7 +418,6 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
       applyClear();
       return;
     }
-    const tStart = performance.now();
     if (cacheDirtyRef.current) {
       refreshCache();
     }
@@ -552,14 +429,12 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
         return;
       }
     }
-    const tCacheReady = performance.now();
 
     const reach = Math.max(source.w, source.h) * GLOW_REACH_MULTIPLIER;
     const reachSq = reach * reach;
     const list = cacheRef.current;
     const next = new Set<HTMLElement>();
     const writtenCards = cardSetWrittenRef.current;
-    let writeCount = 0;
 
     for (let i = 0; i < list.length; i++) {
       const entry = list[i];
@@ -576,10 +451,8 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
         entry.el.style.setProperty("--card-x", `${entry.x}px`);
         entry.el.style.setProperty("--card-y", `${entry.y}px`);
         writtenCards.add(entry.el);
-        writeCount += 1;
       }
     }
-    const tScanDone = performance.now();
 
     if (sourceCardRef.current && sourceCardRef.current !== card) {
       sourceCardRef.current.classList.remove("is-glow-source");
@@ -594,30 +467,17 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
     grid.style.setProperty("--source-h", `${source.h}px`);
 
     const prev = targetsRef.current;
-    let removed = 0;
-    let added = 0;
     prev.forEach((p) => {
       if (!next.has(p)) {
         p.classList.remove("is-glow-target");
-        removed += 1;
       }
     });
     next.forEach((n) => {
       if (!prev.has(n)) {
         n.classList.add("is-glow-target");
-        added += 1;
       }
     });
     targetsRef.current = next;
-    const tDone = performance.now();
-    spotlightDiag.applies += 1;
-    if (tDone - tStart > 4) {
-      console.warn(
-        `[diag] slow applySet: total=${(tDone - tStart).toFixed(2)}ms ` +
-        `(cache=${(tCacheReady - tStart).toFixed(2)} scan=${(tScanDone - tCacheReady).toFixed(2)} ` +
-        `dom=${(tDone - tScanDone).toFixed(2)}) targets=${next.size} writes=${writeCount}`
-      );
-    }
   }, [ref, applyClear, refreshCache]);
 
   const flush = useCallback(() => {
@@ -625,7 +485,6 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
     const next = pendingRef.current;
     pendingRef.current = null;
     if (next === "clear") {
-      spotlightDiag.clears += 1;
       applyClear();
     } else if (next) {
       applySet(next);
@@ -634,23 +493,41 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
 
   const schedule = useCallback((next: HTMLElement | "clear") => {
     pendingRef.current = next;
-    spotlightDiag.schedules += 1;
     if (rafRef.current === null) {
       rafRef.current = requestAnimationFrame(flush);
     }
   }, [flush]);
 
-  const clear = useCallback(() => schedule("clear"), [schedule]);
+  const cancelHoverTimer = useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  const clear = useCallback(() => {
+    cancelHoverTimer();
+    schedule("clear");
+  }, [schedule, cancelHoverTimer]);
 
   const onPointerOver = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    spotlightDiag.pointerOvers += 1;
     const card = (e.target as HTMLElement | null)?.closest<HTMLElement>(".game-cover, .wide-game");
     if (card) {
-      schedule(card);
+      if (hoverDelayMs > 0 && sourceCardRef.current !== card) {
+        cancelHoverTimer();
+        hoverTimerRef.current = window.setTimeout(() => {
+          hoverTimerRef.current = null;
+          schedule(card);
+        }, hoverDelayMs);
+      } else {
+        cancelHoverTimer();
+        schedule(card);
+      }
     } else {
+      cancelHoverTimer();
       schedule("clear");
     }
-  }, [schedule]);
+  }, [schedule, cancelHoverTimer, hoverDelayMs]);
 
   useEffect(() => {
     const grid = ref.current;
@@ -674,6 +551,10 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>) {
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
+      }
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
       }
     };
   }, [ref]);
@@ -1321,7 +1202,7 @@ function LibraryScreen({
   onSync: () => void;
 }) {
   const gridRef = useRef<HTMLDivElement | null>(null);
-  const spotlight = useSpotlightGrid(gridRef);
+  const spotlight = useSpotlightGrid(gridRef, 180);
   return (
     <main className="page">
       <div className="library-head">
