@@ -5,10 +5,18 @@ import { dirname, join } from "node:path";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const bin = join(root, "node_modules", "electron-vite", "bin", "electron-vite.js");
 const env = { ...process.env };
+const args = process.argv.slice(2).filter((arg) => {
+  if (arg === "--startup-profile") {
+    env.HYNITE_STARTUP_PROFILE = "1";
+    return false;
+  }
+
+  return true;
+});
 
 delete env.ELECTRON_RUN_AS_NODE;
 
-const child = spawn(process.execPath, [bin, ...process.argv.slice(2)], {
+const child = spawn(process.execPath, [bin, ...args], {
   cwd: root,
   env,
   stdio: "inherit",
@@ -21,4 +29,3 @@ child.on("exit", (code, signal) => {
   }
   process.exit(code ?? 0);
 });
-

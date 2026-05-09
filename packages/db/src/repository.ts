@@ -79,6 +79,12 @@ export type RawGameMetadata = {
   fetchedAt: string;
 };
 
+export type UpsertImportedGameSummary = {
+  id: string;
+  metadataStatus: Game["metadataStatus"];
+  metadataVersion: number;
+};
+
 function parseArray(value: string): string[] {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -126,6 +132,18 @@ export class HyniteRepository {
     this.db.close();
   }
 
+  transaction<T>(task: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const result = task();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   migrate(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS migrations (
@@ -145,7 +163,7 @@ export class HyniteRepository {
     }
   }
 
-  upsertImportedGame(game: ImportedGame): Game {
+  upsertImportedGameSummary(game: ImportedGame): UpsertImportedGameSummary {
     const id = makeGameId(game.provider, game.externalId);
     const now = new Date().toISOString();
     this.db
@@ -211,6 +229,22 @@ export class HyniteRepository {
         .run(id, game.provider, game.externalId, incomingShareType, ownerJson);
     }
 
+    const summary = this.db
+      .prepare("SELECT id, metadata_status, metadata_version FROM games WHERE id = ?")
+      .get(id) as { id: string; metadata_status: Game["metadataStatus"]; metadata_version: number } | undefined;
+    if (!summary) {
+      throw new Error(`Failed to persist game ${id}`);
+    }
+
+    return {
+      id: summary.id,
+      metadataStatus: summary.metadata_status,
+      metadataVersion: summary.metadata_version
+    };
+  }
+
+  upsertImportedGame(game: ImportedGame): Game {
+    const { id } = this.upsertImportedGameSummary(game);
     const persisted = this.getGame(id);
     if (!persisted) {
       throw new Error(`Failed to persist game ${id}`);

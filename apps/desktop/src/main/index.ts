@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, ipcMain, net, shell } from "electron";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { CURRENT_METADATA_VERSION, HyniteRepository } from "@hynite/db";
 import { discoverInstalledSteamApps, SteamImporterProvider } from "@hynite/importers";
 import { makeGameId, type Game, type GameMetadataPatch, type ImportedGame, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamSearchResult, type SyncResult } from "@hynite/core";
@@ -10,6 +11,7 @@ import { NativeBridge } from "./nativeBridge";
 import { SettingsService } from "./settingsService";
 import { SourceService } from "./sourceService";
 import { searchSteamStore } from "./steamSearchService";
+import { StartupProfileService } from "./startupProfileService";
 import { SyncStatusService } from "./syncStatusService";
 import {
   authenticateSteamSession,
@@ -26,12 +28,15 @@ let sourceService: SourceService;
 let nativeBridge: NativeBridge;
 let syncStatusService: SyncStatusService;
 let diagnosticLogService: DiagnosticLogService;
+let startupProfileService: StartupProfileService | undefined;
+let startupHeartbeatTimer: NodeJS.Timeout | undefined;
 
 const windowIconPath = join(__dirname, "../../assets/icons/app.ico");
 const METADATA_REFRESH_CONCURRENCY = 4;
 const RICH_METADATA_CONCURRENCY = 1;
 const RICH_METADATA_STARTUP_LIMIT = Number.POSITIVE_INFINITY;
 const STARTUP_BACKGROUND_DELAY_MS = 1_000;
+const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
 const richMetadataQueued = new Set<string>();
 const richMetadataQueue: string[] = [];
 const richMetadataInFlight = new Set<string>();
@@ -51,6 +56,73 @@ class SteamSyncCancelledError extends Error {
     super(message);
     this.name = "SteamSyncCancelledError";
   }
+}
+
+function profile(phase: string, message: string, details?: Record<string, unknown>): void {
+  startupProfileService?.log({ scope: "main", phase, message, details });
+}
+
+function roundDuration(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 10) / 10;
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+function profileIpc<T>(channel: string, task: () => T | Promise<T>): T | Promise<T> {
+  const startedAt = performance.now();
+  profile("ipc:start", channel);
+
+  try {
+    const result = task();
+    if (result && typeof (result as Promise<T>).then === "function") {
+      return (result as Promise<T>)
+        .then((value) => {
+          profile("ipc:end", channel, { durationMs: roundDuration(startedAt) });
+          return value;
+        })
+        .catch((error: unknown) => {
+          profile("ipc:error", channel, {
+            durationMs: roundDuration(startedAt),
+            error: error instanceof Error ? error.message : String(error)
+          });
+          throw error;
+        });
+    }
+
+    profile("ipc:end", channel, { durationMs: roundDuration(startedAt) });
+    return result;
+  } catch (error) {
+    profile("ipc:error", channel, {
+      durationMs: roundDuration(startedAt),
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
+}
+
+function handleIpc(channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => unknown): void {
+  ipcMain.handle(channel, (event, ...args) => profileIpc(channel, () => listener(event, ...args)));
+}
+
+function startStartupHeartbeat(): void {
+  if (!startupProfileService?.enabled || startupHeartbeatTimer) {
+    return;
+  }
+
+  let lastBeatAt = performance.now();
+  startupHeartbeatTimer = setInterval(() => {
+    const now = performance.now();
+    const driftMs = Math.round((now - lastBeatAt - 1_000) * 10) / 10;
+    lastBeatAt = now;
+    if (driftMs > 250) {
+      profile("main:heartbeat:lag", "Main event loop delayed", { driftMs });
+    }
+  }, 1_000);
+  startupHeartbeatTimer.unref?.();
 }
 
 function isSteamSyncCancelledError(error: unknown): error is SteamSyncCancelledError {
@@ -142,8 +214,8 @@ async function resolveFamilyAccessToken(settings: { steamAccount?: { familySessi
   }
 }
 
-function hasReusableMetadata(game: { id: string; metadataStatus: string }): boolean {
-  return game.metadataStatus !== "none" && repository.getMetadataVersion(game.id) >= CURRENT_METADATA_VERSION;
+function hasReusableMetadata(game: { metadataStatus: string; metadataVersion?: number; id?: string }): boolean {
+  return game.metadataStatus !== "none" && (game.metadataVersion ?? (game.id ? repository.getMetadataVersion(game.id) : 0)) >= CURRENT_METADATA_VERSION;
 }
 
 function saveSteamRawMetadata(gameId: string, externalId: string, source: string, raw: unknown): void {
@@ -434,6 +506,7 @@ async function refreshRichMetadata(id: string): Promise<void> {
 }
 
 function createWindow(): void {
+  profile("window:create:start", "Creating BrowserWindow");
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -451,24 +524,51 @@ function createWindow(): void {
       nodeIntegration: false
     }
   });
+  profile("window:create:end", "BrowserWindow created");
 
   if (process.env.ELECTRON_RENDERER_URL) {
+    profile("window:load:start", "Loading renderer URL", { url: process.env.ELECTRON_RENDERER_URL });
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
+    profile("window:load:start", "Loading renderer file");
     void mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }
 
   mainWindow.once("ready-to-show", () => {
+    profile("window:ready-to-show", "Renderer ready to show");
     mainWindow?.focus();
+  });
+
+  mainWindow.webContents.on("dom-ready", () => {
+    profile("renderer:dom-ready", "Renderer DOM ready");
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    profile("renderer:did-finish-load", "Renderer finished loading");
+  });
+  mainWindow.webContents.on("unresponsive", () => {
+    profile("renderer:unresponsive", "Renderer became unresponsive");
+  });
+  mainWindow.webContents.on("responsive", () => {
+    profile("renderer:responsive", "Renderer became responsive");
+  });
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    profile("renderer:process-gone", "Renderer process gone", { reason: details.reason, exitCode: details.exitCode });
+  });
+  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      profile("renderer:console", message, { level, line, sourceId });
+    }
   });
 
   mainWindow.on("maximize", () => mainWindow?.webContents.send("window:maximizeChanged", true));
   mainWindow.on("unmaximize", () => mainWindow?.webContents.send("window:maximizeChanged", false));
   mainWindow.on("closed", () => {
+    profile("window:closed", "BrowserWindow closed");
     mainWindow = undefined;
   });
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
+    profile("window:load:failed", "Renderer failed to load", { errorCode, errorDescription });
     console.error(`Renderer failed to load (${errorCode}): ${errorDescription}`);
   });
 }
@@ -482,6 +582,7 @@ function runAfterInitialRendererPaint(task: () => void): void {
     }
 
     scheduled = true;
+    profile("startup:background:scheduled", "Startup background work scheduled", { delayMs: STARTUP_BACKGROUND_DELAY_MS });
     setTimeout(task, STARTUP_BACKGROUND_DELAY_MS);
   };
 
@@ -505,6 +606,7 @@ async function startSteamSync(providerId?: ProviderId, options: { refreshStaleMe
     throw new Error(`Provider ${providerId} is not implemented yet.`);
   }
 
+  profile("steam-sync:start-requested", "Steam sync start requested", { providerId, refreshStaleMetadata: options.refreshStaleMetadata });
   const started = await withSteamSyncStartLock(async () => {
     await cancelActiveSteamSync("Steam sync replaced by a newer request");
     const controller = new AbortController();
@@ -520,6 +622,8 @@ async function startSteamSync(providerId?: ProviderId, options: { refreshStaleMe
 }
 
 async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStaleMetadata?: boolean; signal?: AbortSignal } = {}) {
+  const syncStartedAt = performance.now();
+  profile("steam-sync:start", "Steam sync started", { providerId, refreshStaleMetadata: options.refreshStaleMetadata });
   throwIfSteamSyncCancelled(options.signal);
   const settings = await settingsService.get();
   throwIfSteamSyncCancelled(options.signal);
@@ -575,13 +679,22 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
   try {
     syncStatusService.progress("steam:owned-games", "Calling Steam owned games API");
     imported = await provider.scan();
+    profile("steam-sync:owned-games", "Steam owned games scan finished", { count: imported.length, durationMs: roundDuration(syncStartedAt) });
     throwIfSteamSyncCancelled(options.signal);
   } catch (error) {
     if (isSteamSyncCancelledError(error)) {
       syncStatusService.cancel(error.message);
+      profile("steam-sync:cancelled", "Steam sync cancelled while loading owned games", {
+        durationMs: roundDuration(syncStartedAt),
+        error: error.message
+      });
       throw error;
     }
     syncStatusService.fail("Steam sync failed while loading owned games", { error: error instanceof Error ? error.message : String(error) });
+    profile("steam-sync:error", "Steam sync failed while loading owned games", {
+      durationMs: roundDuration(syncStartedAt),
+      error: error instanceof Error ? error.message : String(error)
+    });
     throw error;
   }
 
@@ -593,39 +706,77 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       });
       return new Map();
     });
+    profile("steam-sync:local-installs", "Local Steam install scan finished", { count: installedApps.size, durationMs: roundDuration(syncStartedAt) });
     throwIfSteamSyncCancelled(options.signal);
 
     let upserted = 0;
+    let metadataCacheHits = 0;
+    let staleMetadataCount = 0;
     const warnings: string[] = [];
     const metadataTargets: Array<{ id: string; game: ImportedGame }> = [];
 
-    for (const [index, game] of imported.entries()) {
+    const upsertStartedAt = performance.now();
+    let lastYieldIndex = 0;
+    while (lastYieldIndex < imported.length) {
       throwIfSteamSyncCancelled(options.signal);
-      const installed = installedApps.get(game.externalId);
-      const gameWithInstallState = {
-        ...game,
-        installState: installed ? ("installed" as const) : game.installState,
-        installDirectory: installed?.installDirectory ?? game.installDirectory
-      };
-      syncStatusService.progress("steam:upsert", `Syncing ${game.title}`, index + 1, imported.length, {
-        appid: game.externalId,
-        installed: Boolean(installed)
-      });
-      const persisted = repository.upsertImportedGame(gameWithInstallState);
-      upserted += 1;
-      if (hasReusableMetadata(persisted)) {
-        syncStatusService.log("info", "metadata:cache", `${game.title}: metadata cache hit`, { appid: game.externalId });
-        continue;
-      }
+      const chunkEnd = Math.min(imported.length, lastYieldIndex + STEAM_SYNC_UPSERT_YIELD_INTERVAL);
+      const chunkStartedAt = performance.now();
+      syncStatusService.progress(
+        "steam:upsert",
+        `Syncing Steam library ${chunkEnd}/${imported.length}`,
+        chunkEnd,
+        imported.length,
+        { from: lastYieldIndex + 1, to: chunkEnd },
+        { history: false }
+      );
+      repository.transaction(() => {
+        for (let index = lastYieldIndex; index < chunkEnd; index += 1) {
+          throwIfSteamSyncCancelled(options.signal);
+          const game = imported[index] as ImportedGame;
+          const installed = installedApps.get(game.externalId);
+          const gameWithInstallState = {
+            ...game,
+            installState: installed ? ("installed" as const) : game.installState,
+            installDirectory: installed?.installDirectory ?? game.installDirectory
+          };
+          const persisted = repository.upsertImportedGameSummary(gameWithInstallState);
+          upserted += 1;
+          if (hasReusableMetadata(persisted)) {
+            metadataCacheHits += 1;
+            continue;
+          }
 
-      if (!refreshStaleMetadata && persisted.metadataStatus !== "none") {
-        syncStatusService.log("info", "metadata:cache", `${game.title}: cached metadata version is stale; refreshing fast metadata`, {
-          appid: game.externalId,
-          metadataStatus: persisted.metadataStatus
+          if (!refreshStaleMetadata && persisted.metadataStatus !== "none") {
+            staleMetadataCount += 1;
+          }
+
+          metadataTargets.push({ id: persisted.id, game: gameWithInstallState });
+        }
+      });
+      const chunkDurationMs = roundDuration(chunkStartedAt);
+      if (chunkDurationMs > 50) {
+        profile("steam-sync:upsert-chunk", "Steam library upsert chunk finished", {
+          from: lastYieldIndex + 1,
+          to: chunkEnd,
+          durationMs: chunkDurationMs
         });
       }
-
-      metadataTargets.push({ id: persisted.id, game: gameWithInstallState });
+      lastYieldIndex = chunkEnd;
+      await yieldToEventLoop();
+    }
+    profile("steam-sync:upsert", "Steam library upsert finished", {
+      upserted,
+      metadataCacheHits,
+      staleMetadataCount,
+      metadataTargets: metadataTargets.length,
+      durationMs: roundDuration(upsertStartedAt),
+      totalDurationMs: roundDuration(syncStartedAt)
+    });
+    if (metadataCacheHits > 0) {
+      syncStatusService.log("info", "metadata:cache", `Metadata cache hits: ${metadataCacheHits}/${upserted}`);
+    }
+    if (staleMetadataCount > 0) {
+      syncStatusService.log("info", "metadata:cache", `Stale metadata targets queued: ${staleMetadataCount}`);
     }
 
     await mapWithConcurrency(metadataTargets, METADATA_REFRESH_CONCURRENCY, async (target, index) => {
@@ -645,29 +796,54 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       }
     });
 
+    profile("steam-sync:metadata-refresh", "Steam metadata refresh finished", {
+      count: metadataTargets.length,
+      durationMs: roundDuration(syncStartedAt)
+    });
     enqueueRichMetadataBackfill();
     throwIfSteamSyncCancelled(options.signal);
     syncStatusService.finish(`Steam sync complete: ${upserted} games, ${installedApps.size} local installs`);
+    profile("steam-sync:end", "Steam sync completed", {
+      scanned: imported.length,
+      upserted,
+      installed: installedApps.size,
+      durationMs: roundDuration(syncStartedAt)
+    });
     return { providerId: "steam" as const, scanned: imported.length, upserted, warnings };
   } catch (error) {
     if (isSteamSyncCancelledError(error)) {
       syncStatusService.cancel(error.message);
+      profile("steam-sync:cancelled", "Steam sync cancelled", { durationMs: roundDuration(syncStartedAt), error: error.message });
       throw error;
     }
     syncStatusService.fail("Steam sync failed", { error: error instanceof Error ? error.message : String(error) });
+    profile("steam-sync:error", "Steam sync failed", {
+      durationMs: roundDuration(syncStartedAt),
+      error: error instanceof Error ? error.message : String(error)
+    });
     throw error;
   }
 }
 
 function registerIpc(): void {
-  ipcMain.handle("library:sync", async (_event, providerId?: ProviderId) => {
+  ipcMain.on("debug:profile", (_event, entry: { phase?: unknown; message?: unknown; details?: unknown; rendererElapsedMs?: unknown }) => {
+    startupProfileService?.log({
+      scope: "renderer",
+      phase: typeof entry?.phase === "string" ? entry.phase : "renderer",
+      message: typeof entry?.message === "string" ? entry.message : "Renderer profile event",
+      details: entry?.details && typeof entry.details === "object" ? (entry.details as Record<string, unknown>) : undefined,
+      rendererElapsedMs: typeof entry?.rendererElapsedMs === "number" ? entry.rendererElapsedMs : undefined
+    });
+  });
+
+  handleIpc("library:sync", async (_event, providerId?: ProviderId) => {
     return startSteamSync(providerId, { refreshStaleMetadata: true });
   });
 
-  ipcMain.handle("library:list", (_event, query: LibraryQuery = {}) =>
+  handleIpc("library:list", (_event, query: LibraryQuery = {}) =>
     repository.queryGames(query.search, query.installState ?? "all", query.sort ?? "title", query.sortDirection)
   );
-  ipcMain.handle("library:clear", async () => {
+  handleIpc("library:clear", async () => {
     await withSteamSyncStartLock(() => cancelActiveSteamSync("Steam sync cancelled before clearing the library"));
     clearRichMetadataQueue("Detail metadata cancelled before clearing the library");
     const cleared = repository.clearLibrary();
@@ -675,7 +851,7 @@ function registerIpc(): void {
     return { cleared };
   });
 
-  ipcMain.handle("games:get", (_event, id: string) => {
+  handleIpc("games:get", (_event, id: string) => {
     const game = repository.getGame(id);
     if (!game) {
       throw new Error(`Game ${id} was not found.`);
@@ -684,12 +860,12 @@ function registerIpc(): void {
     return { ...game, sourceMatches: sourceService.search(id) };
   });
 
-  ipcMain.handle("games:hydrateDiscovery", async (_event, game: Game) => {
+  handleIpc("games:hydrateDiscovery", async (_event, game: Game) => {
     const hydrated = await hydrateDiscoveryDetailMetadata(game);
     return { ...hydrated, sourceMatches: sourceService.searchTitle(hydrated.title) };
   });
 
-  ipcMain.handle("games:launch", async (_event, id: string) => {
+  handleIpc("games:launch", async (_event, id: string) => {
     const game = repository.getGame(id);
     if (!game) {
       throw new Error(`Game ${id} was not found.`);
@@ -706,23 +882,23 @@ function registerIpc(): void {
     });
   });
 
-  ipcMain.handle("home:get", async () => {
+  handleIpc("home:get", async () => {
     const settings = await settingsService.get();
     const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
     return homeService.get(repository.listGames(), { steamGridDbApiKey, steamAppInfoProvider: fetchNativeSteamAppInfoMetadata });
   });
-  ipcMain.handle("sync:status", () => syncStatusService.get());
-  ipcMain.handle("sources:import", (_event, input: SourceImportInput) => sourceService.import(input));
-  ipcMain.handle("sources:list", () => sourceService.list());
-  ipcMain.handle("sources:remove", (_event, id: string) => sourceService.remove(id));
-  ipcMain.handle("sources:refreshSource", (_event, id: string, json: string) => sourceService.refreshSource(id, json));
-  ipcMain.handle("sources:search", (_event, gameId: string) => sourceService.search(gameId));
-  ipcMain.handle("sources:searchTitle", (_event, title: string, options) => sourceService.searchTitle(title, options));
-  ipcMain.handle("sources:exactTitleMatches", (_event, title: string) => sourceService.exactTitleMatches(title));
-  ipcMain.handle("clipboard:copy", (_event, text: string) => clipboard.writeText(text));
-  ipcMain.handle("settings:get", () => settingsService.get());
-  ipcMain.handle("settings:update", (_event, patch) => settingsService.update(patch));
-  ipcMain.handle("steam:pair", async () => {
+  handleIpc("sync:status", () => syncStatusService.get());
+  handleIpc("sources:import", (_event, input: SourceImportInput) => sourceService.import(input));
+  handleIpc("sources:list", () => sourceService.list());
+  handleIpc("sources:remove", (_event, id: string) => sourceService.remove(id));
+  handleIpc("sources:refreshSource", (_event, id: string, json: string) => sourceService.refreshSource(id, json));
+  handleIpc("sources:search", (_event, gameId: string) => sourceService.search(gameId));
+  handleIpc("sources:searchTitle", (_event, title: string, options) => sourceService.searchTitle(title, options));
+  handleIpc("sources:exactTitleMatches", (_event, title: string) => sourceService.exactTitleMatches(title));
+  handleIpc("clipboard:copy", (_event, text: string) => clipboard.writeText(text));
+  handleIpc("settings:get", () => settingsService.get());
+  handleIpc("settings:update", (_event, patch) => settingsService.update(patch));
+  handleIpc("steam:pair", async () => {
     const paired = await pairSteamAccount(mainWindow);
     const current = await settingsService.get();
     await settingsService.update({
@@ -734,7 +910,7 @@ function registerIpc(): void {
     });
     return paired;
   });
-  ipcMain.handle("steam:saveApiKey", async (_event, apiKey: string) => {
+  handleIpc("steam:saveApiKey", async (_event, apiKey: string) => {
     const trimmed = apiKey.trim();
     if (!trimmed) {
       throw new Error("Steam Web API key is required.");
@@ -753,8 +929,8 @@ function registerIpc(): void {
       }
     });
   });
-  ipcMain.handle("steam:disconnect", async () => settingsService.update({ steamAccount: undefined }));
-  ipcMain.handle("steam:connectFamily", async () => {
+  handleIpc("steam:disconnect", async () => settingsService.update({ steamAccount: undefined }));
+  handleIpc("steam:connectFamily", async () => {
     const current = await settingsService.get();
     if (!current.steamAccount) {
       throw new Error("Pair a Steam account before connecting the family library.");
@@ -773,7 +949,7 @@ function registerIpc(): void {
       }
     });
   });
-  ipcMain.handle("steam:refreshFamily", async () => {
+  handleIpc("steam:refreshFamily", async () => {
     const current = await settingsService.get();
     if (!current.steamAccount?.familySession) {
       throw new Error("Family library is not connected.");
@@ -795,7 +971,7 @@ function registerIpc(): void {
       }
     });
   });
-  ipcMain.handle("steam:disconnectFamily", async () => {
+  handleIpc("steam:disconnectFamily", async () => {
     const current = await settingsService.get();
     await disconnectSteamFamilySession();
     if (!current.steamAccount) {
@@ -808,10 +984,10 @@ function registerIpc(): void {
       }
     });
   });
-  ipcMain.handle("steam:search", async (_event, query: string): Promise<SteamSearchResult[]> => {
+  handleIpc("steam:search", async (_event, query: string): Promise<SteamSearchResult[]> => {
     return searchSteamStore(query, net.fetch);
   });
-  ipcMain.handle("metadata:saveSteamGridDbKey", async (_event, apiKey: string) => {
+  handleIpc("metadata:saveSteamGridDbKey", async (_event, apiKey: string) => {
     const trimmed = apiKey.trim();
     if (!trimmed) {
       throw new Error("SteamGridDB API key is required.");
@@ -820,8 +996,8 @@ function registerIpc(): void {
     const encrypted = await nativeBridge.encryptSecret({ value: trimmed, scope: "current-user" });
     return settingsService.update({ steamGridDbApiKey: encrypted });
   });
-  ipcMain.handle("metadata:clearSteamGridDbKey", async () => settingsService.update({ steamGridDbApiKey: undefined }));
-  ipcMain.handle("native:openExternal", (_event, url: string) => {
+  handleIpc("metadata:clearSteamGridDbKey", async () => settingsService.update({ steamGridDbApiKey: undefined }));
+  handleIpc("native:openExternal", (_event, url: string) => {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
       throw new Error("Only web links can be opened externally.");
@@ -829,18 +1005,18 @@ function registerIpc(): void {
 
     return shell.openExternal(parsed.toString());
   });
-  ipcMain.handle("native:openFolder", (_event, path: string) => shell.openPath(path));
-  ipcMain.handle("window:minimize", () => mainWindow?.minimize());
-  ipcMain.handle("window:maximize", () => {
+  handleIpc("native:openFolder", (_event, path: string) => shell.openPath(path));
+  handleIpc("window:minimize", () => mainWindow?.minimize());
+  handleIpc("window:maximize", () => {
     if (mainWindow?.isMaximized()) {
       mainWindow.unmaximize();
     } else {
       mainWindow?.maximize();
     }
   });
-  ipcMain.handle("window:close", () => mainWindow?.close());
-  ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
-  ipcMain.handle("debug:seed", () => {
+  handleIpc("window:close", () => mainWindow?.close());
+  handleIpc("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
+  handleIpc("debug:seed", () => {
     const seeded = repository.upsertImportedGame({
       provider: "steam",
       externalId: "1086940",
@@ -866,17 +1042,33 @@ function registerIpc(): void {
 
 app.whenReady().then(() => {
   const userData = app.getPath("userData");
+  startupProfileService = new StartupProfileService(join(userData, "startup-profile.ndjson"));
+  profile("app:ready", "Electron app ready", {
+    userData,
+    profileCommand: startupProfileService.enabled,
+    versions: process.versions
+  });
+  startStartupHeartbeat();
   repository = new HyniteRepository(join(userData, "hynite.db"));
+  profile("services:repository", "Repository opened");
   settingsService = new SettingsService(join(userData, "settings.json"));
   diagnosticLogService = new DiagnosticLogService(join(userData, "metadata-diagnostics.ndjson"));
   homeService = new HomeService(join(userData, "home-cache.json"), diagnosticLogService);
   sourceService = new SourceService(repository);
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, join(userData, "sync-status.json"));
+  profile("services:ready", "Main services initialized");
   registerIpc();
+  profile("ipc:registered", "IPC handlers registered");
   createWindow();
   void settingsService.get().then((settings) => {
+    profile("startup:settings-loaded", "Startup settings loaded", {
+      hasSteamAccount: Boolean(settings.steamAccount),
+      hasWebApiKey: Boolean(settings.steamAccount?.webApiKey),
+      hasSteamGridDbApiKey: Boolean(settings.steamGridDbApiKey)
+    });
     runAfterInitialRendererPaint(() => {
+      profile("startup:background:start", "Startup background work started");
       if (settings.steamAccount?.webApiKey) {
         void startSteamSync("steam", { refreshStaleMetadata: false }).catch((error: unknown) => {
           if (isSteamSyncCancelledError(error)) {
@@ -884,17 +1076,24 @@ app.whenReady().then(() => {
           }
           console.warn("Startup Steam sync failed", error);
         }).finally(() => {
+          profile("startup:background:rich-backfill", "Queueing rich metadata after startup Steam sync");
           enqueueRichMetadataBackfill();
         });
         return;
       }
 
+      profile("startup:background:rich-backfill", "Queueing rich metadata without startup Steam sync");
       enqueueRichMetadataBackfill();
     });
   });
 });
 
 app.on("window-all-closed", () => {
+  profile("app:window-all-closed", "All windows closed");
+  if (startupHeartbeatTimer) {
+    clearInterval(startupHeartbeatTimer);
+    startupHeartbeatTimer = undefined;
+  }
   syncStatusService?.flush();
   repository?.close();
   if (process.platform !== "darwin") {
@@ -903,6 +1102,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
+  profile("app:activate", "Electron app activated");
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   }

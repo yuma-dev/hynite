@@ -80,7 +80,9 @@ const api = {
     clearSteamGridDbKey: (): Promise<AppSettings> => ipcRenderer.invoke("metadata:clearSteamGridDbKey")
   },
   debug: {
-    seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed")
+    seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed"),
+    profile: (entry: { phase: string; message: string; details?: Record<string, unknown>; rendererElapsedMs?: number }): void =>
+      ipcRenderer.send("debug:profile", entry)
   },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke("window:minimize"),

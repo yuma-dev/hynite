@@ -46,7 +46,14 @@ export class SyncStatusService {
     this.log("info", "starting", "Starting Steam sync", { providerId });
   }
 
-  progress(phase: string, message: string, current?: number, total?: number, details?: Record<string, unknown>): void {
+  progress(
+    phase: string,
+    message: string,
+    current?: number,
+    total?: number,
+    details?: Record<string, unknown>,
+    options: { history?: boolean } = {}
+  ): void {
     this.status = {
       ...this.status,
       active: true,
@@ -55,6 +62,12 @@ export class SyncStatusService {
       current: current ?? this.status.current,
       total: total ?? this.status.total
     };
+    if (options.history === false) {
+      this.scheduleEmit();
+      this.schedulePersist();
+      return;
+    }
+
     this.log("info", phase, message, details);
   }
 

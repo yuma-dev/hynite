@@ -40,6 +40,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { gameActivityTime, makeGameId, makeSortTitle, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { profileStartup } from "./startupProfile";
 
 type Route = "home" | "trending" | "library" | "search" | "settings";
 
@@ -2530,12 +2531,24 @@ export function App() {
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [startupDone, setStartupDone] = useState(false);
   const contentRef = useRef<HTMLElement | null>(null);
+  const handledSyncSuccessAtRef = useRef<string | undefined>();
+
+  useEffect(() => {
+    profileStartup("app:mounted", "App component mounted");
+  }, []);
 
   useEffect(() => {
     contentRef.current?.scrollTo({ top: 0 });
   }, [route]);
 
   async function refresh() {
+    const startedAt = performance.now();
+    profileStartup("refresh:start", "Renderer refresh started", {
+      query,
+      librarySort,
+      librarySortDirection,
+      libraryInstallState
+    });
     const homePromise = window.hynite.home.get();
     const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
       window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState }),
@@ -2546,24 +2559,68 @@ export function App() {
     setLibraryGameIds(new Set(nextRecentGames.map((game) => game.id)));
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     setSettings(nextSettings);
-    void homePromise.then(setHome).catch(console.error);
+    profileStartup("refresh:end", "Renderer refresh local data loaded", {
+      durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      games: nextGames.length,
+      recentGames: nextRecentGames.length,
+      hasSettings: Boolean(nextSettings)
+    });
+    void homePromise.then((nextHome) => {
+      profileStartup("home:end", "Renderer home model loaded", {
+        durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        stale: nextHome.stale,
+        popularNow: nextHome.popularNow.length,
+        trendingRows: nextHome.trendingRows.length
+      });
+      setHome(nextHome);
+    }).catch((error: unknown) => {
+      profileStartup("home:error", "Renderer home model failed", { error: error instanceof Error ? error.message : String(error) });
+      console.error(error);
+    });
   }
 
   useEffect(() => {
     if (!initialLoadComplete) return;
     // Wait for two animation frames so the main content has actually painted before hiding the overlay.
-    requestAnimationFrame(() => requestAnimationFrame(() => setStartupDone(true)));
+    profileStartup("startup-overlay:paint-wait", "Initial load complete; waiting for paint");
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      profileStartup("startup-overlay:hidden", "Startup overlay hidden");
+      setStartupDone(true);
+    }));
   }, [initialLoadComplete]);
 
   useEffect(() => {
-    void Promise.all([refresh(), window.hynite.sync.status().then(setSyncStatus)]).finally(() => setInitialLoadComplete(true));
+    profileStartup("initial-load:start", "Initial renderer load started");
+    void Promise.all([
+      refresh(),
+      window.hynite.sync.status().then((status) => {
+        profileStartup("sync-status:initial", "Initial sync status loaded", { active: status.active, phase: status.phase });
+        handledSyncSuccessAtRef.current = status.lastSuccessAt;
+        setSyncStatus(status);
+      })
+    ])
+      .catch((error: unknown) => {
+        profileStartup("initial-load:error", "Initial renderer load failed", { error: error instanceof Error ? error.message : String(error) });
+        console.error(error);
+      })
+      .finally(() => {
+        profileStartup("initial-load:end", "Initial renderer load finished");
+        setInitialLoadComplete(true);
+      });
     const unsubscribeSync = window.hynite.sync.onStatusChanged((status) => {
+      profileStartup("sync-status:update", "Sync status update received", {
+        active: status.active,
+        phase: status.phase,
+        backgroundActive: status.backgroundActive
+      });
       setSyncStatus(status);
-      if (!status.active && status.phase === "complete") {
+      if (!status.active && status.phase === "complete" && status.lastSuccessAt && handledSyncSuccessAtRef.current !== status.lastSuccessAt) {
+        handledSyncSuccessAtRef.current = status.lastSuccessAt;
         void refresh();
       }
     });
     const unsubscribeGameUpdated = window.hynite.games.onUpdated((game) => {
+      profileStartup("game:update", "Game update received", { id: game.id, title: game.title });
       setGames((current) => current.map((item) => (item.id === game.id ? game : item)));
       setRecentGames((current) => current.map((item) => (item.id === game.id ? game : item)));
       setLibraryGameIds((current) => new Set([...current, game.id]));
@@ -2577,7 +2634,20 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState }).then(setGames);
+    const startedAt = performance.now();
+    profileStartup("library-filter:start", "Library filter query started", { query, librarySort, librarySortDirection, libraryInstallState });
+    void window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState })
+      .then((nextGames) => {
+        profileStartup("library-filter:end", "Library filter query finished", {
+          durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+          games: nextGames.length
+        });
+        setGames(nextGames);
+      })
+      .catch((error: unknown) => {
+        profileStartup("library-filter:error", "Library filter query failed", { error: error instanceof Error ? error.message : String(error) });
+        console.error(error);
+      });
   }, [query, librarySort, librarySortDirection, libraryInstallState]);
 
   async function syncSteam() {

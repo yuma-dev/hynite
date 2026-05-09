@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "dev": "node scripts/electron-vite.mjs dev --config apps/desktop/electron.vite.config.ts",
+    "dev:profile": "node scripts/electron-vite.mjs --startup-profile dev --config apps/desktop/electron.vite.config.ts",
     "build": "npm run typecheck && electron-vite build --config apps/desktop/electron.vite.config.ts",
     "typecheck": "tsc -b",
     "test": "vitest run",
