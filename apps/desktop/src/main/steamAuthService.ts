@@ -1,9 +1,12 @@
-import { BrowserWindow } from "electron";
-import type { SteamPairingResult } from "@hynite/core";
+import { BrowserWindow, session } from "electron";
+import type { SteamFamilyAuthResult, SteamPairingResult } from "@hynite/core";
 
 const steamOpenIdEndpoint = "https://steamcommunity.com/openid/login";
 const returnTo = "https://hynite.local/steam-auth";
 const realm = "https://hynite.local/";
+const familySessionPartition = "persist:steam-family";
+const familyTokenEndpoint = "https://store.steampowered.com/pointssummary/ajaxgetasyncconfig";
+const familyLoginEntry = "https://store.steampowered.com/login/";
 
 function buildSteamLoginUrl(): string {
   const params = new URLSearchParams({
@@ -93,4 +96,217 @@ export function pairSteamAccount(parent?: BrowserWindow): Promise<SteamPairingRe
 
     void authWindow.loadURL(buildSteamLoginUrl());
   });
+}
+
+type AsyncConfigResponse = {
+  success?: number;
+  data?: {
+    webapi_token?: string;
+    steamid?: string;
+  };
+};
+
+function decodeJwtPayload(token: string): { exp?: number; sub?: string } | undefined {
+  const segments = token.split(".");
+  const payloadSegment = segments[1];
+  if (!payloadSegment) {
+    return undefined;
+  }
+  try {
+    const payload = Buffer.from(payloadSegment.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    return JSON.parse(payload) as { exp?: number; sub?: string };
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchAsyncConfigFromPartition(): Promise<AsyncConfigResponse | undefined> {
+  const partition = session.fromPartition(familySessionPartition);
+  try {
+    const response = await partition.fetch(familyTokenEndpoint, { redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      return undefined;
+    }
+    if (!response.ok) {
+      return undefined;
+    }
+    const text = await response.text();
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("{")) {
+      return undefined;
+    }
+    return JSON.parse(trimmed) as AsyncConfigResponse;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readAsyncConfigFromBrowser(window: BrowserWindow): Promise<AsyncConfigResponse | undefined> {
+  const script = `
+    fetch(${JSON.stringify(familyTokenEndpoint)}, { credentials: 'include' })
+      .then(function (r) { return r.text(); })
+      .then(function (text) {
+        return { ok: true, text: text };
+      })
+      .catch(function (err) { return { ok: false, error: String(err) }; });
+  `;
+  try {
+    const result = (await window.webContents.executeJavaScript(script, true)) as
+      | { ok: true; text: string }
+      | { ok: false; error: string };
+    if (!result.ok) {
+      console.warn("[steam:family] in-page fetch failed:", result.error);
+      return undefined;
+    }
+    const trimmed = result.text.trim();
+    console.info("[steam:family] raw response (first 300 chars):", trimmed.slice(0, 300));
+    if (!trimmed.startsWith("{")) {
+      console.warn("[steam:family] response not JSON");
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as AsyncConfigResponse;
+      console.info("[steam:family] parsed keys:", Object.keys(parsed), "data keys:", parsed.data ? Object.keys(parsed.data) : "none");
+      return parsed;
+    } catch (error) {
+      console.warn("[steam:family] JSON parse failed:", error);
+      return undefined;
+    }
+  } catch (error) {
+    console.warn("[steam:family] executeJavaScript failed:", error);
+    return undefined;
+  }
+}
+
+async function isSteamSessionLoggedIn(): Promise<boolean> {
+  const partition = session.fromPartition(familySessionPartition);
+  const named = await partition.cookies.get({ name: "steamLoginSecure" });
+  if (named.length > 0) {
+    return true;
+  }
+  const all = await partition.cookies.get({});
+  return all.some((cookie) => cookie.name === "steamLoginSecure");
+}
+
+function asyncConfigToResult(response: AsyncConfigResponse | undefined): SteamFamilyAuthResult | undefined {
+  if (!response || response.success !== 1) {
+    return undefined;
+  }
+  const token = response.data?.webapi_token;
+  if (!token) {
+    return undefined;
+  }
+  const payload = decodeJwtPayload(token);
+  const steamId = response.data?.steamid ?? payload?.sub;
+  if (!steamId) {
+    return undefined;
+  }
+  const expiresAt = typeof payload?.exp === "number"
+    ? new Date(payload.exp * 1000).toISOString()
+    : new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString();
+  return { accessToken: token, steamId, expiresAt };
+}
+
+export function authenticateSteamSession(parent?: BrowserWindow): Promise<SteamFamilyAuthResult> {
+  return new Promise((resolve, reject) => {
+    const authWindow = new BrowserWindow({
+      width: 960,
+      height: 720,
+      minWidth: 720,
+      minHeight: 560,
+      parent,
+      modal: Boolean(parent),
+      title: "Connect Steam family library",
+      autoHideMenuBar: true,
+      webPreferences: {
+        partition: familySessionPartition,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    });
+
+    let settled = false;
+    let probing = false;
+
+    function settle(error: Error | undefined, result?: SteamFamilyAuthResult): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (error) {
+        reject(error);
+      } else if (result) {
+        resolve(result);
+      }
+      if (!authWindow.isDestroyed()) {
+        authWindow.close();
+      }
+    }
+
+    async function probeAfterLogin(): Promise<void> {
+      if (settled || probing) {
+        return;
+      }
+      probing = true;
+      try {
+        if (authWindow.isDestroyed()) {
+          return;
+        }
+
+        const url = authWindow.webContents.getURL();
+        console.info("[steam:family] probe tick @", url);
+        if (!url.includes("steampowered.com") && !url.includes("steamcommunity.com")) {
+          return;
+        }
+        const loggedIn = await isSteamSessionLoggedIn();
+        if (!loggedIn) {
+          const partition = session.fromPartition(familySessionPartition);
+          const all = await partition.cookies.get({});
+          console.info(
+            "[steam:family] not logged in yet. cookie names:",
+            all.map((cookie) => `${cookie.name}@${cookie.domain}`).slice(0, 20)
+          );
+          return;
+        }
+        console.info("[steam:family] login detected; attempting token extraction");
+        const fromBrowser = asyncConfigToResult(await readAsyncConfigFromBrowser(authWindow));
+        if (fromBrowser) {
+          console.info("[steam:family] token extracted successfully");
+          settle(undefined, fromBrowser);
+        } else {
+          console.warn("[steam:family] extraction returned no token");
+        }
+      } catch (error) {
+        console.warn("[steam:family] probe failed", error);
+      } finally {
+        probing = false;
+      }
+    }
+
+    authWindow.webContents.on("did-navigate", () => void probeAfterLogin());
+    authWindow.webContents.on("did-frame-navigate", () => void probeAfterLogin());
+    authWindow.webContents.on("did-finish-load", () => void probeAfterLogin());
+
+    const pollInterval = setInterval(() => void probeAfterLogin(), 1500);
+
+    authWindow.on("closed", () => {
+      clearInterval(pollInterval);
+      if (!settled) {
+        reject(new Error("Steam family login was cancelled."));
+      }
+    });
+
+    void authWindow.loadURL(familyLoginEntry);
+  });
+}
+
+export async function refreshSteamAccessToken(): Promise<SteamFamilyAuthResult | undefined> {
+  const config = await fetchAsyncConfigFromPartition();
+  return asyncConfigToResult(config);
+}
+
+export async function disconnectSteamFamilySession(): Promise<void> {
+  const partition = session.fromPartition(familySessionPartition);
+  await partition.clearStorageData();
 }

@@ -563,11 +563,32 @@ function useSpotlightGrid(ref: RefObject<HTMLDivElement | null>, hoverDelayMs = 
   return { onPointerOver, onPointerLeave: clear };
 }
 
+function isFamilySharedOnly(game: Game): boolean {
+  if (game.sourceIds.length === 0) {
+    return false;
+  }
+  return game.sourceIds.every((source) => source.shareType === "family");
+}
+
+function familySharedOwners(game: Game): string[] {
+  const owners = new Set<string>();
+  for (const source of game.sourceIds) {
+    for (const owner of source.familyOwnerSteamIds ?? []) {
+      owners.add(owner);
+    }
+  }
+  return [...owners];
+}
+
 function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (game: Game) => void; wide?: boolean }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const cover = primaryCover(game);
   const isInstalled = game.installState === "installed";
   const playtimeLabel = formatHours(game.playtimeMinutes);
+  const familyShared = isFamilySharedOnly(game);
+  const familyOwnersTooltip = familyShared
+    ? `Shared by Steam Family${familySharedOwners(game).length > 0 ? `: ${familySharedOwners(game).join(", ")}` : ""}`
+    : undefined;
 
   return (
     <div
@@ -626,6 +647,11 @@ function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (ga
           <span className="cover-playtime">{playtimeLabel}</span>
         </span>
       </span>
+      {familyShared ? (
+        <span className="cover-family-badge" title={familyOwnersTooltip}>
+          Family
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -1192,6 +1218,8 @@ function TrendingScreen({ home, settings, libraryGameIds, onSelect }: { home?: H
   );
 }
 
+type FamilyFilter = "all" | "family-only" | "owned-only";
+
 function LibraryScreen({
   games,
   query,
@@ -1219,6 +1247,16 @@ function LibraryScreen({
 }) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(gridRef, 180);
+  const [familyFilter, setFamilyFilter] = useState<FamilyFilter>("all");
+  const visibleGames = useMemo(() => {
+    if (familyFilter === "all") {
+      return games;
+    }
+    return games.filter((game) => {
+      const familyOnly = isFamilySharedOnly(game);
+      return familyFilter === "family-only" ? familyOnly : !familyOnly;
+    });
+  }, [games, familyFilter]);
   return (
     <main className="page">
       <div className="library-head">
@@ -1236,6 +1274,15 @@ function LibraryScreen({
             <option value="installed">Installed</option>
             <option value="not_installed">Not installed</option>
             <option value="unknown">Unknown</option>
+          </select>
+          <select
+            className="plain-select"
+            value={familyFilter}
+            onChange={(event) => setFamilyFilter(event.target.value as FamilyFilter)}
+          >
+            <option value="all">All games</option>
+            <option value="owned-only">Owned only</option>
+            <option value="family-only">Family-shared only</option>
           </select>
           <select
             className="plain-select"
@@ -1272,7 +1319,7 @@ function LibraryScreen({
         </div>
       ) : (
         <div className="library-grid" ref={gridRef} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
-          {games.map((game) => (
+          {visibleGames.map((game) => (
             <GameCover key={game.id} game={game} onSelect={onSelect} />
           ))}
         </div>
@@ -1698,6 +1745,23 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
 
 type SettingsTab = "steam" | "metadata" | "sources" | "advanced";
 
+function formatRelativeExpiry(expiresAt: string): string {
+  const expiry = Date.parse(expiresAt);
+  if (!Number.isFinite(expiry)) {
+    return "soon";
+  }
+  const diffMs = expiry - Date.now();
+  if (diffMs <= 0) {
+    return "now (token expired — refresh)";
+  }
+  const hours = Math.floor(diffMs / (60 * 60 * 1000));
+  const minutes = Math.floor((diffMs % (60 * 60 * 1000)) / (60 * 1000));
+  if (hours >= 1) {
+    return `in ${hours}h ${minutes}m`;
+  }
+  return `in ${minutes}m`;
+}
+
 function SettingsScreen({
   settings,
   setSettings,
@@ -1738,6 +1802,34 @@ function SettingsScreen({
     setSettings(next);
     setApiKey("");
     setSteamMessage("Steam account disconnected.");
+  }
+
+  async function connectFamilyLibrary() {
+    setSteamMessage(undefined);
+    try {
+      const next = await window.hynite.steam.connectFamily();
+      setSettings(next);
+      setSteamMessage("Steam family library connected.");
+    } catch (error) {
+      setSteamMessage(error instanceof Error ? error.message : "Failed to connect family library.");
+    }
+  }
+
+  async function refreshFamilyLibrary() {
+    setSteamMessage(undefined);
+    try {
+      const next = await window.hynite.steam.refreshFamily();
+      setSettings(next);
+      setSteamMessage("Steam family session refreshed.");
+    } catch (error) {
+      setSteamMessage(error instanceof Error ? error.message : "Failed to refresh family session.");
+    }
+  }
+
+  async function disconnectFamilyLibrary() {
+    const next = await window.hynite.steam.disconnectFamily();
+    setSettings(next);
+    setSteamMessage("Steam family library disconnected.");
   }
 
   async function saveSteamGridDbKey() {
@@ -1827,6 +1919,46 @@ function SettingsScreen({
                   <KeyRound size={16} />
                   Save key
                 </button>
+              </div>
+              <div className="steam-account-row" style={{ marginTop: "1rem" }}>
+                <div>
+                  <strong>
+                    {settings?.steamAccount?.familySession
+                      ? "Steam family library connected"
+                      : "Steam family library not connected"}
+                  </strong>
+                  <span>
+                    {settings?.steamAccount?.familySession
+                      ? `Session expires ${formatRelativeExpiry(settings.steamAccount.familySession.expiresAt)}`
+                      : "Sign in to import games shared by your Steam Family Group."}
+                  </span>
+                </div>
+                <div className="steam-actions">
+                  <button
+                    className="secondary-action"
+                    disabled={!settings?.steamAccount}
+                    onClick={() => void connectFamilyLibrary()}
+                  >
+                    <Link2 size={16} />
+                    {settings?.steamAccount?.familySession ? "Reconnect" : "Connect"}
+                  </button>
+                  <button
+                    className="secondary-action"
+                    disabled={!settings?.steamAccount?.familySession}
+                    onClick={() => void refreshFamilyLibrary()}
+                  >
+                    <KeyRound size={16} />
+                    Refresh
+                  </button>
+                  <button
+                    className="secondary-action"
+                    disabled={!settings?.steamAccount?.familySession}
+                    onClick={() => void disconnectFamilyLibrary()}
+                  >
+                    <LogOut size={16} />
+                    Disconnect
+                  </button>
+                </div>
               </div>
               {steamMessage ? <p className="result-line">{steamMessage}</p> : null}
             </section>

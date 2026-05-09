@@ -1,4 +1,5 @@
 import type { ImportedGame } from "@hynite/core";
+import { communityIconUrl, unixSecondsToIso } from "./shared";
 
 type SteamOwnedGamesResponse = {
   response?: {
@@ -22,22 +23,6 @@ export type SteamOwnedGamesOptions = {
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
 };
-
-function unixSecondsToIso(value: number | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return new Date(value * 1000).toISOString();
-}
-
-function communityIconUrl(appid: number, hash: string | undefined): string | undefined {
-  if (!hash) {
-    return undefined;
-  }
-
-  return `https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/${appid}/${hash}.jpg`;
-}
 
 export async function fetchOwnedSteamGames(options: SteamOwnedGamesOptions): Promise<ImportedGame[]> {
   const fetchImpl = options.fetchImpl ?? fetch;

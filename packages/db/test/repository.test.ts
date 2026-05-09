@@ -191,6 +191,77 @@ describe("HyniteRepository", () => {
     repository.close();
   });
 
+  it("persists family-shared source rows with owner steamids", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "1086940",
+      title: "Baldur's Gate 3",
+      installState: "unknown",
+      shareType: "family",
+      familyOwnerSteamIds: ["76561198000000001", "76561198000000002"]
+    });
+
+    const persisted = repository.getGame("steam:1086940");
+    expect(persisted?.sourceIds).toEqual([
+      {
+        provider: "steam",
+        externalId: "1086940",
+        shareType: "family",
+        familyOwnerSteamIds: ["76561198000000001", "76561198000000002"]
+      }
+    ]);
+
+    repository.close();
+  });
+
+  it("does not downgrade an owned source row to family on subsequent imports", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "730",
+      title: "Counter-Strike 2",
+      installState: "unknown"
+    });
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "730",
+      title: "Counter-Strike 2",
+      installState: "unknown",
+      shareType: "family",
+      familyOwnerSteamIds: ["76561198000000001"]
+    });
+
+    const persisted = repository.getGame("steam:730");
+    expect(persisted?.sourceIds[0]?.shareType).toBe("owned");
+
+    repository.close();
+  });
+
+  it("upgrades a family source row to owned when the user later owns the game", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "440",
+      title: "Team Fortress 2",
+      installState: "unknown",
+      shareType: "family",
+      familyOwnerSteamIds: ["76561198000000001"]
+    });
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "440",
+      title: "Team Fortress 2",
+      installState: "unknown"
+    });
+
+    const persisted = repository.getGame("steam:440");
+    expect(persisted?.sourceIds[0]?.shareType).toBe("owned");
+    expect(persisted?.sourceIds[0]?.familyOwnerSteamIds).toBeUndefined();
+
+    repository.close();
+  });
+
   it("hides legacy guessed library capsule urls from mapped games", () => {
     const repository = createRepository();
     repository.upsertImportedGame({ provider: "steam", externalId: "3405690", title: "EA SPORTS FC™ 26", installState: "unknown" });

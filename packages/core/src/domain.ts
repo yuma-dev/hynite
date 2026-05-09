@@ -38,9 +38,14 @@ export const gameDiscoverySchema = z.object({
 });
 export type GameDiscovery = z.infer<typeof gameDiscoverySchema>;
 
+export const shareTypeSchema = z.enum(["owned", "family"]);
+export type ShareType = z.infer<typeof shareTypeSchema>;
+
 export const sourceIdentitySchema = z.object({
   provider: providerIdSchema,
-  externalId: z.string().min(1)
+  externalId: z.string().min(1),
+  shareType: shareTypeSchema.optional(),
+  familyOwnerSteamIds: z.array(z.string()).optional()
 });
 export type SourceIdentity = z.infer<typeof sourceIdentitySchema>;
 
@@ -96,6 +101,8 @@ export type ImportedGame = {
   lastPlayedAt?: string;
   addedAt?: string;
   communityIconUrl?: string;
+  shareType?: ShareType;
+  familyOwnerSteamIds?: string[];
 };
 
 export type GameMetadataPatch = Partial<
@@ -246,16 +253,30 @@ export type HomeModel = {
   stale: boolean;
 };
 
+export type SteamFamilySession = {
+  accessToken: EncryptedSecret;
+  steamId: string;
+  expiresAt: string;
+  connectedAt: string;
+};
+
 export type SteamAccountSettings = {
   steamId: string;
   personaName?: string;
   pairedAt: string;
   webApiKey?: EncryptedSecret;
+  familySession?: SteamFamilySession;
 };
 
 export type SteamPairingResult = {
   steamId: string;
   pairedAt: string;
+};
+
+export type SteamFamilyAuthResult = {
+  accessToken: string;
+  steamId: string;
+  expiresAt: string;
 };
 
 export type AppSettings = {

@@ -11,7 +11,12 @@ import { SettingsService } from "./settingsService";
 import { SourceService } from "./sourceService";
 import { searchSteamStore } from "./steamSearchService";
 import { SyncStatusService } from "./syncStatusService";
-import { pairSteamAccount } from "./steamAuthService";
+import {
+  authenticateSteamSession,
+  disconnectSteamFamilySession,
+  pairSteamAccount,
+  refreshSteamAccessToken
+} from "./steamAuthService";
 
 let mainWindow: Electron.BrowserWindow | undefined;
 let repository: HyniteRepository;
@@ -80,6 +85,60 @@ async function withSteamSyncStartLock<T>(task: () => Promise<T>): Promise<T> {
     return await task();
   } finally {
     release();
+  }
+}
+
+const FAMILY_TOKEN_REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
+
+async function resolveFamilyAccessToken(settings: { steamAccount?: { familySession?: { accessToken: import("@hynite/core").EncryptedSecret; expiresAt: string; steamId: string; connectedAt: string } } }): Promise<string | undefined> {
+  const session = settings.steamAccount?.familySession;
+  if (!session) {
+    return undefined;
+  }
+
+  const expiresAt = Date.parse(session.expiresAt);
+  const isExpiringSoon = !Number.isFinite(expiresAt) || expiresAt - Date.now() < FAMILY_TOKEN_REFRESH_THRESHOLD_MS;
+
+  if (!isExpiringSoon) {
+    try {
+      return await nativeBridge.decryptSecret(session.accessToken);
+    } catch (error) {
+      console.warn("Failed to decrypt Steam family access token", error);
+    }
+  }
+
+  try {
+    const refreshed = await refreshSteamAccessToken();
+    if (refreshed) {
+      const encrypted = await nativeBridge.encryptSecret({ value: refreshed.accessToken, scope: "current-user" });
+      const current = await settingsService.get();
+      if (current.steamAccount) {
+        await settingsService.update({
+          steamAccount: {
+            ...current.steamAccount,
+            familySession: {
+              accessToken: encrypted,
+              steamId: refreshed.steamId,
+              expiresAt: refreshed.expiresAt,
+              connectedAt: current.steamAccount.familySession?.connectedAt ?? new Date().toISOString()
+            }
+          }
+        });
+      }
+      return refreshed.accessToken;
+    }
+  } catch (error) {
+    console.warn("Steam family access token refresh failed", error);
+  }
+
+  if (!isExpiringSoon) {
+    return undefined;
+  }
+
+  try {
+    return await nativeBridge.decryptSecret(session.accessToken);
+  } catch {
+    return undefined;
   }
 }
 
@@ -465,6 +524,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
   const settings = await settingsService.get();
   throwIfSteamSyncCancelled(options.signal);
   const webApiKey = settings.steamAccount?.webApiKey ? await nativeBridge.decryptSecret(settings.steamAccount.webApiKey) : undefined;
+  const familyAccessToken = await resolveFamilyAccessToken(settings);
   throwIfSteamSyncCancelled(options.signal);
   const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
   const provider = new SteamImporterProvider({
@@ -472,7 +532,8 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       settings.steamAccount && webApiKey
         ? {
             steamId: settings.steamAccount.steamId,
-            webApiKey
+            webApiKey,
+            familyAccessToken
           }
         : undefined,
     includePlayedFreeGames: true,
@@ -481,6 +542,13 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
     metadataMode: "fast",
     rawMetadataRecorder: (game, source, raw) => saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, source, raw),
     signal: options.signal,
+    scanLogger: (level, message, details) => {
+      diagnosticLogService.log({ level, phase: "steam:family", message, details });
+      syncStatusService.log(level, "steam:family", message, details);
+      if (level === "warning" || level === "error") {
+        console.warn(`[steam:family] ${message}`, details);
+      }
+    },
     metadataLogger: (entry) => {
       diagnosticLogService.log({
         level: entry.level,
@@ -686,6 +754,60 @@ function registerIpc(): void {
     });
   });
   ipcMain.handle("steam:disconnect", async () => settingsService.update({ steamAccount: undefined }));
+  ipcMain.handle("steam:connectFamily", async () => {
+    const current = await settingsService.get();
+    if (!current.steamAccount) {
+      throw new Error("Pair a Steam account before connecting the family library.");
+    }
+    const result = await authenticateSteamSession(mainWindow);
+    const encrypted = await nativeBridge.encryptSecret({ value: result.accessToken, scope: "current-user" });
+    return settingsService.update({
+      steamAccount: {
+        ...current.steamAccount,
+        familySession: {
+          accessToken: encrypted,
+          steamId: result.steamId,
+          expiresAt: result.expiresAt,
+          connectedAt: new Date().toISOString()
+        }
+      }
+    });
+  });
+  ipcMain.handle("steam:refreshFamily", async () => {
+    const current = await settingsService.get();
+    if (!current.steamAccount?.familySession) {
+      throw new Error("Family library is not connected.");
+    }
+    const refreshed = await refreshSteamAccessToken();
+    if (!refreshed) {
+      throw new Error("Steam family session expired; reconnect to continue.");
+    }
+    const encrypted = await nativeBridge.encryptSecret({ value: refreshed.accessToken, scope: "current-user" });
+    return settingsService.update({
+      steamAccount: {
+        ...current.steamAccount,
+        familySession: {
+          accessToken: encrypted,
+          steamId: refreshed.steamId,
+          expiresAt: refreshed.expiresAt,
+          connectedAt: current.steamAccount.familySession.connectedAt
+        }
+      }
+    });
+  });
+  ipcMain.handle("steam:disconnectFamily", async () => {
+    const current = await settingsService.get();
+    await disconnectSteamFamilySession();
+    if (!current.steamAccount) {
+      return current;
+    }
+    return settingsService.update({
+      steamAccount: {
+        ...current.steamAccount,
+        familySession: undefined
+      }
+    });
+  });
   ipcMain.handle("steam:search", async (_event, query: string): Promise<SteamSearchResult[]> => {
     return searchSteamStore(query, net.fetch);
   });

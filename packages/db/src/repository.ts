@@ -184,9 +184,32 @@ export class HyniteRepository {
         now
       );
 
-    this.db
-      .prepare("INSERT OR REPLACE INTO game_sources (game_id, provider, external_id) VALUES (?, ?, ?)")
-      .run(id, game.provider, game.externalId);
+    const incomingShareType = game.shareType ?? "owned";
+    const ownerJson = game.familyOwnerSteamIds && game.familyOwnerSteamIds.length > 0
+      ? JSON.stringify(game.familyOwnerSteamIds)
+      : null;
+
+    const existingSource = this.db
+      .prepare("SELECT share_type FROM game_sources WHERE provider = ? AND external_id = ?")
+      .get(game.provider, game.externalId) as { share_type: string } | undefined;
+
+    // Owned-takes-precedence: never downgrade an existing owned row to family.
+    if (existingSource?.share_type === "owned" && incomingShareType === "family") {
+      this.db
+        .prepare("UPDATE game_sources SET game_id = ? WHERE provider = ? AND external_id = ?")
+        .run(id, game.provider, game.externalId);
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO game_sources (game_id, provider, external_id, share_type, family_owner_steamids_json)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(provider, external_id) DO UPDATE SET
+             game_id = excluded.game_id,
+             share_type = excluded.share_type,
+             family_owner_steamids_json = excluded.family_owner_steamids_json`
+        )
+        .run(id, game.provider, game.externalId, incomingShareType, ownerJson);
+    }
 
     const persisted = this.getGame(id);
     if (!persisted) {
@@ -550,8 +573,13 @@ export class HyniteRepository {
 
   private mapGameRow(row: GameRow): Game {
     const sourceRows = this.db
-      .prepare("SELECT provider, external_id FROM game_sources WHERE game_id = ?")
-      .all(row.id) as Array<{ provider: ProviderId; external_id: string }>;
+      .prepare("SELECT provider, external_id, share_type, family_owner_steamids_json FROM game_sources WHERE game_id = ?")
+      .all(row.id) as Array<{
+        provider: ProviderId;
+        external_id: string;
+        share_type: string | null;
+        family_owner_steamids_json: string | null;
+      }>;
 
     const libraryCapsuleUrl = isLegacyGuessedLibraryCapsuleUrl(row.library_capsule_url) ? undefined : (row.library_capsule_url ?? undefined);
     const coverUrl = isLegacyGuessedLibraryCapsuleUrl(row.cover_url) ? undefined : (row.cover_url ?? undefined);
@@ -560,7 +588,12 @@ export class HyniteRepository {
       id: row.id,
       title: row.title,
       sortTitle: row.sort_title,
-      sourceIds: sourceRows.map((source) => ({ provider: source.provider, externalId: source.external_id })),
+      sourceIds: sourceRows.map((source) => ({
+        provider: source.provider,
+        externalId: source.external_id,
+        shareType: source.share_type === "family" ? ("family" as const) : ("owned" as const),
+        familyOwnerSteamIds: parseJson<string[] | undefined>(source.family_owner_steamids_json, undefined)
+      })),
       installState: row.install_state,
       installDirectory: row.install_directory ?? undefined,
       executablePath: row.executable_path ?? undefined,

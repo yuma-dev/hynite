@@ -133,5 +133,12 @@ export const migrations = [
 
       CREATE INDEX IF NOT EXISTS idx_game_metadata_raw_game_id ON game_metadata_raw(game_id);
     `
+  },
+  {
+    id: 7,
+    sql: `
+      ALTER TABLE game_sources ADD COLUMN share_type TEXT NOT NULL DEFAULT 'owned';
+      ALTER TABLE game_sources ADD COLUMN family_owner_steamids_json TEXT;
+    `
   }
 ] as const;

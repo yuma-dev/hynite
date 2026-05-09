@@ -70,7 +70,10 @@ const api = {
     pair: (): Promise<SteamPairingResult> => ipcRenderer.invoke("steam:pair"),
     saveApiKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("steam:saveApiKey", apiKey),
     disconnect: (): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnect"),
-    search: (query: string): Promise<SteamSearchResult[]> => ipcRenderer.invoke("steam:search", query)
+    search: (query: string): Promise<SteamSearchResult[]> => ipcRenderer.invoke("steam:search", query),
+    connectFamily: (): Promise<AppSettings> => ipcRenderer.invoke("steam:connectFamily"),
+    refreshFamily: (): Promise<AppSettings> => ipcRenderer.invoke("steam:refreshFamily"),
+    disconnectFamily: (): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnectFamily")
   },
   metadata: {
     saveSteamGridDbKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("metadata:saveSteamGridDbKey", apiKey),
