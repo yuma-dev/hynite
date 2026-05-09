@@ -41,6 +41,47 @@ export type GameDiscovery = z.infer<typeof gameDiscoverySchema>;
 export const shareTypeSchema = z.enum(["owned", "family"]);
 export type ShareType = z.infer<typeof shareTypeSchema>;
 
+export const playerModeSchema = z.enum([
+  "single_player",
+  "multi_player",
+  "local_coop",
+  "online_coop",
+  "local_multiplayer"
+]);
+export type PlayerMode = z.infer<typeof playerModeSchema>;
+
+/** Map a Steam category description (e.g. "Local Co-op") to one or more normalized player modes. */
+export function steamCategoryToPlayerModes(description: string | undefined | null): PlayerMode[] {
+  if (!description) return [];
+  const value = description.trim().toLocaleLowerCase();
+  const modes: PlayerMode[] = [];
+  if (value === "single-player" || value === "singleplayer") modes.push("single_player");
+  if (value === "multi-player" || value === "multiplayer") modes.push("multi_player");
+  if (value === "local co-op" || value === "shared/split screen co-op") modes.push("local_coop");
+  if (value === "online co-op") {
+    modes.push("online_coop");
+    modes.push("multi_player");
+  }
+  if (value === "co-op") modes.push("multi_player");
+  if (value === "local multi-player" || value === "shared/split screen") modes.push("local_multiplayer");
+  if (value === "cross-platform multiplayer") modes.push("multi_player");
+  return modes;
+}
+
+export function playerModesFromSteamCategories(
+  categories: ReadonlyArray<{ description?: string | null } | string | null | undefined> | undefined
+): PlayerMode[] {
+  if (!categories) return [];
+  const set = new Set<PlayerMode>();
+  for (const entry of categories) {
+    const description = typeof entry === "string" ? entry : entry?.description;
+    for (const mode of steamCategoryToPlayerModes(description)) {
+      set.add(mode);
+    }
+  }
+  return [...set];
+}
+
 export const sourceIdentitySchema = z.object({
   provider: providerIdSchema,
   externalId: z.string().min(1),
@@ -78,6 +119,7 @@ export const gameSchema = z.object({
   discovery: gameDiscoverySchema.optional(),
   genres: z.array(z.string()),
   tags: z.array(z.string()),
+  playerModes: z.array(playerModeSchema).default([]),
   developers: z.array(z.string()),
   publishers: z.array(z.string()),
   releaseDate: z.string().optional(),
@@ -132,6 +174,7 @@ export type GameMetadataPatch = Partial<
     | "discovery"
     | "genres"
     | "tags"
+    | "playerModes"
     | "developers"
     | "publishers"
     | "releaseDate"
@@ -146,11 +189,48 @@ export type ImporterProvider = {
   refreshMetadata(game: ImportedGame): Promise<GameMetadataPatch>;
 };
 
-export type LibraryQuery = {
-  search?: string;
+export type LibrarySortField = "recent" | "title" | "playtime" | "release" | "added";
+export type LibrarySortDirection = "asc" | "desc";
+export type LibraryOwnership = "all" | "owned" | "family";
+export type LibraryDateFilter = "any" | "recently_added" | "recently_played" | "never_played";
+
+export type LibraryFilters = {
   installState?: InstallState | "all";
-  sort?: "recent" | "title" | "playtime" | "release";
-  sortDirection?: "asc" | "desc";
+  ownership?: LibraryOwnership;
+  sources?: ProviderId[];
+  genres?: string[];
+  tags?: string[];
+  playerModes?: PlayerMode[];
+  dateFilter?: LibraryDateFilter;
+};
+
+export type LibrarySort = {
+  field: LibrarySortField;
+  direction: LibrarySortDirection;
+};
+
+export type LibraryQuery = LibraryFilters & {
+  search?: string;
+  sort?: LibrarySortField;
+  sortDirection?: LibrarySortDirection;
+};
+
+export type LibraryView = {
+  filters: LibraryFilters;
+  sort: LibrarySort;
+};
+
+export const defaultLibraryView: LibraryView = {
+  filters: {
+    installState: "all",
+    ownership: "all",
+    sources: [],
+    genres: [],
+    tags: [],
+    playerModes: [],
+    dateFilter: "any"
+  },
+  sort: { field: "title", direction: "asc" }
 };
 
 export type SyncResult = {
@@ -314,6 +394,7 @@ export type AppSettings = {
   steamGridDbApiKey?: EncryptedSecret;
   cacheTtlHours: number;
   reduceMotion: boolean;
+  libraryView?: LibraryView;
 };
 
 export type ExecutableInfo = {

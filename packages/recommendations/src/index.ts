@@ -145,6 +145,7 @@ function emptyGame(appid: string, title: string): Game {
     screenshots: [],
     genres: [],
     tags: [],
+    playerModes: [],
     developers: [],
     publishers: [],
     contentDescriptors: [],

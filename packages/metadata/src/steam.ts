@@ -1,4 +1,4 @@
-import type { GameMetadataPatch } from "@hynite/core";
+import { type GameMetadataPatch, playerModesFromSteamCategories } from "@hynite/core";
 
 export type SteamMetadataProviderId = "steam-store" | "steam-appinfo" | "steam-cdn" | "steamgriddb";
 
@@ -253,6 +253,7 @@ export async function fetchSteamMetadata(
       contentDescriptors: data.content_descriptors?.notes ? [stripHtml(data.content_descriptors.notes) ?? data.content_descriptors.notes] : [],
       genres: data.genres?.map((genre) => genre.description) ?? [],
       tags: data.categories?.map((category) => category.description) ?? [],
+      playerModes: playerModesFromSteamCategories(data.categories),
       developers: data.developers ?? [],
       publishers: data.publishers ?? [],
       releaseDate: parseSteamDate(data.release_date?.date),

@@ -44,6 +44,7 @@ function mergePatch(base: GameMetadataPatch, next: GameMetadataPatch): GameMetad
     discovery: base.discovery ?? next.discovery,
     genres: base.genres?.length ? base.genres : next.genres,
     tags: base.tags?.length ? base.tags : next.tags,
+    playerModes: base.playerModes?.length ? base.playerModes : next.playerModes,
     developers: base.developers?.length ? base.developers : next.developers,
     publishers: base.publishers?.length ? base.publishers : next.publishers,
     releaseDate: base.releaseDate ?? next.releaseDate,

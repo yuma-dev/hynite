@@ -83,6 +83,7 @@ export class SourceService {
         screenshots: [],
         genres: [],
         tags: [],
+        playerModes: [],
         developers: [],
         publishers: [],
         contentDescriptors: [],

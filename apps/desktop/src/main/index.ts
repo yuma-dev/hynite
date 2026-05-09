@@ -971,9 +971,7 @@ function registerIpc(): void {
     return startSteamSync(providerId, { refreshStaleMetadata: true });
   });
 
-  handleIpc("library:list", (_event, query: LibraryQuery = {}) =>
-    repository.queryGames(query.search, query.installState ?? "all", query.sort ?? "title", query.sortDirection)
-  );
+  handleIpc("library:list", (_event, query: LibraryQuery = {}) => repository.queryGames(query));
   handleIpc("library:clear", async () => {
     await withSteamSyncStartLock(() => cancelActiveSteamSync("Steam sync cancelled before clearing the library"));
     clearRichMetadataQueue("Detail metadata cancelled before clearing the library");

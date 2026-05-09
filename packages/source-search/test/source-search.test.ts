@@ -10,6 +10,7 @@ const game: Game = {
   installState: "installed",
   genres: [],
   tags: [],
+  playerModes: [],
   developers: [],
   publishers: [],
   metadataStatus: "complete"

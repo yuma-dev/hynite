@@ -13,6 +13,7 @@ function game(id: string, title: string): Game {
     screenshots: [],
     genres: ["RPG"],
     tags: ["Story Rich"],
+    playerModes: [],
     developers: [],
     publishers: [],
     contentDescriptors: [],

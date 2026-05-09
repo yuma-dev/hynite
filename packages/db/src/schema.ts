@@ -165,5 +165,11 @@ export const migrations = [
       CREATE INDEX IF NOT EXISTS idx_game_sources_game_id ON game_sources(game_id);
       PRAGMA foreign_keys = ON;
     `
+  },
+  {
+    id: 9,
+    sql: `
+      ALTER TABLE games ADD COLUMN player_modes_json TEXT NOT NULL DEFAULT '[]';
+    `
   }
 ] as const;

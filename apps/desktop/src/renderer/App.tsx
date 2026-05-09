@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
 import {
+  ArrowDown,
+  ArrowUp,
   BookOpen,
   ChevronDown,
   CalendarDays,
@@ -28,6 +30,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  SlidersHorizontal,
   TrendingUp,
   Trophy,
   Users,
@@ -39,7 +42,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { gameActivityTime, makeGameId, makeSortTitle, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileStartup } from "./startupProfile";
 
 async function launchGame(id: string): Promise<void> {
@@ -287,6 +290,7 @@ function gameFromSteamSearchResult(result: SteamSearchResult): Game {
     },
     genres: [],
     tags: [],
+    playerModes: [],
     developers: [],
     publishers: [],
     releaseDate: result.releaseDate,
@@ -1237,45 +1241,450 @@ function TrendingScreen({ home, settings, libraryGameIds, onSelect }: { home?: H
   );
 }
 
-type FamilyFilter = "all" | "family-only" | "owned-only";
+const SORT_FIELD_LABELS: Record<LibrarySortField, string> = {
+  title: "Title",
+  recent: "Recent activity",
+  added: "Recently added",
+  playtime: "Playtime",
+  release: "Release date"
+};
+
+const PLAYER_MODE_LABELS: Record<PlayerMode, string> = {
+  single_player: "Single-player",
+  multi_player: "Multi-player",
+  local_coop: "Local Co-op",
+  online_coop: "Online Co-op",
+  local_multiplayer: "Local Multi-player"
+};
+
+const SOURCE_LABELS: Record<ProviderId, string> = {
+  steam: "Steam",
+  epic: "Epic",
+  gog: "GOG",
+  manual: "Manual"
+};
+
+const DATE_FILTER_OPTIONS: Array<{ value: LibraryDateFilter; label: string }> = [
+  { value: "any", label: "Any time" },
+  { value: "recently_added", label: "Added in last 30 days" },
+  { value: "recently_played", label: "Played in last 30 days" },
+  { value: "never_played", label: "Never played" }
+];
+
+const OWNERSHIP_OPTIONS: Array<{ value: LibraryOwnership; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "owned", label: "Owned" },
+  { value: "family", label: "Family-shared" }
+];
+
+const INSTALL_STATE_OPTIONS: Array<{ value: InstallState | "all"; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "installed", label: "Installed" },
+  { value: "not_installed", label: "Not installed" },
+  { value: "unknown", label: "Unknown" }
+];
+
+function countActiveFilters(filters: LibraryFilters): number {
+  let n = 0;
+  if (filters.installState && filters.installState !== "all") n += 1;
+  if (filters.ownership && filters.ownership !== "all") n += 1;
+  if (filters.dateFilter && filters.dateFilter !== "any") n += 1;
+  if (filters.sources && filters.sources.length > 0) n += filters.sources.length;
+  if (filters.genres && filters.genres.length > 0) n += filters.genres.length;
+  if (filters.tags && filters.tags.length > 0) n += filters.tags.length;
+  if (filters.playerModes && filters.playerModes.length > 0) n += filters.playerModes.length;
+  return n;
+}
+
+function toggleInArray<T>(arr: T[] | undefined, value: T): T[] {
+  const next = arr ?? [];
+  return next.includes(value) ? next.filter((item) => item !== value) : [...next, value];
+}
+
+function FilterChip({ label, pressed, onClick }: { label: string; pressed: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className="chip" aria-pressed={pressed} onClick={onClick}>
+      {label}
+    </button>
+  );
+}
+
+function FilterSection({
+  title,
+  defaultOpen = true,
+  children
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="filter-section">
+      <button type="button" className="filter-section-header" onClick={() => setOpen((value) => !value)}>
+        <span className="filter-section-title">{title}</span>
+        <ChevronDown size={14} style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 120ms" }} />
+      </button>
+      {open ? <div className="filter-chip-row">{children}</div> : null}
+    </div>
+  );
+}
+
+function LibraryFiltersPanel({
+  open,
+  onClose,
+  filters,
+  onChange,
+  onReset,
+  facets
+}: {
+  open: boolean;
+  onClose: () => void;
+  filters: LibraryFilters;
+  onChange: (next: LibraryFilters) => void;
+  onReset: () => void;
+  facets: { sources: ProviderId[]; genres: string[]; tags: string[]; playerModes: PlayerMode[] };
+}) {
+  const [tagSearch, setTagSearch] = useState("");
+  const visibleTags = useMemo(() => {
+    const needle = tagSearch.trim().toLocaleLowerCase();
+    const list = needle ? facets.tags.filter((tag) => tag.toLocaleLowerCase().includes(needle)) : facets.tags;
+    return list.slice(0, 60);
+  }, [facets.tags, tagSearch]);
+
+  return (
+    <AnimatePresence>
+      {open ? (
+        <>
+          <motion.div
+            key="filter-backdrop"
+            className="filter-panel-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            onClick={onClose}
+          />
+          <motion.aside
+            key="filter-panel"
+            className="filter-panel"
+            initial={{ x: 380 }}
+            animate={{ x: 0 }}
+            exit={{ x: 380 }}
+            transition={{ type: "tween", duration: 0.22, ease: [0.25, 0.8, 0.4, 1] }}
+            role="dialog"
+            aria-label="Library filters"
+          >
+            <div className="filter-panel-header">
+              <h2>Filters</h2>
+              <div className="filter-panel-header-actions">
+                <button type="button" className="filter-panel-reset" onClick={onReset}>
+                  Reset
+                </button>
+                <button type="button" className="icon-action" onClick={onClose} aria-label="Close filters">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="filter-panel-body">
+              <FilterSection title="Status">
+                {INSTALL_STATE_OPTIONS.map((option) => (
+                  <FilterChip
+                    key={option.value}
+                    label={option.label}
+                    pressed={(filters.installState ?? "all") === option.value}
+                    onClick={() => onChange({ ...filters, installState: option.value })}
+                  />
+                ))}
+              </FilterSection>
+
+              <FilterSection title="Ownership">
+                {OWNERSHIP_OPTIONS.map((option) => (
+                  <FilterChip
+                    key={option.value}
+                    label={option.label}
+                    pressed={(filters.ownership ?? "all") === option.value}
+                    onClick={() => onChange({ ...filters, ownership: option.value })}
+                  />
+                ))}
+              </FilterSection>
+
+              {facets.sources.length > 0 ? (
+                <FilterSection title="Source">
+                  {facets.sources.map((source) => (
+                    <FilterChip
+                      key={source}
+                      label={SOURCE_LABELS[source]}
+                      pressed={(filters.sources ?? []).includes(source)}
+                      onClick={() => onChange({ ...filters, sources: toggleInArray(filters.sources, source) })}
+                    />
+                  ))}
+                </FilterSection>
+              ) : null}
+
+              {facets.playerModes.length > 0 ? (
+                <FilterSection title="Player support">
+                  {facets.playerModes.map((mode) => (
+                    <FilterChip
+                      key={mode}
+                      label={PLAYER_MODE_LABELS[mode]}
+                      pressed={(filters.playerModes ?? []).includes(mode)}
+                      onClick={() => onChange({ ...filters, playerModes: toggleInArray(filters.playerModes, mode) })}
+                    />
+                  ))}
+                </FilterSection>
+              ) : null}
+
+              <FilterSection title="Date">
+                {DATE_FILTER_OPTIONS.map((option) => (
+                  <FilterChip
+                    key={option.value}
+                    label={option.label}
+                    pressed={(filters.dateFilter ?? "any") === option.value}
+                    onClick={() => onChange({ ...filters, dateFilter: option.value })}
+                  />
+                ))}
+              </FilterSection>
+
+              {facets.genres.length > 0 ? (
+                <FilterSection title="Genres">
+                  {facets.genres.map((genre) => (
+                    <FilterChip
+                      key={genre}
+                      label={genre}
+                      pressed={(filters.genres ?? []).includes(genre)}
+                      onClick={() => onChange({ ...filters, genres: toggleInArray(filters.genres, genre) })}
+                    />
+                  ))}
+                </FilterSection>
+              ) : null}
+
+              {facets.tags.length > 0 ? (
+                <FilterSection title="Tags" defaultOpen={false}>
+                  <label className="filter-tag-search">
+                    <Search size={13} />
+                    <input
+                      value={tagSearch}
+                      onChange={(event) => setTagSearch(event.target.value)}
+                      placeholder="Search tags"
+                    />
+                  </label>
+                  <div className="filter-chip-row" style={{ marginTop: 8 }}>
+                    {visibleTags.map((tag) => (
+                      <FilterChip
+                        key={tag}
+                        label={tag}
+                        pressed={(filters.tags ?? []).includes(tag)}
+                        onClick={() => onChange({ ...filters, tags: toggleInArray(filters.tags, tag) })}
+                      />
+                    ))}
+                  </div>
+                </FilterSection>
+              ) : null}
+            </div>
+          </motion.aside>
+        </>
+      ) : null}
+    </AnimatePresence>
+  );
+}
+
+function LibrarySortMenu({
+  field,
+  direction,
+  onChange
+}: {
+  field: LibrarySortField;
+  direction: LibrarySortDirection;
+  onChange: (next: { field: LibrarySortField; direction: LibrarySortDirection }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handle(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    window.addEventListener("mousedown", handle);
+    return () => window.removeEventListener("mousedown", handle);
+  }, [open]);
+
+  return (
+    <div className="sort-trigger-wrap" ref={containerRef}>
+      <button type="button" className="secondary-action" onClick={() => setOpen((value) => !value)}>
+        <SlidersHorizontal size={14} />
+        {SORT_FIELD_LABELS[field]}
+        {direction === "asc" ? <ArrowUp size={13} /> : <ArrowDown size={13} />}
+      </button>
+      <AnimatePresence>
+        {open ? (
+          <motion.div
+            className="sort-menu"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.12 }}
+          >
+            {(Object.keys(SORT_FIELD_LABELS) as LibrarySortField[]).map((option) => (
+              <button
+                type="button"
+                key={option}
+                className="sort-menu-row"
+                aria-current={option === field}
+                onClick={() => {
+                  const nextDirection: LibrarySortDirection = option === "title" ? "asc" : "desc";
+                  onChange({ field: option, direction: option === field ? direction : nextDirection });
+                }}
+              >
+                {SORT_FIELD_LABELS[option]}
+              </button>
+            ))}
+            <div className="sort-menu-divider" />
+            <button
+              type="button"
+              className="sort-menu-row"
+              onClick={() => onChange({ field, direction: direction === "asc" ? "desc" : "asc" })}
+            >
+              {direction === "asc" ? <ArrowUp size={13} /> : <ArrowDown size={13} />}
+              {direction === "asc" ? "Ascending" : "Descending"}
+            </button>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+type ActivePillSpec = { key: string; label: string; onRemove: () => void };
+
+function buildActiveFilterPills(filters: LibraryFilters, onChange: (next: LibraryFilters) => void): ActivePillSpec[] {
+  const pills: ActivePillSpec[] = [];
+  if (filters.installState && filters.installState !== "all") {
+    const label = INSTALL_STATE_OPTIONS.find((option) => option.value === filters.installState)?.label ?? filters.installState;
+    pills.push({ key: `install:${filters.installState}`, label, onRemove: () => onChange({ ...filters, installState: "all" }) });
+  }
+  if (filters.ownership && filters.ownership !== "all") {
+    const label = OWNERSHIP_OPTIONS.find((option) => option.value === filters.ownership)?.label ?? filters.ownership;
+    pills.push({ key: `own:${filters.ownership}`, label, onRemove: () => onChange({ ...filters, ownership: "all" }) });
+  }
+  if (filters.dateFilter && filters.dateFilter !== "any") {
+    const label = DATE_FILTER_OPTIONS.find((option) => option.value === filters.dateFilter)?.label ?? filters.dateFilter;
+    pills.push({ key: `date:${filters.dateFilter}`, label, onRemove: () => onChange({ ...filters, dateFilter: "any" }) });
+  }
+  for (const source of filters.sources ?? []) {
+    pills.push({
+      key: `source:${source}`,
+      label: SOURCE_LABELS[source],
+      onRemove: () => onChange({ ...filters, sources: (filters.sources ?? []).filter((item) => item !== source) })
+    });
+  }
+  for (const mode of filters.playerModes ?? []) {
+    pills.push({
+      key: `mode:${mode}`,
+      label: PLAYER_MODE_LABELS[mode],
+      onRemove: () => onChange({ ...filters, playerModes: (filters.playerModes ?? []).filter((item) => item !== mode) })
+    });
+  }
+  for (const genre of filters.genres ?? []) {
+    pills.push({
+      key: `genre:${genre}`,
+      label: genre,
+      onRemove: () => onChange({ ...filters, genres: (filters.genres ?? []).filter((item) => item !== genre) })
+    });
+  }
+  for (const tag of filters.tags ?? []) {
+    pills.push({
+      key: `tag:${tag}`,
+      label: tag,
+      onRemove: () => onChange({ ...filters, tags: (filters.tags ?? []).filter((item) => item !== tag) })
+    });
+  }
+  return pills;
+}
+
+function ActiveFilterPills({
+  filters,
+  onChange,
+  onClearAll
+}: {
+  filters: LibraryFilters;
+  onChange: (next: LibraryFilters) => void;
+  onClearAll: () => void;
+}) {
+  const pills = buildActiveFilterPills(filters, onChange);
+  if (pills.length === 0) return null;
+  return (
+    <div className="active-filters">
+      {pills.map((pill) => (
+        <span key={pill.key} className="active-pill">
+          {pill.label}
+          <button type="button" onClick={pill.onRemove} aria-label={`Remove ${pill.label}`}>
+            <X size={12} />
+          </button>
+        </span>
+      ))}
+      <button type="button" className="active-clear" onClick={onClearAll}>
+        Clear all
+      </button>
+    </div>
+  );
+}
 
 function LibraryScreen({
   games,
+  facetGames,
   query,
   setQuery,
-  sort,
-  setSort,
-  sortDirection,
-  setSortDirection,
-  installState,
-  setInstallState,
+  view,
+  setView,
   onSelect,
   onSync
 }: {
   games: Game[];
+  facetGames: Game[];
   query: string;
   setQuery: (query: string) => void;
-  sort: "recent" | "title" | "playtime" | "release";
-  setSort: (sort: "recent" | "title" | "playtime" | "release") => void;
-  sortDirection: "asc" | "desc";
-  setSortDirection: (direction: "asc" | "desc") => void;
-  installState: InstallState | "all";
-  setInstallState: (state: InstallState | "all") => void;
+  view: LibraryView;
+  setView: (next: LibraryView) => void;
   onSelect: (game: Game) => void;
   onSync: () => void;
 }) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(gridRef, 180);
-  const [familyFilter, setFamilyFilter] = useState<FamilyFilter>("all");
-  const visibleGames = useMemo(() => {
-    if (familyFilter === "all") {
-      return games;
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const facets = useMemo(() => {
+    const sourceSet = new Set<ProviderId>();
+    const genreSet = new Set<string>();
+    const tagSet = new Set<string>();
+    const playerModeSet = new Set<PlayerMode>();
+    for (const game of facetGames) {
+      for (const source of game.sourceIds) sourceSet.add(source.provider);
+      for (const genre of game.genres) genreSet.add(genre);
+      for (const tag of game.tags) tagSet.add(tag);
+      for (const mode of game.playerModes) playerModeSet.add(mode);
     }
-    return games.filter((game) => {
-      const familyOnly = isFamilySharedOnly(game);
-      return familyFilter === "family-only" ? familyOnly : !familyOnly;
-    });
-  }, [games, familyFilter]);
+    return {
+      sources: [...sourceSet].sort(),
+      genres: [...genreSet].sort((a, b) => a.localeCompare(b)),
+      tags: [...tagSet].sort((a, b) => a.localeCompare(b)),
+      playerModes: [...playerModeSet]
+    };
+  }, [facetGames]);
+
+  const activeCount = countActiveFilters(view.filters);
+
+  function setFilters(filters: LibraryFilters) {
+    setView({ ...view, filters });
+  }
+
+  function setSort(sort: { field: LibrarySortField; direction: LibrarySortDirection }) {
+    setView({ ...view, sort });
+  }
+
   return (
     <main className="page">
       <div className="library-head">
@@ -1283,66 +1692,59 @@ function LibraryScreen({
           <h1>Library</h1>
           <p>{games.length} games</p>
         </div>
-        <div className="toolbar">
+        <div className="toolbar library-toolbar">
           <label className="search-box">
             <Search size={15} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search library" />
           </label>
-          <select className="plain-select" value={installState} onChange={(event) => setInstallState(event.target.value as InstallState | "all")}>
-            <option value="all">All states</option>
-            <option value="installed">Installed</option>
-            <option value="not_installed">Not installed</option>
-            <option value="unknown">Unknown</option>
-          </select>
-          <select
-            className="plain-select"
-            value={familyFilter}
-            onChange={(event) => setFamilyFilter(event.target.value as FamilyFilter)}
-          >
-            <option value="all">All games</option>
-            <option value="owned-only">Owned only</option>
-            <option value="family-only">Family-shared only</option>
-          </select>
-          <select
-            className="plain-select"
-            value={sort}
-            onChange={(event) => {
-              const nextSort = event.target.value as "recent" | "title" | "playtime" | "release";
-              setSort(nextSort);
-              setSortDirection(nextSort === "title" ? "asc" : "desc");
-            }}
-          >
-            <option value="title">Title</option>
-            <option value="recent">Recent activity</option>
-            <option value="playtime">Playtime</option>
-            <option value="release">Release date</option>
-          </select>
-          <button className="secondary-action" onClick={() => setSortDirection(sortDirection === "asc" ? "desc" : "asc")}>
-            {sortDirection === "asc" ? "Ascending" : "Descending"}
+          <button type="button" className="secondary-action filter-trigger" onClick={() => setFiltersOpen(true)}>
+            <SlidersHorizontal size={14} />
+            Filters
+            {activeCount > 0 ? <span className="filter-trigger-badge">{activeCount}</span> : null}
           </button>
+          <LibrarySortMenu field={view.sort.field} direction={view.sort.direction} onChange={setSort} />
           <button className="secondary-action" onClick={onSync}>
             <RefreshCw size={16} />
             Sync
           </button>
         </div>
+        <ActiveFilterPills
+          filters={view.filters}
+          onChange={setFilters}
+          onClearAll={() => setView({ ...view, filters: defaultLibraryView.filters })}
+        />
       </div>
       {games.length === 0 ? (
         <div className="empty-state">
           <Library size={34} />
-          <h2>No games imported</h2>
-          <p>Steam sync imports owned games from your paired account.</p>
-          <button className="primary-action" onClick={onSync}>
-            <RefreshCw size={16} />
-            Sync Steam
-          </button>
+          <h2>No games match these filters</h2>
+          <p>Try clearing filters or syncing to import games from your paired account.</p>
+          {activeCount > 0 ? (
+            <button className="primary-action" onClick={() => setView({ ...view, filters: defaultLibraryView.filters })}>
+              Clear filters
+            </button>
+          ) : (
+            <button className="primary-action" onClick={onSync}>
+              <RefreshCw size={16} />
+              Sync Steam
+            </button>
+          )}
         </div>
       ) : (
         <div className="library-grid" ref={gridRef} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
-          {visibleGames.map((game) => (
+          {games.map((game) => (
             <GameCover key={game.id} game={game} onSelect={onSelect} />
           ))}
         </div>
       )}
+      <LibraryFiltersPanel
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        filters={view.filters}
+        onChange={setFilters}
+        onReset={() => setView({ ...view, filters: defaultLibraryView.filters })}
+        facets={facets}
+      />
     </main>
   );
 }
@@ -2660,14 +3062,15 @@ export function App() {
   const [home, setHome] = useState<HomeModel | undefined>();
   const [games, setGames] = useState<Game[]>([]);
   const [recentGames, setRecentGames] = useState<Game[]>([]);
+  const [allGames, setAllGames] = useState<Game[]>([]);
   const [libraryGameIds, setLibraryGameIds] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<GameDetail | undefined>();
   const [settings, setSettings] = useState<AppSettings | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
   const [query, setQuery] = useState("");
-  const [librarySort, setLibrarySort] = useState<"recent" | "title" | "playtime" | "release">("title");
-  const [librarySortDirection, setLibrarySortDirection] = useState<"asc" | "desc">("asc");
-  const [libraryInstallState, setLibraryInstallState] = useState<InstallState | "all">("all");
+  const [libraryView, setLibraryView] = useState<LibraryView>(defaultLibraryView);
+  const libraryViewHydratedRef = useRef(false);
+  const librarySaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [startupDone, setStartupDone] = useState(false);
@@ -2686,25 +3089,40 @@ export function App() {
     const startedAt = performance.now();
     profileStartup("refresh:start", "Renderer refresh started", {
       query,
-      librarySort,
-      librarySortDirection,
-      libraryInstallState
+      sort: libraryView.sort,
+      filters: libraryView.filters
     });
     const homePromise = window.hynite.home.get();
     const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
-      window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState }),
+      window.hynite.library.list({
+        search: query,
+        sort: libraryView.sort.field,
+        sortDirection: libraryView.sort.direction,
+        ...libraryView.filters
+      }),
       window.hynite.library.list({ search: "", sort: "recent", installState: "all" }),
       window.hynite.settings.get()
     ]);
     setGames(nextGames);
+    setAllGames(nextRecentGames);
     setLibraryGameIds(new Set(nextRecentGames.map((game) => game.id)));
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     setSettings(nextSettings);
+    if (!libraryViewHydratedRef.current && nextSettings.libraryView) {
+      libraryViewHydratedRef.current = true;
+      setLibraryView({
+        filters: { ...defaultLibraryView.filters, ...nextSettings.libraryView.filters },
+        sort: { ...defaultLibraryView.sort, ...nextSettings.libraryView.sort }
+      });
+    } else if (!libraryViewHydratedRef.current) {
+      libraryViewHydratedRef.current = true;
+    }
     profileStartup("refresh:end", "Renderer refresh local data loaded", {
       durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
       games: nextGames.length,
       recentGames: nextRecentGames.length,
-      hasSettings: Boolean(nextSettings)
+      hasSettings: Boolean(nextSettings),
+      hydratedFilters: libraryViewHydratedRef.current
     });
     void homePromise.then((nextHome) => {
       profileStartup("home:end", "Renderer home model loaded", {
@@ -2776,8 +3194,17 @@ export function App() {
 
   useEffect(() => {
     const startedAt = performance.now();
-    profileStartup("library-filter:start", "Library filter query started", { query, librarySort, librarySortDirection, libraryInstallState });
-    void window.hynite.library.list({ search: query, sort: librarySort, sortDirection: librarySortDirection, installState: libraryInstallState })
+    profileStartup("library-filter:start", "Library filter query started", {
+      query,
+      sort: libraryView.sort,
+      filters: libraryView.filters
+    });
+    void window.hynite.library.list({
+      search: query,
+      sort: libraryView.sort.field,
+      sortDirection: libraryView.sort.direction,
+      ...libraryView.filters
+    })
       .then((nextGames) => {
         profileStartup("library-filter:end", "Library filter query finished", {
           durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
@@ -2789,7 +3216,21 @@ export function App() {
         profileStartup("library-filter:error", "Library filter query failed", { error: error instanceof Error ? error.message : String(error) });
         console.error(error);
       });
-  }, [query, librarySort, librarySortDirection, libraryInstallState]);
+  }, [query, libraryView]);
+
+  // Persist filters/sort to settings (debounced) once hydration has happened.
+  useEffect(() => {
+    if (!libraryViewHydratedRef.current) return;
+    if (librarySaveTimerRef.current) clearTimeout(librarySaveTimerRef.current);
+    librarySaveTimerRef.current = setTimeout(() => {
+      void window.hynite.settings.update({ libraryView }).catch((error: unknown) => {
+        console.error("Failed to persist libraryView", error);
+      });
+    }, 300);
+    return () => {
+      if (librarySaveTimerRef.current) clearTimeout(librarySaveTimerRef.current);
+    };
+  }, [libraryView]);
 
   async function syncSteam() {
     setBusy(true);
@@ -2826,14 +3267,11 @@ export function App() {
       return (
         <LibraryScreen
           games={games}
+          facetGames={allGames.length > 0 ? allGames : games}
           query={query}
           setQuery={setQuery}
-          sort={librarySort}
-          setSort={setLibrarySort}
-          sortDirection={librarySortDirection}
-          setSortDirection={setLibrarySortDirection}
-          installState={libraryInstallState}
-          setInstallState={setLibraryInstallState}
+          view={libraryView}
+          setView={setLibraryView}
           onSelect={(game) => void selectGame(game)}
           onSync={() => void syncSteam()}
         />
@@ -2854,7 +3292,7 @@ export function App() {
         onSeed={() => void window.hynite.debug.seed().then(() => refresh())}
       />
     );
-  }, [route, home, games, query, settings, syncStatus, libraryGameIds, librarySort, librarySortDirection, libraryInstallState]);
+  }, [route, home, games, recentGames, allGames, query, settings, syncStatus, libraryGameIds, libraryView]);
 
   return (
     <>

@@ -1,13 +1,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AppSettings, EncryptedSecret, SteamAccountSettings } from "@hynite/core";
+import { defaultLibraryView, type AppSettings, type EncryptedSecret, type SteamAccountSettings } from "@hynite/core";
 
 const defaultSettings: AppSettings = {
   steamAccounts: [],
   steamWebApiKey: undefined,
   steamGridDbApiKey: undefined,
   cacheTtlHours: 24,
-  reduceMotion: false
+  reduceMotion: false,
+  libraryView: defaultLibraryView
 };
 
 type LegacyAccount = SteamAccountSettings & { webApiKey?: EncryptedSecret };

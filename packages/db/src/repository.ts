@@ -9,6 +9,9 @@ import {
   type GamePlatforms,
   type GameScreenshot,
   type ImportedGame,
+  type LibraryQuery,
+  type PlayerMode,
+  playerModesFromSteamCategories,
   gameActivityTime,
   makeGameId,
   makeSortTitle,
@@ -47,6 +50,7 @@ type GameRow = {
   discovery_json: string | null;
   genres_json: string;
   tags_json: string;
+  player_modes_json: string;
   developers_json: string;
   publishers_json: string;
   release_date: string | null;
@@ -114,6 +118,24 @@ function serializeJson<T>(value: T | undefined): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
+function playerModesFromSteamRaw(rawJson: string): PlayerMode[] {
+  try {
+    const parsed = JSON.parse(rawJson) as Record<
+      string,
+      { data?: { categories?: Array<{ description?: string }> } }
+    >;
+    for (const value of Object.values(parsed ?? {})) {
+      const cats = value?.data?.categories;
+      if (Array.isArray(cats) && cats.length > 0) {
+        return playerModesFromSteamCategories(cats);
+      }
+    }
+  } catch {
+    // ignore malformed cached JSON
+  }
+  return [];
+}
+
 function isLegacyGuessedLibraryCapsuleUrl(value: string | null | undefined): boolean {
   return Boolean(value && /^https:\/\/(?:cdn\.akamai\.steamstatic\.com\/steam|steamcdn-a\.akamaihd\.net\/steam)\/apps\/\d+\/library_600x900(?:_2x)?\.jpg(?:\?.*)?$/i.test(value));
 }
@@ -126,6 +148,7 @@ export class HyniteRepository {
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.migrate();
+    this.backfillPlayerModesFromSteamRaw();
   }
 
   close(): void {
@@ -141,6 +164,52 @@ export class HyniteRepository {
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
+    }
+  }
+
+  /**
+   * Populate `player_modes_json` for any rows still defaulted to `[]` by parsing the raw
+   * Steam appdetails JSON we already cache in `game_metadata_raw`. Runs on every startup
+   * but exits cheaply once every persisted Steam title has a non-empty value.
+   */
+  private backfillPlayerModesFromSteamRaw(): void {
+    const candidates = this.db
+      .prepare(
+        `SELECT g.id AS game_id, m.raw_json AS raw_json
+         FROM games g
+         INNER JOIN game_metadata_raw m
+           ON m.game_id = g.id
+          AND m.source = 'steam_appdetails'
+         WHERE g.player_modes_json = '[]' OR g.player_modes_json IS NULL`
+      )
+      .all() as Array<{ game_id: string; raw_json: string }>;
+
+    const update = this.db.prepare("UPDATE games SET player_modes_json = ? WHERE id = ?");
+    for (const row of candidates) {
+      const modes = playerModesFromSteamRaw(row.raw_json);
+      if (modes.length > 0) {
+        update.run(JSON.stringify(modes), row.game_id);
+      }
+    }
+
+    // Fallback: derive from `tags_json` for any rows still empty. Steam categories
+    // (e.g. "Single-player", "Local Co-op") flow into `tags` during normalization,
+    // so any previously-synced game has the data we need without a raw cache hit.
+    const tagFallback = this.db
+      .prepare("SELECT id, tags_json FROM games WHERE player_modes_json = '[]' OR player_modes_json IS NULL")
+      .all() as Array<{ id: string; tags_json: string }>;
+    for (const row of tagFallback) {
+      let tags: string[] = [];
+      try {
+        const parsed = JSON.parse(row.tags_json) as unknown;
+        if (Array.isArray(parsed)) tags = parsed.filter((item): item is string => typeof item === "string");
+      } catch {
+        continue;
+      }
+      const modes = playerModesFromSteamCategories(tags);
+      if (modes.length > 0) {
+        update.run(JSON.stringify(modes), row.id);
+      }
     }
   }
 
@@ -280,6 +349,7 @@ export class HyniteRepository {
           discovery_json = COALESCE(?, discovery_json),
           genres_json = COALESCE(?, genres_json),
           tags_json = COALESCE(?, tags_json),
+          player_modes_json = COALESCE(?, player_modes_json),
           developers_json = COALESCE(?, developers_json),
           publishers_json = COALESCE(?, publishers_json),
           release_date = COALESCE(?, release_date),
@@ -311,6 +381,7 @@ export class HyniteRepository {
         serializeJson(patch.discovery),
         patch.genres ? serializeArray(patch.genres) : null,
         patch.tags ? serializeArray(patch.tags) : null,
+        patch.playerModes ? JSON.stringify(patch.playerModes) : null,
         patch.developers ? serializeArray(patch.developers) : null,
         patch.publishers ? serializeArray(patch.publishers) : null,
         patch.releaseDate ?? null,
@@ -374,14 +445,21 @@ export class HyniteRepository {
     return rows.map((row) => this.mapGameRow(row));
   }
 
-  queryGames(
-    search = "",
-    installState: Game["installState"] | "all" = "all",
-    sort: "recent" | "title" | "playtime" | "release" = "title",
-    sortDirection: "asc" | "desc" = sort === "title" ? "asc" : "desc"
-  ): Game[] {
+  queryGames(query: LibraryQuery = {}): Game[] {
+    const sort = query.sort ?? "title";
+    const sortDirection = query.sortDirection ?? (sort === "title" ? "asc" : "desc");
+    const installState = query.installState ?? "all";
+    const ownership = query.ownership ?? "all";
+    const sources = query.sources ?? [];
+    const genres = query.genres ?? [];
+    const tags = query.tags ?? [];
+    const playerModes = query.playerModes ?? [];
+    const dateFilter = query.dateFilter ?? "any";
+    const recentCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
     let games = this.listGames();
-    const normalizedSearch = search.trim().toLocaleLowerCase();
+
+    const normalizedSearch = (query.search ?? "").trim().toLocaleLowerCase();
     if (normalizedSearch) {
       games = games.filter((game) => game.title.toLocaleLowerCase().includes(normalizedSearch));
     }
@@ -390,13 +468,54 @@ export class HyniteRepository {
       games = games.filter((game) => game.installState === installState);
     }
 
+    if (ownership !== "all") {
+      games = games.filter((game) => {
+        if (game.sourceIds.length === 0) return ownership === "owned";
+        const allFamily = game.sourceIds.every((source) => source.shareType === "family");
+        return ownership === "family" ? allFamily : !allFamily;
+      });
+    }
+
+    if (sources.length > 0) {
+      games = games.filter((game) => game.sourceIds.some((source) => sources.includes(source.provider)));
+    }
+
+    if (genres.length > 0) {
+      games = games.filter((game) => game.genres.some((genre) => genres.includes(genre)));
+    }
+
+    if (tags.length > 0) {
+      games = games.filter((game) => game.tags.some((tag) => tags.includes(tag)));
+    }
+
+    if (playerModes.length > 0) {
+      games = games.filter((game) => game.playerModes.some((mode) => playerModes.includes(mode)));
+    }
+
+    if (dateFilter !== "any") {
+      games = games.filter((game) => {
+        if (dateFilter === "recently_added") {
+          const ts = Date.parse(game.importedAt ?? game.addedAt ?? "") || 0;
+          return ts >= recentCutoff;
+        }
+        if (dateFilter === "recently_played") {
+          const ts = Date.parse(game.lastPlayedAt ?? "") || 0;
+          return ts >= recentCutoff;
+        }
+        // never_played
+        return !game.lastPlayedAt;
+      });
+    }
+
     const direction = sortDirection === "asc" ? 1 : -1;
     return games.sort((a, b) => {
       let comparison = 0;
       if (sort === "recent") {
-        const activityA = gameActivityTime(a);
-        const activityB = gameActivityTime(b);
-        comparison = activityA - activityB;
+        comparison = gameActivityTime(a) - gameActivityTime(b);
+      } else if (sort === "added") {
+        const ta = Date.parse(a.importedAt ?? a.addedAt ?? "") || 0;
+        const tb = Date.parse(b.importedAt ?? b.addedAt ?? "") || 0;
+        comparison = ta - tb;
       } else if (sort === "playtime") {
         comparison = (a.playtimeMinutes ?? 0) - (b.playtimeMinutes ?? 0);
       } else if (sort === "release") {
@@ -654,6 +773,7 @@ export class HyniteRepository {
       discovery: parseJson<GameDiscovery | undefined>(row.discovery_json, undefined),
       genres: parseArray(row.genres_json),
       tags: parseArray(row.tags_json),
+      playerModes: parseArray(row.player_modes_json) as PlayerMode[],
       developers: parseArray(row.developers_json),
       publishers: parseArray(row.publishers_json),
       releaseDate: row.release_date ?? undefined,

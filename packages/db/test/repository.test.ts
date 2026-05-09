@@ -131,7 +131,7 @@ describe("HyniteRepository", () => {
     repository.upsertImportedGame({ provider: "steam", externalId: "3", title: "Provider Added", installState: "unknown", addedAt: "2026-05-06T10:00:00.000Z" });
     repository.db.prepare("UPDATE games SET imported_at = ? WHERE id = ?").run("2026-05-07T10:00:00.000Z", "steam:1");
 
-    expect(repository.queryGames("", "all", "recent").map((game) => game.id)).toEqual(["steam:3", "steam:2", "steam:1"]);
+    expect(repository.queryGames({ sort: "recent" }).map((game) => game.id)).toEqual(["steam:3", "steam:2", "steam:1"]);
 
     repository.close();
   });
