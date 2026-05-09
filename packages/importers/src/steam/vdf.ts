@@ -59,3 +59,27 @@ export function objectValue(value: string | VdfObject | undefined): VdfObject | 
 export function stringValue(value: string | VdfObject | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
+
+function escapeString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function stringifyEntries(obj: VdfObject, depth: number): string {
+  const pad = "\t".repeat(depth);
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === "string") {
+      lines.push(`${pad}"${escapeString(key)}"\t\t"${escapeString(value)}"`);
+    } else {
+      lines.push(`${pad}"${escapeString(key)}"`);
+      lines.push(`${pad}{`);
+      lines.push(stringifyEntries(value, depth + 1));
+      lines.push(`${pad}}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export function stringifyVdf(obj: VdfObject): string {
+  return `${stringifyEntries(obj, 0)}\n`;
+}

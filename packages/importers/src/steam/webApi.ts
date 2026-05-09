@@ -55,6 +55,7 @@ export async function fetchOwnedSteamGames(options: SteamOwnedGamesOptions): Pro
       launchCommand: `steam://rungameid/${game.appid}`,
       playtimeMinutes: game.playtime_forever,
       lastPlayedAt: unixSecondsToIso(game.rtime_last_played),
-      communityIconUrl: communityIconUrl(game.appid, game.img_icon_url)
+      communityIconUrl: communityIconUrl(game.appid, game.img_icon_url),
+      ownerSteamid: options.steamId
     }));
 }

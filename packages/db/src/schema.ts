@@ -140,5 +140,30 @@ export const migrations = [
       ALTER TABLE game_sources ADD COLUMN share_type TEXT NOT NULL DEFAULT 'owned';
       ALTER TABLE game_sources ADD COLUMN family_owner_steamids_json TEXT;
     `
+  },
+  {
+    id: 8,
+    sql: `
+      -- Per-paired-account ownership of source rows. The same (provider, externalId)
+      -- can now appear once per importing account so multi-account libraries don't
+      -- clobber each other.
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE game_sources_v2 (
+        game_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        share_type TEXT NOT NULL DEFAULT 'owned',
+        family_owner_steamids_json TEXT,
+        owner_steamid TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (provider, external_id, owner_steamid),
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+      INSERT INTO game_sources_v2 (game_id, provider, external_id, share_type, family_owner_steamids_json, owner_steamid)
+        SELECT game_id, provider, external_id, share_type, family_owner_steamids_json, '' FROM game_sources;
+      DROP TABLE game_sources;
+      ALTER TABLE game_sources_v2 RENAME TO game_sources;
+      CREATE INDEX IF NOT EXISTS idx_game_sources_game_id ON game_sources(game_id);
+      PRAGMA foreign_keys = ON;
+    `
   }
 ] as const;

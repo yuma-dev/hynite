@@ -45,7 +45,8 @@ export const sourceIdentitySchema = z.object({
   provider: providerIdSchema,
   externalId: z.string().min(1),
   shareType: shareTypeSchema.optional(),
-  familyOwnerSteamIds: z.array(z.string()).optional()
+  familyOwnerSteamIds: z.array(z.string()).optional(),
+  ownerSteamid: z.string().optional()
 });
 export type SourceIdentity = z.infer<typeof sourceIdentitySchema>;
 
@@ -103,6 +104,7 @@ export type ImportedGame = {
   communityIconUrl?: string;
   shareType?: ShareType;
   familyOwnerSteamIds?: string[];
+  ownerSteamid?: string;
 };
 
 export type GameMetadataPatch = Partial<
@@ -264,9 +266,35 @@ export type SteamAccountSettings = {
   steamId: string;
   personaName?: string;
   pairedAt: string;
-  webApiKey?: EncryptedSecret;
   familySession?: SteamFamilySession;
+  /** Local Steam account name (used for HKCU\Software\Valve\Steam\AutoLoginUser when switching). */
+  localUsername?: string;
 };
+
+export type SteamLocalAccount = {
+  steamId: string;
+  accountName: string;
+  personaName?: string;
+  mostRecent: boolean;
+  timestamp?: number;
+};
+
+export type SteamActiveUser = {
+  accountName?: string;
+  steamId?: string;
+  isRunning: boolean;
+};
+
+export type SteamLaunchPlan =
+  | { kind: "ready"; targetSteamId?: string }
+  | {
+      kind: "requires-switch";
+      gameId: string;
+      gameTitle: string;
+      currentAccountName?: string;
+      target: { steamId: string; accountName: string; personaName?: string };
+    }
+  | { kind: "no-account"; reason: string };
 
 export type SteamPairingResult = {
   steamId: string;
@@ -280,7 +308,9 @@ export type SteamFamilyAuthResult = {
 };
 
 export type AppSettings = {
-  steamAccount?: SteamAccountSettings;
+  steamAccounts: SteamAccountSettings[];
+  /** Single Steam Web API key shared by every paired account (one key fetches any public profile). */
+  steamWebApiKey?: EncryptedSecret;
   steamGridDbApiKey?: EncryptedSecret;
   cacheTtlHours: number;
   reduceMotion: boolean;

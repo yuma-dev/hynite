@@ -96,7 +96,8 @@ describe("fetchFamilySharedGames", () => {
         addedAt: new Date(1_700_000_000 * 1000).toISOString(),
         communityIconUrl: "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/1086940/iconhash.jpg",
         shareType: "family",
-        familyOwnerSteamIds: [ownerSteamId]
+        familyOwnerSteamIds: [ownerSteamId],
+        ownerSteamid: callerSteamId
       }
     ]);
   });

@@ -103,7 +103,8 @@ export async function fetchFamilySharedGames(options: FetchFamilySharedGamesOpti
       addedAt: unixSecondsToIso(app.rt_time_acquired),
       communityIconUrl: communityIconUrl(app.appid, app.img_icon_hash),
       shareType: "family" as const,
-      familyOwnerSteamIds: app.owner_steamids ?? []
+      familyOwnerSteamIds: app.owner_steamids ?? [],
+      ownerSteamid: options.steamId
     }));
 }
 

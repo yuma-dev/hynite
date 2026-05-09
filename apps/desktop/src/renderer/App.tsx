@@ -39,8 +39,26 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { gameActivityTime, makeGameId, makeSortTitle, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { gameActivityTime, makeGameId, makeSortTitle, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileStartup } from "./startupProfile";
+
+async function launchGame(id: string): Promise<void> {
+  const result = await window.hynite.games.launch(id);
+  if (result.kind === "launched" || result.kind === "no-account") {
+    return;
+  }
+  if (result.kind === "requires-switch") {
+    const fromLabel = result.currentAccountName ?? "the currently active account";
+    const toLabel = result.target.personaName
+      ? `${result.target.personaName} (${result.target.accountName})`
+      : result.target.accountName;
+    const confirmed = window.confirm(
+      `Launching ${result.gameTitle} requires switching from ${fromLabel} to ${toLabel}.\n\nSteam will close and restart silently. Continue?`
+    );
+    if (!confirmed) return;
+    await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
+  }
+}
 
 type Route = "home" | "trending" | "library" | "search" | "settings";
 
@@ -630,7 +648,7 @@ function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (ga
             <button
               className="cover-action cover-action-play"
               type="button"
-              onClick={(e) => { e.stopPropagation(); void window.hynite.games.launch(game.id); }}
+              onClick={(e) => { e.stopPropagation(); void launchGame(game.id); }}
               aria-label={`Play ${game.title}`}
             >
               <Play size={22} fill="currentColor" />
@@ -1778,37 +1796,61 @@ function SettingsScreen({
 }) {
   const [tab, setTab] = useState<SettingsTab>("steam");
   const [showSyncModal, setShowSyncModal] = useState(false);
-  const [apiKey, setApiKey] = useState("");
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [steamGridDbKey, setSteamGridDbKey] = useState("");
   const [steamMessage, setSteamMessage] = useState<string | undefined>();
   const [metadataMessage, setMetadataMessage] = useState<string | undefined>();
+  const [localAccounts, setLocalAccounts] = useState<SteamLocalAccount[]>([]);
+  const [activeSteamUser, setActiveSteamUser] = useState<string | undefined>();
+  const [pairing, setPairing] = useState(false);
+  const [expandedExtras, setExpandedExtras] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    void window.hynite.steam.listLocalAccounts().then(setLocalAccounts).catch(() => undefined);
+    void window.hynite.steam.getActiveUser().then((info) => setActiveSteamUser(info.accountName)).catch(() => undefined);
+  }, [settings?.steamAccounts.length]);
 
   async function pairSteam() {
     setSteamMessage(undefined);
-    const paired = await window.hynite.steam.pair();
-    setSettings(await window.hynite.settings.get());
-    setSteamMessage(`Paired Steam account ${paired.steamId}.`);
+    setPairing(true);
+    try {
+      await window.hynite.steam.pair();
+      setSettings(await window.hynite.settings.get());
+      setSteamMessage(undefined);
+    } catch (error) {
+      setSteamMessage(error instanceof Error ? error.message : "Failed to pair Steam account.");
+    } finally {
+      setPairing(false);
+    }
   }
 
   async function saveApiKey() {
     setSteamMessage(undefined);
-    const next = await window.hynite.steam.saveApiKey(apiKey);
+    const trimmed = apiKeyDraft.trim();
+    if (!trimmed) return;
+    const next = await window.hynite.steam.saveApiKey(trimmed);
     setSettings(next);
-    setApiKey("");
+    setApiKeyDraft("");
     setSteamMessage("Steam Web API key saved.");
   }
 
-  async function disconnectSteam() {
-    const next = await window.hynite.steam.disconnect();
+  async function clearApiKey() {
+    setSteamMessage(undefined);
+    const next = await window.hynite.steam.clearApiKey();
     setSettings(next);
-    setApiKey("");
-    setSteamMessage("Steam account disconnected.");
+    setSteamMessage("Steam Web API key removed.");
   }
 
-  async function connectFamilyLibrary() {
+  async function removeAccount(steamId: string) {
+    const next = await window.hynite.steam.removeAccount(steamId);
+    setSettings(next);
+    setSteamMessage("Steam account removed.");
+  }
+
+  async function connectFamilyLibrary(steamId: string) {
     setSteamMessage(undefined);
     try {
-      const next = await window.hynite.steam.connectFamily();
+      const next = await window.hynite.steam.connectFamily(steamId);
       setSettings(next);
       setSteamMessage("Steam family library connected.");
     } catch (error) {
@@ -1816,10 +1858,10 @@ function SettingsScreen({
     }
   }
 
-  async function refreshFamilyLibrary() {
+  async function refreshFamilyLibrary(steamId: string) {
     setSteamMessage(undefined);
     try {
-      const next = await window.hynite.steam.refreshFamily();
+      const next = await window.hynite.steam.refreshFamily(steamId);
       setSettings(next);
       setSteamMessage("Steam family session refreshed.");
     } catch (error) {
@@ -1827,10 +1869,15 @@ function SettingsScreen({
     }
   }
 
-  async function disconnectFamilyLibrary() {
-    const next = await window.hynite.steam.disconnectFamily();
+  async function disconnectFamilyLibrary(steamId: string) {
+    const next = await window.hynite.steam.disconnectFamily(steamId);
     setSettings(next);
     setSteamMessage("Steam family library disconnected.");
+  }
+
+  async function setLocalUsername(steamId: string, value: string) {
+    const next = await window.hynite.steam.setAccountLocalUsername(steamId, value || undefined);
+    setSettings(next);
   }
 
   async function saveSteamGridDbKey() {
@@ -1884,83 +1931,177 @@ function SettingsScreen({
         <div className="settings-pane">
           {tab === "steam" ? (
             <section className="settings-section">
-              <h2>Steam account</h2>
-              <div className="steam-account-row">
+              <div className="steam-tab-header">
                 <div>
-                  <strong>{settings?.steamAccount ? settings.steamAccount.steamId : "No account paired"}</strong>
-                  <span>
-                    {settings?.steamAccount?.webApiKey
-                      ? "Ready to sync owned games, playtime, recent activity, and local install state"
-                      : settings?.steamAccount
-                        ? "Web API key required for owned games"
-                        : "Use Steam login to pair an account"}
-                  </span>
+                  <h2>Steam accounts</h2>
+                  <p className="settings-hint" style={{ margin: "4px 0 0" }}>
+                    Sign in once per account. Hynite switches accounts automatically when you launch a game owned by another one.
+                  </p>
                 </div>
-                <div className="steam-actions">
-                  <button className="secondary-action" onClick={() => void pairSteam()}>
-                    <Link2 size={16} />
-                    Pair
-                  </button>
-                  <button className="secondary-action" disabled={!settings?.steamAccount} onClick={() => void disconnectSteam()}>
-                    <LogOut size={16} />
-                    Disconnect
-                  </button>
-                </div>
-              </div>
-              <div className="api-key-row">
-                <input
-                  className="plain-input"
-                  type="password"
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                  placeholder="Steam Web API key"
-                  disabled={!settings?.steamAccount}
-                />
-                <button className="primary-action" disabled={!settings?.steamAccount || !apiKey.trim()} onClick={() => void saveApiKey()}>
-                  <KeyRound size={16} />
-                  Save key
+                <button className="primary-action" disabled={pairing} onClick={() => void pairSteam()}>
+                  <Link2 size={16} />
+                  {pairing ? "Waiting for Steam…" : "Add Steam account"}
                 </button>
               </div>
-              <div className="steam-account-row" style={{ marginTop: "1rem" }}>
-                <div>
-                  <strong>
-                    {settings?.steamAccount?.familySession
-                      ? "Steam family library connected"
-                      : "Steam family library not connected"}
-                  </strong>
-                  <span>
-                    {settings?.steamAccount?.familySession
-                      ? `Session expires ${formatRelativeExpiry(settings.steamAccount.familySession.expiresAt)}`
-                      : "Sign in to import games shared by your Steam Family Group."}
+
+              {/* Single Web API key, shared by every paired account. */}
+              <div className="steam-account-card">
+                <div className="steam-account-card-head">
+                  <div className="steam-account-identity">
+                    <strong>Steam Web API key</strong>
+                    <span className="settings-hint" style={{ display: "block", marginTop: 4 }}>
+                      One key works for every paired account.{" "}
+                      <a
+                        href="https://steamcommunity.com/dev/apikey"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void window.hynite.native.openExternal("https://steamcommunity.com/dev/apikey");
+                        }}
+                      >
+                        Get one
+                      </a>
+                    </span>
+                  </div>
+                  <span className={`steam-status-pill ${settings?.steamWebApiKey ? "ready" : "warn"}`}>
+                    {settings?.steamWebApiKey ? "Saved" : "Required"}
                   </span>
                 </div>
-                <div className="steam-actions">
-                  <button
-                    className="secondary-action"
-                    disabled={!settings?.steamAccount}
-                    onClick={() => void connectFamilyLibrary()}
-                  >
-                    <Link2 size={16} />
-                    {settings?.steamAccount?.familySession ? "Reconnect" : "Connect"}
-                  </button>
-                  <button
-                    className="secondary-action"
-                    disabled={!settings?.steamAccount?.familySession}
-                    onClick={() => void refreshFamilyLibrary()}
-                  >
+                <div className="api-key-row">
+                  <input
+                    className="plain-input"
+                    type="password"
+                    value={apiKeyDraft}
+                    onChange={(event) => setApiKeyDraft(event.target.value)}
+                    placeholder={settings?.steamWebApiKey ? "Replace key…" : "Paste Steam Web API key"}
+                  />
+                  <button className="primary-action" disabled={!apiKeyDraft.trim()} onClick={() => void saveApiKey()}>
                     <KeyRound size={16} />
-                    Refresh
+                    Save
                   </button>
-                  <button
-                    className="secondary-action"
-                    disabled={!settings?.steamAccount?.familySession}
-                    onClick={() => void disconnectFamilyLibrary()}
-                  >
-                    <LogOut size={16} />
-                    Disconnect
-                  </button>
+                  {settings?.steamWebApiKey ? (
+                    <button className="secondary-action" onClick={() => void clearApiKey()}>
+                      <LogOut size={14} />
+                      Remove
+                    </button>
+                  ) : null}
                 </div>
               </div>
+
+              {activeSteamUser ? (
+                <div className="steam-active-banner">
+                  Currently active in Steam: <code>{activeSteamUser}</code>
+                </div>
+              ) : null}
+
+              {(settings?.steamAccounts ?? []).length === 0 ? (
+                <div className="steam-empty-state">
+                  <strong>No Steam accounts yet</strong>
+                  <span>Add one to import its library and launch from it.</span>
+                </div>
+              ) : null}
+
+              {(settings?.steamAccounts ?? []).map((account: SteamAccountSettings) => {
+                const needsLocalMap = !account.localUsername;
+                const issueCount = needsLocalMap ? 1 : 0;
+                const ready = issueCount === 0;
+                const expanded = expandedExtras[account.steamId] ?? false;
+                const isActive = activeSteamUser && account.localUsername && activeSteamUser.toLowerCase() === account.localUsername.toLowerCase();
+                return (
+                  <div key={account.steamId} className="steam-account-card">
+                    <div className="steam-account-card-head">
+                      <div className="steam-account-identity">
+                        <strong>
+                          {account.personaName ?? account.localUsername ?? "Steam account"}
+                          {isActive ? <span className="settings-hint" style={{ marginLeft: 8 }}>· active in Steam</span> : null}
+                        </strong>
+                        <span className="steam-id">SteamID {account.steamId}</span>
+                      </div>
+                      <div className="steam-actions">
+                        <span className={`steam-status-pill ${ready ? "ready" : "warn"}`}>
+                          {ready ? "Ready" : "Needs local user"}
+                        </span>
+                        <button className="secondary-action" onClick={() => void removeAccount(account.steamId)} title="Remove account">
+                          <LogOut size={16} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {needsLocalMap ? (
+                      <div className="steam-account-issues">
+                        <div className="steam-account-issue">
+                          <label>
+                            {localAccounts.length === 0
+                              ? "No local Steam users found — sign in to Steam at least once with this account, then come back."
+                              : "Couldn't auto-detect this account locally. Pick which local Steam user it signs in as so Hynite can switch to it."}
+                          </label>
+                          {localAccounts.length > 0 ? (
+                            <div className="row">
+                              <select
+                                className="plain-input"
+                                value={account.localUsername ?? ""}
+                                onChange={(event) => void setLocalUsername(account.steamId, event.target.value)}
+                              >
+                                <option value="">Choose local Steam user…</option>
+                                {localAccounts.map((local) => (
+                                  <option key={local.accountName} value={local.accountName}>
+                                    {local.accountName}
+                                    {local.personaName ? ` — ${local.personaName}` : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="steam-account-extras">
+                      <span className="extras-label">
+                        {account.familySession ? (
+                          <>Family library connected · expires {formatRelativeExpiry(account.familySession.expiresAt)}</>
+                        ) : (
+                          <>Family library not connected (optional)</>
+                        )}
+                      </span>
+                      <div className="steam-actions">
+                        {!expanded ? (
+                          <button
+                            className="steam-link-button"
+                            onClick={() => setExpandedExtras((prev) => ({ ...prev, [account.steamId]: true }))}
+                          >
+                            More…
+                          </button>
+                        ) : (
+                          <>
+                            <button className="secondary-action" onClick={() => void connectFamilyLibrary(account.steamId)}>
+                              <Link2 size={14} />
+                              {account.familySession ? "Reconnect family" : "Connect family"}
+                            </button>
+                            {account.familySession ? (
+                              <>
+                                <button className="secondary-action" onClick={() => void refreshFamilyLibrary(account.steamId)}>
+                                  <RefreshCw size={14} />
+                                  Refresh
+                                </button>
+                                <button className="secondary-action" onClick={() => void disconnectFamilyLibrary(account.steamId)}>
+                                  <LogOut size={14} />
+                                  Disconnect
+                                </button>
+                              </>
+                            ) : null}
+                            <button
+                              className="steam-link-button"
+                              onClick={() => setExpandedExtras((prev) => ({ ...prev, [account.steamId]: false }))}
+                            >
+                              Less
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
               {steamMessage ? <p className="result-line">{steamMessage}</p> : null}
             </section>
           ) : null}
@@ -2328,7 +2469,7 @@ function DetailOverlay({
                 <h1>{game.title}</h1>
                 <p>{detailMeta || game.shortDescription || "Game details"}</p>
                 <div className="detail-action-row">
-                  <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void window.hynite.games.launch(game.id)}>
+                  <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void launchGame(game.id)}>
                     <Play size={16} />
                     Play
                   </button>

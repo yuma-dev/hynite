@@ -13,11 +13,25 @@ import type {
   SourceImportResult,
   SourceMatch,
   SourceSearchOptions,
+  SteamActiveUser,
+  SteamLocalAccount,
   SteamPairingResult,
   SteamSearchResult,
   SyncStatus,
   SyncResult
 } from "@hynite/core";
+
+export type LaunchOutcome =
+  | ({ kind: "launched" } & LaunchSession)
+  | {
+      kind: "requires-switch";
+      gameId: string;
+      gameTitle: string;
+      currentAccountName?: string;
+      currentSteamId?: string;
+      target: { steamId: string; accountName: string; personaName?: string };
+    }
+  | { kind: "no-account"; reason: string };
 
 const api = {
   library: {
@@ -28,7 +42,7 @@ const api = {
   games: {
     get: (id: string): Promise<GameDetail> => ipcRenderer.invoke("games:get", id),
     hydrateDiscovery: (game: Game): Promise<GameDetail> => ipcRenderer.invoke("games:hydrateDiscovery", game),
-    launch: (id: string): Promise<LaunchSession> => ipcRenderer.invoke("games:launch", id),
+    launch: (id: string): Promise<LaunchOutcome> => ipcRenderer.invoke("games:launch", id),
     onUpdated: (callback: (game: GameDetail) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, game: GameDetail) => callback(game);
       ipcRenderer.on("games:updated", listener);
@@ -69,11 +83,19 @@ const api = {
   steam: {
     pair: (): Promise<SteamPairingResult> => ipcRenderer.invoke("steam:pair"),
     saveApiKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("steam:saveApiKey", apiKey),
-    disconnect: (): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnect"),
+    clearApiKey: (): Promise<AppSettings> => ipcRenderer.invoke("steam:clearApiKey"),
+    disconnect: (steamId?: string): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnect", steamId),
+    removeAccount: (steamId: string): Promise<AppSettings> => ipcRenderer.invoke("steam:removeAccount", steamId),
     search: (query: string): Promise<SteamSearchResult[]> => ipcRenderer.invoke("steam:search", query),
-    connectFamily: (): Promise<AppSettings> => ipcRenderer.invoke("steam:connectFamily"),
-    refreshFamily: (): Promise<AppSettings> => ipcRenderer.invoke("steam:refreshFamily"),
-    disconnectFamily: (): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnectFamily")
+    connectFamily: (steamId: string): Promise<AppSettings> => ipcRenderer.invoke("steam:connectFamily", steamId),
+    refreshFamily: (steamId: string): Promise<AppSettings> => ipcRenderer.invoke("steam:refreshFamily", steamId),
+    disconnectFamily: (steamId: string): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnectFamily", steamId),
+    listLocalAccounts: (): Promise<SteamLocalAccount[]> => ipcRenderer.invoke("steam:listLocalAccounts"),
+    getActiveUser: (): Promise<SteamActiveUser> => ipcRenderer.invoke("steam:getActiveUser"),
+    setAccountLocalUsername: (steamId: string, localUsername: string | undefined): Promise<AppSettings> =>
+      ipcRenderer.invoke("steam:setAccountLocalUsername", steamId, localUsername),
+    switchAndLaunch: (gameId: string, targetSteamId: string): Promise<LaunchOutcome> =>
+      ipcRenderer.invoke("steam:switchAndLaunch", gameId, targetSteamId)
   },
   metadata: {
     saveSteamGridDbKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("metadata:saveSteamGridDbKey", apiKey),

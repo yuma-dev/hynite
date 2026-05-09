@@ -34,7 +34,8 @@ describe("fetchOwnedSteamGames", () => {
         launchCommand: "steam://rungameid/1086940",
         playtimeMinutes: 4200,
         lastPlayedAt: "2023-11-14T22:13:20.000Z",
-        communityIconUrl: "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/1086940/iconhash.jpg"
+        communityIconUrl: "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/1086940/iconhash.jpg",
+        ownerSteamid: "76561198000000000"
       }
     ]);
   });

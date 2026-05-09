@@ -2,8 +2,9 @@ import { app, BrowserWindow, clipboard, ipcMain, net, shell } from "electron";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { CURRENT_METADATA_VERSION, HyniteRepository } from "@hynite/db";
-import { discoverInstalledSteamApps, SteamImporterProvider } from "@hynite/importers";
-import { makeGameId, type Game, type GameMetadataPatch, type ImportedGame, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamSearchResult, type SyncResult } from "@hynite/core";
+import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider } from "@hynite/importers";
+import { makeGameId, type AppSettings, type EncryptedSecret, type Game, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncResult } from "@hynite/core";
+import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { fetchSteamMetadata, metadataFromSteamAppInfo, refreshFusedMetadata } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
 import { HomeService } from "./homeService";
@@ -162,8 +163,8 @@ async function withSteamSyncStartLock<T>(task: () => Promise<T>): Promise<T> {
 
 const FAMILY_TOKEN_REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
 
-async function resolveFamilyAccessToken(settings: { steamAccount?: { familySession?: { accessToken: import("@hynite/core").EncryptedSecret; expiresAt: string; steamId: string; connectedAt: string } } }): Promise<string | undefined> {
-  const session = settings.steamAccount?.familySession;
+async function resolveFamilyAccessTokenForAccount(account: SteamAccountSettings): Promise<string | undefined> {
+  const session = account.familySession;
   if (!session) {
     return undefined;
   }
@@ -181,22 +182,16 @@ async function resolveFamilyAccessToken(settings: { steamAccount?: { familySessi
 
   try {
     const refreshed = await refreshSteamAccessToken();
-    if (refreshed) {
+    if (refreshed && refreshed.steamId === account.steamId) {
       const encrypted = await nativeBridge.encryptSecret({ value: refreshed.accessToken, scope: "current-user" });
-      const current = await settingsService.get();
-      if (current.steamAccount) {
-        await settingsService.update({
-          steamAccount: {
-            ...current.steamAccount,
-            familySession: {
-              accessToken: encrypted,
-              steamId: refreshed.steamId,
-              expiresAt: refreshed.expiresAt,
-              connectedAt: current.steamAccount.familySession?.connectedAt ?? new Date().toISOString()
-            }
-          }
-        });
-      }
+      await settingsService.patchSteamAccount(account.steamId, {
+        familySession: {
+          accessToken: encrypted,
+          steamId: refreshed.steamId,
+          expiresAt: refreshed.expiresAt,
+          connectedAt: session.connectedAt
+        }
+      });
       return refreshed.accessToken;
     }
   } catch (error) {
@@ -627,59 +622,85 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
   throwIfSteamSyncCancelled(options.signal);
   const settings = await settingsService.get();
   throwIfSteamSyncCancelled(options.signal);
-  const webApiKey = settings.steamAccount?.webApiKey ? await nativeBridge.decryptSecret(settings.steamAccount.webApiKey) : undefined;
-  const familyAccessToken = await resolveFamilyAccessToken(settings);
-  throwIfSteamSyncCancelled(options.signal);
   const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
-  const provider = new SteamImporterProvider({
-    account:
-      settings.steamAccount && webApiKey
-        ? {
-            steamId: settings.steamAccount.steamId,
-            webApiKey,
-            familyAccessToken
-          }
-        : undefined,
-    includePlayedFreeGames: true,
-    steamGridDbApiKey,
-    steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
-    metadataMode: "fast",
-    rawMetadataRecorder: (game, source, raw) => saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, source, raw),
-    signal: options.signal,
-    scanLogger: (level, message, details) => {
-      diagnosticLogService.log({ level, phase: "steam:family", message, details });
-      syncStatusService.log(level, "steam:family", message, details);
-      if (level === "warning" || level === "error") {
-        console.warn(`[steam:family] ${message}`, details);
-      }
-    },
-    metadataLogger: (entry) => {
-      diagnosticLogService.log({
-        level: entry.level,
-        phase: `metadata:${entry.providerId}`,
-        message: `${entry.gameTitle}: ${entry.message}`,
-        details: {
-          appid: entry.appid,
-          ...entry.details
-        }
-      });
-      syncStatusService.log(entry.level, `metadata:${entry.providerId}`, `${entry.gameTitle}: ${entry.message}`, entry.details);
-      if (entry.level === "warning") {
-        console.warn(entry.message, entry.details);
-      }
-    }
-  });
+
   if (providerId && providerId !== "steam") {
     throw new Error(`Provider ${providerId} is not implemented yet.`);
   }
 
+  const webApiKey = settings.steamWebApiKey ? await nativeBridge.decryptSecret(settings.steamWebApiKey) : undefined;
+  const eligibleAccounts = webApiKey ? settings.steamAccounts : [];
+
+  if (eligibleAccounts.length === 0) {
+    syncStatusService.start("steam");
+    syncStatusService.finish(
+      webApiKey ? "Steam sync skipped: no paired accounts" : "Steam sync skipped: add a Steam Web API key in Settings"
+    );
+    return { providerId: "steam" as const, scanned: 0, upserted: 0, warnings: [] };
+  }
+
+  const buildScanLogger = (account: SteamAccountSettings) => (level: "info" | "warning" | "error", message: string, details?: Record<string, unknown>) => {
+    const annotated = { ...details, account: account.personaName ?? account.steamId };
+    diagnosticLogService.log({ level, phase: "steam:family", message, details: annotated });
+    syncStatusService.log(level, "steam:family", message, annotated);
+    if (level === "warning" || level === "error") {
+      console.warn(`[steam:family] ${message}`, annotated);
+    }
+  };
+
+  const buildProvider = (account: SteamAccountSettings, key: string, familyAccessToken: string | undefined) =>
+    new SteamImporterProvider({
+      account: { steamId: account.steamId, webApiKey: key, familyAccessToken },
+      includePlayedFreeGames: true,
+      steamGridDbApiKey,
+      steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
+      metadataMode: "fast",
+      rawMetadataRecorder: (game, source, raw) =>
+        saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, source, raw),
+      signal: options.signal,
+      scanLogger: buildScanLogger(account),
+      metadataLogger: (entry) => {
+        diagnosticLogService.log({
+          level: entry.level,
+          phase: `metadata:${entry.providerId}`,
+          message: `${entry.gameTitle}: ${entry.message}`,
+          details: { appid: entry.appid, ...entry.details }
+        });
+        syncStatusService.log(entry.level, `metadata:${entry.providerId}`, `${entry.gameTitle}: ${entry.message}`, entry.details);
+        if (entry.level === "warning") {
+          console.warn(entry.message, entry.details);
+        }
+      }
+    });
+
   syncStatusService.start("steam");
   const refreshStaleMetadata = options.refreshStaleMetadata ?? true;
-  let imported;
+
+  // Scan all accounts sequentially so progress events stay coherent.
+  let imported: ImportedGame[];
+  let provider: SteamImporterProvider;
   try {
-    syncStatusService.progress("steam:owned-games", "Calling Steam owned games API");
-    imported = await provider.scan();
-    profile("steam-sync:owned-games", "Steam owned games scan finished", { count: imported.length, durationMs: roundDuration(syncStartedAt) });
+    const scanned: ImportedGame[] = [];
+    for (const account of eligibleAccounts) {
+      throwIfSteamSyncCancelled(options.signal);
+      const familyAccessToken = await resolveFamilyAccessTokenForAccount(account);
+      throwIfSteamSyncCancelled(options.signal);
+      const accountProvider = buildProvider(account, webApiKey!, familyAccessToken);
+      syncStatusService.progress(
+        "steam:owned-games",
+        `Calling Steam owned games API for ${account.personaName ?? account.steamId}`
+      );
+      const accountScan = await accountProvider.scan();
+      scanned.push(...accountScan);
+      profile("steam-sync:owned-games", "Steam owned games scan finished", {
+        account: account.steamId,
+        count: accountScan.length,
+        durationMs: roundDuration(syncStartedAt)
+      });
+    }
+    imported = scanned;
+    // Metadata refresh provider — account-independent so any paired account works.
+    provider = buildProvider(eligibleAccounts[0]!, webApiKey!, undefined);
     throwIfSteamSyncCancelled(options.signal);
   } catch (error) {
     if (isSteamSyncCancelledError(error)) {
@@ -825,6 +846,116 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
   }
 }
 
+type LaunchResult =
+  | ({ kind: "launched" } & LaunchSession)
+  | {
+      kind: "requires-switch";
+      gameId: string;
+      gameTitle: string;
+      currentAccountName?: string;
+      currentSteamId?: string;
+      target: { steamId: string; accountName: string; personaName?: string };
+    }
+  | { kind: "no-account"; reason: string };
+
+/**
+ * Decide which paired Steam account should run a game. An account is "launchable" if:
+ *  - It owns the game directly (an `owned` source row whose `ownerSteamid` is the account), OR
+ *  - The game is family-shared and the account is either the family owner (someone in
+ *    `familyOwnerSteamIds`) or one of our paired accounts that imported the title via family share.
+ * Returns the account that should be active to play the game.
+ */
+function resolveLaunchableAccounts(game: Game, accounts: SteamAccountSettings[]): {
+  owners: SteamAccountSettings[];
+  family: SteamAccountSettings[];
+} {
+  const accountById = new Map(accounts.map((account) => [account.steamId, account]));
+  const owners: SteamAccountSettings[] = [];
+  const family = new Set<SteamAccountSettings>();
+
+  for (const source of game.sourceIds) {
+    if (source.provider !== "steam") continue;
+    const isFamily = source.shareType === "family";
+    const importer = source.ownerSteamid ? accountById.get(source.ownerSteamid) : undefined;
+    if (importer) {
+      if (isFamily) family.add(importer);
+      else owners.push(importer);
+    }
+    if (isFamily) {
+      for (const ownerSteamId of source.familyOwnerSteamIds ?? []) {
+        const lender = accountById.get(ownerSteamId);
+        if (lender) {
+          owners.push(lender); // a family lender that we have paired = direct owner.
+        }
+      }
+    }
+  }
+
+  return { owners, family: [...family] };
+}
+
+async function resolveLaunchOrSwitch(id: string): Promise<LaunchResult> {
+  const game = repository.getGame(id);
+  if (!game) {
+    throw new Error(`Game ${id} was not found.`);
+  }
+
+  const settings = await settingsService.get();
+  const { owners, family } = resolveLaunchableAccounts(game, settings.steamAccounts);
+  const launchable = [...owners, ...family];
+  const hasSteamSource = game.sourceIds.some((source) => source.provider === "steam");
+
+  // Non-Steam game, or no paired accounts at all → just launch.
+  if (!hasSteamSource || settings.steamAccounts.length === 0) {
+    return performLaunch(id);
+  }
+
+  const active = await getActiveSteamUser();
+  const activeAccount = active.steamId ? settings.steamAccounts.find((account) => account.steamId === active.steamId) : undefined;
+  const activeIsLaunchable = activeAccount ? launchable.some((account) => account.steamId === activeAccount.steamId) : false;
+
+  if (activeIsLaunchable) {
+    return performLaunch(id);
+  }
+
+  // Pick a target — owners first, then family-borrower viewers; require a mapped local username.
+  const target = [...owners, ...family].find((account) => Boolean(account.localUsername));
+  if (!target) {
+    return performLaunch(id); // no usable target → fall back to plain launch
+  }
+
+  return {
+    kind: "requires-switch",
+    gameId: id,
+    gameTitle: game.title,
+    currentAccountName: active.accountName,
+    currentSteamId: active.steamId,
+    target: {
+      steamId: target.steamId,
+      accountName: target.localUsername!,
+      personaName: target.personaName
+    }
+  };
+}
+
+async function performLaunch(id: string): Promise<{ kind: "launched" } & LaunchSession> {
+  const game = repository.getGame(id);
+  if (!game) {
+    throw new Error(`Game ${id} was not found.`);
+  }
+  const steamSource = game.sourceIds.find((source) => source.provider === "steam");
+  const command = repository.getLaunchCommand(id);
+  const session = await nativeBridge.launchGame({
+    gameId: id,
+    provider: steamSource?.provider ?? "manual",
+    externalId: steamSource?.externalId ?? id,
+    command,
+    executablePath: game.executablePath,
+    workingDirectory: game.installDirectory
+  });
+  return { kind: "launched", ...session };
+}
+
 function registerIpc(): void {
   ipcMain.on("debug:profile", (_event, entry: { phase?: unknown; message?: unknown; details?: unknown; rendererElapsedMs?: unknown }) => {
     startupProfileService?.log({
@@ -865,22 +996,29 @@ function registerIpc(): void {
     return { ...hydrated, sourceMatches: sourceService.searchTitle(hydrated.title) };
   });
 
-  handleIpc("games:launch", async (_event, id: string) => {
-    const game = repository.getGame(id);
-    if (!game) {
-      throw new Error(`Game ${id} was not found.`);
+  handleIpc("games:launch", async (_event, id: string) => resolveLaunchOrSwitch(id));
+  handleIpc("steam:switchAndLaunch", async (_event, id: string, targetSteamId: string) => {
+    const settings = await settingsService.get();
+    const target = settings.steamAccounts.find((account) => account.steamId === targetSteamId);
+    if (!target) {
+      throw new Error(`Paired Steam account ${targetSteamId} not found.`);
     }
-    const steamSource = game.sourceIds.find((source) => source.provider === "steam");
-    const command = repository.getLaunchCommand(id);
-    return nativeBridge.launchGame({
-      gameId: id,
-      provider: steamSource?.provider ?? "manual",
-      externalId: steamSource?.externalId ?? id,
-      command,
-      executablePath: game.executablePath,
-      workingDirectory: game.installDirectory
-    });
+    if (!target.localUsername) {
+      throw new Error("Map a local Steam username to this account before switching.");
+    }
+    await switchSteamAccount({ steamId: target.steamId, accountName: target.localUsername });
+    return performLaunch(id);
   });
+  handleIpc("steam:listLocalAccounts", async () => {
+    const { accounts } = await readLoginUsers();
+    return accounts;
+  });
+  handleIpc("steam:getActiveUser", () => getActiveSteamUser());
+  handleIpc("steam:setAccountLocalUsername", async (_event, steamId: string, localUsername: string | undefined) => {
+    const trimmed = localUsername?.trim();
+    return settingsService.patchSteamAccount(steamId, { localUsername: trimmed ? trimmed : undefined });
+  });
+  handleIpc("steam:removeAccount", async (_event, steamId: string) => settingsService.removeSteamAccount(steamId));
 
   handleIpc("home:get", async () => {
     const settings = await settingsService.get();
@@ -901,12 +1039,29 @@ function registerIpc(): void {
   handleIpc("steam:pair", async () => {
     const paired = await pairSteamAccount(mainWindow);
     const current = await settingsService.get();
-    await settingsService.update({
-      steamAccount: {
-        ...current.steamAccount,
-        steamId: paired.steamId,
-        pairedAt: paired.pairedAt
+    const existing = current.steamAccounts.find((account) => account.steamId === paired.steamId);
+
+    // Best-effort auto-map to a local Steam user — when the SteamID matches a row in
+    // loginusers.vdf the user never has to choose anything by hand.
+    let autoLocalUsername: string | undefined;
+    let autoPersonaName: string | undefined;
+    try {
+      const { accounts } = await readLoginUsers();
+      const match = accounts.find((account) => account.steamId === paired.steamId);
+      if (match) {
+        autoLocalUsername = match.accountName;
+        autoPersonaName = match.personaName;
       }
+    } catch (error) {
+      console.warn("Could not auto-detect local Steam user", error);
+    }
+
+    await settingsService.upsertSteamAccount({
+      ...(existing ?? {}),
+      steamId: paired.steamId,
+      pairedAt: paired.pairedAt,
+      personaName: existing?.personaName ?? autoPersonaName,
+      localUsername: existing?.localUsername ?? autoLocalUsername
     });
     return paired;
   });
@@ -915,74 +1070,60 @@ function registerIpc(): void {
     if (!trimmed) {
       throw new Error("Steam Web API key is required.");
     }
-
-    const current = await settingsService.get();
-    if (!current.steamAccount) {
-      throw new Error("Pair a Steam account before saving a Web API key.");
-    }
-
     const encrypted = await nativeBridge.encryptSecret({ value: trimmed, scope: "current-user" });
-    return settingsService.update({
-      steamAccount: {
-        ...current.steamAccount,
-        webApiKey: encrypted
-      }
-    });
+    return settingsService.update({ steamWebApiKey: encrypted });
   });
-  handleIpc("steam:disconnect", async () => settingsService.update({ steamAccount: undefined }));
-  handleIpc("steam:connectFamily", async () => {
+  handleIpc("steam:clearApiKey", async () => settingsService.update({ steamWebApiKey: undefined }));
+  handleIpc("steam:disconnect", async (_event, steamId?: string) => {
+    if (steamId) {
+      return settingsService.removeSteamAccount(steamId);
+    }
+    return settingsService.update({ steamAccounts: [] });
+  });
+  handleIpc("steam:connectFamily", async (_event, steamId: string) => {
     const current = await settingsService.get();
-    if (!current.steamAccount) {
-      throw new Error("Pair a Steam account before connecting the family library.");
+    if (!current.steamAccounts.some((account) => account.steamId === steamId)) {
+      throw new Error("Pair the Steam account before connecting the family library.");
     }
     const result = await authenticateSteamSession(mainWindow);
+    if (result.steamId !== steamId) {
+      throw new Error(
+        `The Steam session you logged in as (${result.steamId}) doesn't match the paired account (${steamId}).`
+      );
+    }
     const encrypted = await nativeBridge.encryptSecret({ value: result.accessToken, scope: "current-user" });
-    return settingsService.update({
-      steamAccount: {
-        ...current.steamAccount,
-        familySession: {
-          accessToken: encrypted,
-          steamId: result.steamId,
-          expiresAt: result.expiresAt,
-          connectedAt: new Date().toISOString()
-        }
+    return settingsService.patchSteamAccount(steamId, {
+      familySession: {
+        accessToken: encrypted,
+        steamId: result.steamId,
+        expiresAt: result.expiresAt,
+        connectedAt: new Date().toISOString()
       }
     });
   });
-  handleIpc("steam:refreshFamily", async () => {
+  handleIpc("steam:refreshFamily", async (_event, steamId: string) => {
     const current = await settingsService.get();
-    if (!current.steamAccount?.familySession) {
-      throw new Error("Family library is not connected.");
+    const target = current.steamAccounts.find((account) => account.steamId === steamId);
+    if (!target?.familySession) {
+      throw new Error("Family library is not connected for this account.");
     }
     const refreshed = await refreshSteamAccessToken();
     if (!refreshed) {
       throw new Error("Steam family session expired; reconnect to continue.");
     }
     const encrypted = await nativeBridge.encryptSecret({ value: refreshed.accessToken, scope: "current-user" });
-    return settingsService.update({
-      steamAccount: {
-        ...current.steamAccount,
-        familySession: {
-          accessToken: encrypted,
-          steamId: refreshed.steamId,
-          expiresAt: refreshed.expiresAt,
-          connectedAt: current.steamAccount.familySession.connectedAt
-        }
+    return settingsService.patchSteamAccount(steamId, {
+      familySession: {
+        accessToken: encrypted,
+        steamId: refreshed.steamId,
+        expiresAt: refreshed.expiresAt,
+        connectedAt: target.familySession.connectedAt
       }
     });
   });
-  handleIpc("steam:disconnectFamily", async () => {
-    const current = await settingsService.get();
+  handleIpc("steam:disconnectFamily", async (_event, steamId: string) => {
     await disconnectSteamFamilySession();
-    if (!current.steamAccount) {
-      return current;
-    }
-    return settingsService.update({
-      steamAccount: {
-        ...current.steamAccount,
-        familySession: undefined
-      }
-    });
+    return settingsService.patchSteamAccount(steamId, { familySession: undefined });
   });
   handleIpc("steam:search", async (_event, query: string): Promise<SteamSearchResult[]> => {
     return searchSteamStore(query, net.fetch);
@@ -1062,14 +1203,15 @@ app.whenReady().then(() => {
   profile("ipc:registered", "IPC handlers registered");
   createWindow();
   void settingsService.get().then((settings) => {
+    const canSync = Boolean(settings.steamWebApiKey) && settings.steamAccounts.length > 0;
     profile("startup:settings-loaded", "Startup settings loaded", {
-      hasSteamAccount: Boolean(settings.steamAccount),
-      hasWebApiKey: Boolean(settings.steamAccount?.webApiKey),
+      steamAccounts: settings.steamAccounts.length,
+      hasSteamWebApiKey: Boolean(settings.steamWebApiKey),
       hasSteamGridDbApiKey: Boolean(settings.steamGridDbApiKey)
     });
     runAfterInitialRendererPaint(() => {
       profile("startup:background:start", "Startup background work started");
-      if (settings.steamAccount?.webApiKey) {
+      if (canSync) {
         void startSteamSync("steam", { refreshStaleMetadata: false }).catch((error: unknown) => {
           if (isSteamSyncCancelledError(error)) {
             return;

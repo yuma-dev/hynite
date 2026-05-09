@@ -14,7 +14,7 @@ export type SteamLibraryFolder = {
   steamAppsPath: string;
 };
 
-function commonSteamRoots(): string[] {
+export function commonSteamRoots(): string[] {
   const roots = new Set<string>();
   const programFilesX86 = process.env["ProgramFiles(x86)"];
   const programFiles = process.env.ProgramFiles;
@@ -31,6 +31,18 @@ function commonSteamRoots(): string[] {
   }
 
   return [...roots];
+}
+
+export function findSteamRoot(): string | undefined {
+  for (const root of commonSteamRoots()) {
+    if (existsSync(join(root, "steamapps"))) {
+      return root;
+    }
+    if (existsSync(join(root, "Steam.exe"))) {
+      return root;
+    }
+  }
+  return undefined;
 }
 
 function extractLibraryPaths(root: string, parsed: VdfObject): string[] {
