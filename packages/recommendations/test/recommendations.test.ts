@@ -129,6 +129,74 @@ describe("recommendations", () => {
     expect(home.popularNow[0]?.coverUrl).toBeUndefined();
   });
 
+  it("filters NSFW games from the Home hero while keeping them in Trending rows", async () => {
+    const names: Record<string, string> = {
+      "101": "Explicit Trend Game",
+      "102": "Safe Trend Game"
+    };
+    const fetchMock = async (url: string) => {
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "cat_topsellers",
+              name: "Top Sellers",
+              items: [
+                { id: 101, type: 0, name: names["101"], final_price: 1999, currency: "USD", header_image: "explicit.jpg" },
+                { id: 102, type: 0, name: names["102"], final_price: 1999, currency: "USD", header_image: "safe.jpg" }
+              ]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      if (url.includes("api.steamcmd.net")) {
+        const appid = url.split("/").pop() ?? "";
+        return new Response(
+          JSON.stringify({
+            data: {
+              [appid]: {
+                common: {
+                  name: names[appid]
+                }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      const appid = new URL(url).searchParams.get("appids") ?? "";
+      return new Response(
+        JSON.stringify({
+          [appid]: {
+            success: true,
+            data: {
+              name: names[appid],
+              content_descriptors: {
+                notes: appid === "101" ? "Nudity or Sexual Content" : "Violence"
+              }
+            }
+          }
+        }),
+        { status: 200 }
+      );
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch);
+
+    expect(home.popularNow.map((item) => item.title)).toEqual(["Safe Trend Game"]);
+    expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games.map((item) => item.title)).toEqual([
+      "Explicit Trend Game",
+      "Safe Trend Game"
+    ]);
+  });
+
   it("builds categorized trending rows from chart, SteamSpy, and Store category feeds", async () => {
     const names: Record<string, string> = {
       "111": "SteamSpy Top Game",

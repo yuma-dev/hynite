@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const providerIdSchema = z.enum(["steam", "epic", "gog", "manual"]);
+export const providerIdSchema = z.enum(["steam", "epic", "gog", "manual", "local", "igdb"]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
 export const installStateSchema = z.enum(["installed", "not_installed", "unknown"]);
@@ -133,7 +133,7 @@ export const gameSchema = z.object({
 export type Game = z.infer<typeof gameSchema>;
 
 export type ImportedGame = {
-  provider: Exclude<ProviderId, "manual">;
+  provider: Exclude<ProviderId, "manual" | "igdb">;
   externalId: string;
   title: string;
   installState: InstallState;
@@ -183,7 +183,7 @@ export type GameMetadataPatch = Partial<
 >;
 
 export type ImporterProvider = {
-  id: Exclude<ProviderId, "manual">;
+  id: Exclude<ProviderId, "manual" | "igdb">;
   label: string;
   scan(): Promise<ImportedGame[]>;
   refreshMetadata(game: ImportedGame): Promise<GameMetadataPatch>;
@@ -458,6 +458,17 @@ export type SteamFamilyAuthResult = {
   expiresAt: string;
 };
 
+export type LocalRoot = {
+  path: string;
+  /** 1 = each immediate subfolder is a game; 2 = also recurses one level. */
+  depth: number;
+};
+
+export type IgdbCredentials = {
+  clientId: EncryptedSecret;
+  clientSecret: EncryptedSecret;
+};
+
 export type AppSettings = {
   steamAccounts: SteamAccountSettings[];
   /** Single Steam Web API key shared by every paired account (one key fetches any public profile). */
@@ -470,6 +481,14 @@ export type AppSettings = {
   launchAccountPreferences?: Record<string, string>;
   /** User-defined library groups. Manual groups pin game ids; smart groups store a library filter view. */
   gameGroups?: GameGroup[];
+  /** Folders scanned for non-Steam local games. */
+  localRoots?: LocalRoot[];
+  /** Folder-name regex patterns to skip during local scan. Falls back to defaults if undefined. */
+  localExcludePatterns?: string[];
+  /** Folder paths the user has explicitly chosen to ignore (won't be re-imported on scan). */
+  localIgnoredPaths?: string[];
+  /** Twitch app credentials for IGDB metadata (client-credentials OAuth). */
+  igdb?: IgdbCredentials;
 };
 
 export type ExecutableInfo = {

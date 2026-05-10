@@ -34,6 +34,7 @@ while (await Console.In.ReadLineAsync() is { } line)
             "encryptSecret" => EncryptSecret(request.Params),
             "decryptSecret" => DecryptSecret(request.Params),
             "steamGetAppInfo" => await SteamAppInfoClient.GetAppInfo(request.Params),
+            "getFileVersionInfo" => GetFileVersionInfo(request.Params),
             "watchProcess" => new { accepted = true },
             _ => throw new InvalidOperationException($"Unknown method {request.Method}.")
         };
@@ -107,6 +108,60 @@ static object EncryptSecret(JsonElement parameters)
         scope = "current-user"
     };
 }
+
+static object GetFileVersionInfo(JsonElement parameters)
+{
+    var paths = new List<string>();
+    if (parameters.TryGetProperty("paths", out var pathsElement) && pathsElement.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var element in pathsElement.EnumerateArray())
+        {
+            var path = element.GetString();
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                paths.Add(path);
+            }
+        }
+    }
+
+    var results = new List<object>();
+    foreach (var path in paths)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                results.Add(new { path, exists = false });
+                continue;
+            }
+
+            var info = FileVersionInfo.GetVersionInfo(path);
+            var size = new FileInfo(path).Length;
+            results.Add(new
+            {
+                path,
+                exists = true,
+                size,
+                productName = NullIfBlank(info.ProductName),
+                fileDescription = NullIfBlank(info.FileDescription),
+                fileVersion = NullIfBlank(info.FileVersion),
+                productVersion = NullIfBlank(info.ProductVersion),
+                companyName = NullIfBlank(info.CompanyName),
+                originalFilename = NullIfBlank(info.OriginalFilename),
+                internalName = NullIfBlank(info.InternalName),
+                legalCopyright = NullIfBlank(info.LegalCopyright)
+            });
+        }
+        catch (Exception ex)
+        {
+            results.Add(new { path, exists = true, error = ex.Message });
+        }
+    }
+
+    return new { results };
+}
+
+static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
 static object DecryptSecret(JsonElement parameters)
 {

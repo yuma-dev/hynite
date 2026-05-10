@@ -49,6 +49,21 @@ export type NativeSteamAppInfo = {
   raw?: unknown;
 };
 
+export type NativeFileVersionInfo = {
+  path: string;
+  exists: boolean;
+  size?: number;
+  productName?: string | null;
+  fileDescription?: string | null;
+  fileVersion?: string | null;
+  productVersion?: string | null;
+  companyName?: string | null;
+  originalFilename?: string | null;
+  internalName?: string | null;
+  legalCopyright?: string | null;
+  error?: string;
+};
+
 export class NativeBridge {
   private process?: ChildProcessWithoutNullStreams;
   private buffer = "";
@@ -98,6 +113,19 @@ export class NativeBridge {
     } catch (error) {
       console.warn("Native Steam appinfo failed", error);
       return undefined;
+    }
+  }
+
+  async getFileVersionInfo(paths: string[]): Promise<NativeFileVersionInfo[]> {
+    if (paths.length === 0) {
+      return [];
+    }
+    try {
+      const response = await this.request<{ results: NativeFileVersionInfo[] }>("getFileVersionInfo", { paths });
+      return response.results ?? [];
+    } catch (error) {
+      console.warn("Native getFileVersionInfo failed", error);
+      return paths.map((path) => ({ path, exists: existsSync(path) }));
     }
   }
 

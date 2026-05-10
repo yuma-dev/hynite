@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { type Game, type HomeModel, gameActivityTime } from "@hynite/core";
-import { buildHomeModel, type BuildHomeOptions } from "@hynite/recommendations";
+import { buildHomeModel, filterHomeHeroGames, type BuildHomeOptions } from "@hynite/recommendations";
 import type { DiagnosticLogService } from "./diagnosticLogService";
 
 const HOME_LOCAL_ROW_LIMIT = 72;
@@ -104,6 +104,7 @@ export class HomeService {
       return {
         ...previous,
         ...localRows,
+        popularNow: filterHomeHeroGames(previous.popularNow),
         stale: true
       };
     }

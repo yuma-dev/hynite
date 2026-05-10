@@ -2,6 +2,18 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { defaultLibraryView, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type SteamAccountSettings } from "@hynite/core";
 
+export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
+  "^_redist$",
+  "^redist$",
+  "^_Commonredist$",
+  "^Tools$",
+  "^Saves$",
+  "^Backups?$",
+  "^Emulators$",
+  "^DLC$",
+  "^_CommonRedist$"
+];
+
 const defaultSettings: AppSettings = {
   steamAccounts: [],
   steamWebApiKey: undefined,
@@ -10,7 +22,9 @@ const defaultSettings: AppSettings = {
   reduceMotion: false,
   libraryView: defaultLibraryView,
   launchAccountPreferences: {},
-  gameGroups: []
+  gameGroups: [],
+  localRoots: [],
+  localExcludePatterns: DEFAULT_LOCAL_EXCLUDE_PATTERNS
 };
 
 type LegacyAccount = SteamAccountSettings & { webApiKey?: EncryptedSecret };

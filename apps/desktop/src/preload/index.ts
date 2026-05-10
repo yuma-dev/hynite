@@ -44,11 +44,69 @@ const api = {
     hydrateDiscovery: (game: Game): Promise<GameDetail> => ipcRenderer.invoke("games:hydrateDiscovery", game),
     launch: (id: string, preferredSteamId?: string): Promise<LaunchOutcome> =>
       ipcRenderer.invoke("games:launch", id, preferredSteamId),
+    setLaunchExe: (gameId: string, executablePath: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke("games:set-launch-exe", { gameId, executablePath }),
     onUpdated: (callback: (game: GameDetail) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, game: GameDetail) => callback(game);
       ipcRenderer.on("games:updated", listener);
       return () => ipcRenderer.removeListener("games:updated", listener);
     }
+  },
+  local: {
+    scan: (): Promise<{ scanned: number; matched: number; ambiguous: number; unmatched: number; issues: unknown[] }> =>
+      ipcRenderer.invoke("local:scan"),
+    getIssues: (): Promise<unknown[]> => ipcRenderer.invoke("local:get-issues"),
+    resolveAmbiguous: (
+      candidateId: string,
+      chosen: { provider: "steam" | "igdb"; externalId: string; title: string } | null
+    ): Promise<{ ok: true }> => ipcRenderer.invoke("local:resolve-ambiguous", { candidateId, chosen }),
+    addSingle: (args: {
+      folderPath?: string;
+      executablePath?: string;
+      titleOverride?: string;
+      match?: { provider: "steam" | "igdb"; externalId: string; title: string };
+    }): Promise<{
+      gameId: string;
+      candidateId: string;
+      title: string;
+      chosenExe: string;
+      identification:
+        | { kind: "match"; match: { provider: "steam" | "igdb"; externalId: string; title: string; confidence: number; reason: string } }
+        | { kind: "ambiguous"; candidates: Array<{ provider: "steam" | "igdb"; externalId: string; title: string; coverUrl?: string; releaseDate?: string }>; topConfidence: number }
+        | { kind: "unmatched"; reason: string };
+    }> => ipcRenderer.invoke("local:add-single", args),
+    probe: (args: { folderPath?: string; executablePath?: string }): Promise<{
+      folderPath: string;
+      folderName: string;
+      candidateId: string;
+      exeOptions: Array<{
+        path: string;
+        size: number;
+        productName?: string;
+        fileDescription?: string;
+        companyName?: string;
+        score: number;
+        reasons: string[];
+        chosen: boolean;
+      }>;
+      chosenExe: string;
+      identification:
+        | { kind: "match"; match: { provider: "steam" | "igdb"; externalId: string; title: string; confidence: number; reason: string } }
+        | { kind: "ambiguous"; candidates: Array<{ provider: "steam" | "igdb"; externalId: string; title: string; coverUrl?: string; releaseDate?: string }>; topConfidence: number }
+        | { kind: "unmatched"; reason: string };
+    }> => ipcRenderer.invoke("local:probe", args),
+    searchMetadata: (query: string): Promise<{
+      steam: Array<{ provider: "steam"; externalId: string; title: string; coverUrl?: string; releaseDate?: string }>;
+      igdb: Array<{ provider: "igdb"; externalId: string; title: string; coverUrl?: string; releaseDate?: string }>;
+    }> => ipcRenderer.invoke("local:search-metadata", { query }),
+    ignoreFolder: (folderPath: string): Promise<AppSettings> => ipcRenderer.invoke("local:ignore-folder", folderPath),
+    setIgnored: (paths: string[]): Promise<AppSettings> => ipcRenderer.invoke("local:set-ignored", paths),
+    removeAndIgnore: (gameId: string, folderPath?: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke("local:remove-and-ignore", { gameId, folderPath }),
+    countUnder: (folderPath: string): Promise<number> => ipcRenderer.invoke("local:count-under", folderPath),
+    removeUnder: (folderPath: string): Promise<{ removed: number }> => ipcRenderer.invoke("local:remove-under", folderPath),
+    removeAll: (): Promise<{ removed: number }> => ipcRenderer.invoke("local:remove-all"),
+    repairLibrary: (): Promise<{ deleted: number }> => ipcRenderer.invoke("local:repair-library")
   },
   home: {
     get: (): Promise<HomeModel> => ipcRenderer.invoke("home:get")
@@ -103,7 +161,25 @@ const api = {
   },
   metadata: {
     saveSteamGridDbKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("metadata:saveSteamGridDbKey", apiKey),
-    clearSteamGridDbKey: (): Promise<AppSettings> => ipcRenderer.invoke("metadata:clearSteamGridDbKey")
+    clearSteamGridDbKey: (): Promise<AppSettings> => ipcRenderer.invoke("metadata:clearSteamGridDbKey"),
+    saveIgdbCredentials: (clientId: string, clientSecret: string): Promise<AppSettings> =>
+      ipcRenderer.invoke("metadata:save-igdb-credentials", { clientId, clientSecret }),
+    clearIgdbCredentials: (): Promise<AppSettings> => ipcRenderer.invoke("metadata:clear-igdb-credentials")
+  },
+  dialog: {
+    pickFolder: (args?: { title?: string; defaultPath?: string }): Promise<string | undefined> =>
+      ipcRenderer.invoke("dialog:pick-folder", args ?? {}),
+    pickFile: (args?: {
+      title?: string;
+      defaultPath?: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+    }): Promise<string | undefined> => ipcRenderer.invoke("dialog:pick-file", args ?? {})
+  },
+  localExt: {
+    setRoots: (roots: Array<{ path: string; depth: number }>): Promise<AppSettings> =>
+      ipcRenderer.invoke("local:set-roots", roots),
+    setExcludePatterns: (patterns: string[]): Promise<AppSettings> =>
+      ipcRenderer.invoke("local:set-exclude-patterns", patterns)
   },
   debug: {
     seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed"),

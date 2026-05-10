@@ -122,6 +122,8 @@ const fallbackPopular = [
 ];
 const HOME_LOCAL_ROW_LIMIT = 72;
 const DISCOVERY_ENRICHMENT_CONCURRENCY = 2;
+const HOME_HERO_NSFW_PATTERN =
+  /\b(?:nsfw|hentai|porn(?:ographic|ography)?|erotic|sexual(?:\s+(?:content|themes?))?|nudity|nude|adult\s+only|sex)\b/i;
 
 function isLegacyGuessedLibraryCapsuleUrl(value: string | undefined): boolean {
   return Boolean(value && /^https:\/\/(?:cdn\.akamai\.steamstatic\.com\/steam|steamcdn-a\.akamaihd\.net\/steam)\/apps\/\d+\/library_600x900(?:_2x)?\.jpg(?:\?.*)?$/i.test(value));
@@ -129,6 +131,15 @@ function isLegacyGuessedLibraryCapsuleUrl(value: string | undefined): boolean {
 
 function usableArtworkUrl(value: string | undefined): string | undefined {
   return isLegacyGuessedLibraryCapsuleUrl(value) ? undefined : value;
+}
+
+export function isHomeHeroSafe(game: Pick<Game, "title" | "genres" | "tags" | "contentDescriptors">): boolean {
+  const safetyText = [game.title, ...game.genres, ...game.tags, ...game.contentDescriptors].join(" ");
+  return !HOME_HERO_NSFW_PATTERN.test(safetyText);
+}
+
+export function filterHomeHeroGames(games: Game[]): Game[] {
+  return games.filter(isHomeHeroSafe);
 }
 
 function steamFetch(fetchImpl: typeof fetch): typeof fetch {
@@ -882,6 +893,7 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
       .map((item) => enrichedById.get(candidateGameId(item.candidate)))
       .filter((game): game is Game => Boolean(game))
       .filter((game) => !ownedIds.has(game.id))
+      .filter(isHomeHeroSafe)
   ).slice(0, 20);
   const trendingRows = buildTrendRows(sources, enrichedById, ownedIds);
   const recentActivity = [...localGames]

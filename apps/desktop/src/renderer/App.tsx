@@ -18,6 +18,7 @@ import {
   Folder,
   FolderOpen,
   Globe2,
+  HardDrive,
   Home,
   Images,
   Info,
@@ -50,6 +51,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileStartup } from "./startupProfile";
+import { LocalGamesScreen } from "./LocalGamesScreen";
 
 type SteamSwitchPrompt = {
   gameId: string;
@@ -125,13 +127,14 @@ async function launchGame(id: string, preferredSteamId?: string): Promise<void> 
   }
 }
 
-type Route = "home" | "trending" | "library" | "search" | "settings";
+type Route = "home" | "trending" | "library" | "search" | "local" | "settings";
 
 const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
   { id: "home", label: "Home", icon: Home },
   { id: "trending", label: "Trending", icon: Flame },
   { id: "library", label: "Library", icon: Library },
   { id: "search", label: "Search", icon: Search },
+  { id: "local", label: "Add games", icon: Plus },
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
@@ -1455,7 +1458,9 @@ const SOURCE_LABELS: Record<ProviderId, string> = {
   steam: "Steam",
   epic: "Epic",
   gog: "GOG",
-  manual: "Manual"
+  manual: "Manual",
+  local: "Local",
+  igdb: "IGDB"
 };
 
 const DATE_FILTER_OPTIONS: Array<{ value: LibraryDateFilter; label: string }> = [
@@ -3822,6 +3827,7 @@ export function App() {
   const [libraryGameIds, setLibraryGameIds] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<GameDetail | undefined>();
   const [settings, setSettings] = useState<AppSettings | undefined>();
+  const [localIssueCount, setLocalIssueCount] = useState(0);
   const [activeGroupId, setActiveGroupIdState] = useState<string | undefined>();
   const [contextMenu, setContextMenu] = useState<GameContextMenuRequest | undefined>();
   const [nameDialog, setNameDialog] = useState<NameDialogState | undefined>();
@@ -3967,6 +3973,10 @@ export function App() {
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     settingsRef.current = nextSettings;
     setSettings(nextSettings);
+    void window.hynite.local
+      .getIssues()
+      .then((issues) => setLocalIssueCount(Array.isArray(issues) ? issues.length : 0))
+      .catch(() => setLocalIssueCount(0));
     profileStartup("refresh:end", "Renderer refresh local data loaded", {
       durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
       games: nextGames.length,
@@ -4257,6 +4267,20 @@ export function App() {
     if (route === "search") {
       return <SteamSearchScreen onSelect={(result) => void selectGame(gameFromSteamSearchResult(result))} />;
     }
+    if (route === "local") {
+      if (!settings) return null;
+      const localGames = allGames.filter((game) => game.sourceIds.some((source) => source.provider === "local"));
+      return (
+        <LocalGamesScreen
+          settings={settings}
+          setSettings={setSettings}
+          localGames={localGames}
+          onGameSelected={(game) => void selectGame(game)}
+          onLibraryRefresh={() => void refresh()}
+          onIssueCountChange={setLocalIssueCount}
+        />
+      );
+    }
     return (
       <SettingsScreen
         settings={settings}
@@ -4300,6 +4324,11 @@ export function App() {
                 <Icon size={17} />
                 <span className="rail-label">{item.label}</span>
                 {isLibrary ? <span className="rail-count-pill">{allGames.length}</span> : null}
+                {item.id === "local" && localIssueCount > 0 ? (
+                  <span className="rail-issue-badge" title={`${localIssueCount} item${localIssueCount === 1 ? "" : "s"} need review`}>
+                    {localIssueCount}
+                  </span>
+                ) : null}
               </button>
             );
           })}

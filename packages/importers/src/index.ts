@@ -3,3 +3,4 @@ export * from "./steam/webApi";
 export * from "./steam/familyApi";
 export * from "./steam/localInstall";
 export * from "./steam/loginUsers";
+export * from "./local";

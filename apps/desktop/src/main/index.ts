@@ -1,8 +1,11 @@
-import { app, BrowserWindow, clipboard, ipcMain, net, protocol, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell } from "electron";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { HyniteRepository } from "@hynite/db";
 import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider } from "@hynite/importers";
+import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
+import { LocalImportService } from "./localImportService";
+import { LaunchTracker } from "./launchTracker";
 import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { fetchSteamMetadata, metadataFromSteamAppInfo, refreshFusedMetadata } from "@hynite/metadata";
@@ -31,6 +34,9 @@ let nativeBridge: NativeBridge;
 let syncStatusService: SyncStatusService;
 let assetCacheService: AssetCacheService;
 let diagnosticLogService: DiagnosticLogService;
+let localImportService: LocalImportService;
+let launchTracker: LaunchTracker;
+let activeLocalScan: { promise: Promise<unknown>; controller: AbortController } | undefined;
 let startupProfileService: StartupProfileService | undefined;
 let startupHeartbeatTimer: NodeJS.Timeout | undefined;
 
@@ -954,6 +960,11 @@ async function performLaunch(id: string): Promise<{ kind: "launched" } & LaunchS
   if (!game) {
     throw new Error(`Game ${id} was not found.`);
   }
+  const localSource = game.sourceIds.find((source) => source.provider === "local");
+  if (localSource && game.executablePath) {
+    const session = launchTracker.spawnAndTrack(id, game.executablePath, game.installDirectory);
+    return { kind: "launched", ...session };
+  }
   const steamSource = game.sourceIds.find((source) => source.provider === "steam");
   const command = repository.getLaunchCommand(id);
   const session = await nativeBridge.launchGame({
@@ -965,6 +976,66 @@ async function performLaunch(id: string): Promise<{ kind: "launched" } & LaunchS
     workingDirectory: game.installDirectory
   });
   return { kind: "launched", ...session };
+}
+
+async function runLocalScan(): Promise<{ scanned: number; matched: number; ambiguous: number; unmatched: number; issues: LocalScanIssue[] } | undefined> {
+  if (activeLocalScan) {
+    return activeLocalScan.promise as Promise<ReturnType<typeof runLocalScan>>;
+  }
+  const settings = await settingsService.get();
+  const roots = (settings.localRoots ?? []).filter((root) => root.path && root.path.trim().length > 0);
+  if (roots.length === 0) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
+  const igdbAuth = settings.igdb
+    ? {
+        clientId: await nativeBridge.decryptSecret(settings.igdb.clientId),
+        clientSecret: await nativeBridge.decryptSecret(settings.igdb.clientSecret)
+      }
+    : undefined;
+
+  const promise = localImportService
+    .run({
+      roots,
+      excludePatterns: settings.localExcludePatterns ?? [],
+      ignoredPaths: settings.localIgnoredPaths ?? [],
+      igdbAuth,
+      steamGridDbApiKey,
+      steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
+      signal: controller.signal,
+      searchSteamStore: async (query) => {
+        try {
+          const results = await searchSteamStore(query, net.fetch);
+          return results.slice(0, 6).map((entry): IdentifyCandidate => ({
+            provider: "steam",
+            externalId: entry.appId,
+            title: entry.title,
+            confidence: 0,
+            reason: "search",
+            releaseDate: entry.releaseDate,
+            coverUrl: entry.capsuleUrl
+          }));
+        } catch (error) {
+          console.warn("Steam search for local importer failed", error);
+          return [];
+        }
+      },
+      log: (level, message, details) => {
+        diagnosticLogService.log({ level, phase: "local:scan", message, details });
+        syncStatusService.log(level, "local:scan", message, details);
+      }
+    })
+    .finally(() => {
+      if (activeLocalScan?.promise === promise) {
+        activeLocalScan = undefined;
+      }
+    });
+
+  activeLocalScan = { promise, controller };
+  return promise;
 }
 
 function registerIpc(): void {
@@ -980,6 +1051,258 @@ function registerIpc(): void {
 
   handleIpc("library:sync", async (_event, providerId?: ProviderId) => {
     return startSteamSync(providerId, { refreshStaleMetadata: true });
+  });
+
+  handleIpc("local:scan", async () => {
+    const result = await runLocalScan();
+    return result ?? { scanned: 0, matched: 0, ambiguous: 0, unmatched: 0, issues: [] };
+  });
+  handleIpc("local:get-issues", async () => {
+    return localImportService.lastReport?.issues ?? [];
+  });
+  handleIpc("local:probe", async (
+    _event,
+    args: { folderPath?: string; executablePath?: string }
+  ) => {
+    const settings = await settingsService.get();
+    const igdbAuth = settings.igdb
+      ? {
+          clientId: await nativeBridge.decryptSecret(settings.igdb.clientId),
+          clientSecret: await nativeBridge.decryptSecret(settings.igdb.clientSecret)
+        }
+      : undefined;
+    return localImportService.probe(args, {
+      igdbAuth,
+      searchSteamStore: async (query) => {
+        try {
+          const results = await searchSteamStore(query, net.fetch);
+          return results.slice(0, 8).map((entry): IdentifyCandidate => ({
+            provider: "steam",
+            externalId: entry.appId,
+            title: entry.title,
+            confidence: 0,
+            reason: "search",
+            releaseDate: entry.releaseDate,
+            coverUrl: entry.capsuleUrl
+          }));
+        } catch (error) {
+          console.warn("Steam search for probe failed", error);
+          return [];
+        }
+      }
+    });
+  });
+  handleIpc("local:search-metadata", async (_event, args: { query: string }) => {
+    const settings = await settingsService.get();
+    const igdbAuth = settings.igdb
+      ? {
+          clientId: await nativeBridge.decryptSecret(settings.igdb.clientId),
+          clientSecret: await nativeBridge.decryptSecret(settings.igdb.clientSecret)
+        }
+      : undefined;
+    return localImportService.searchMetadata(args.query, {
+      igdbAuth,
+      searchSteamStore: async (query) => {
+        try {
+          const results = await searchSteamStore(query, net.fetch);
+          return results.slice(0, 12).map((entry): IdentifyCandidate => ({
+            provider: "steam",
+            externalId: entry.appId,
+            title: entry.title,
+            confidence: 0,
+            reason: "search",
+            releaseDate: entry.releaseDate,
+            coverUrl: entry.capsuleUrl
+          }));
+        } catch {
+          return [];
+        }
+      }
+    });
+  });
+  handleIpc("local:set-ignored", async (_event, paths: string[]) => {
+    return settingsService.update({ localIgnoredPaths: paths });
+  });
+  handleIpc("local:ignore-folder", async (_event, folderPath: string) => {
+    const current = await settingsService.get();
+    const ignored = new Set(current.localIgnoredPaths ?? []);
+    ignored.add(folderPath);
+    return settingsService.update({ localIgnoredPaths: [...ignored] });
+  });
+  handleIpc("local:count-under", (_event, folderPath: string) => {
+    const prefix = folderPath.replace(/[\\/]+$/, "").toLowerCase();
+    const games = repository.listLocalGames();
+    return games.filter((game) => {
+      if (!game.installDirectory) return false;
+      const dir = game.installDirectory.toLowerCase();
+      return dir === prefix || dir.startsWith(prefix + "\\") || dir.startsWith(prefix + "/");
+    }).length;
+  });
+  handleIpc("local:remove-under", (_event, folderPath: string) => {
+    return { removed: repository.removeLocalGamesUnder(folderPath) };
+  });
+  handleIpc("local:remove-all", () => {
+    return { removed: repository.removeAllLocalGames() };
+  });
+  handleIpc("local:remove-and-ignore", async (_event, args: { gameId: string; folderPath?: string }) => {
+    repository.removeGame(args.gameId);
+    if (args.folderPath) {
+      const current = await settingsService.get();
+      const ignored = new Set(current.localIgnoredPaths ?? []);
+      ignored.add(args.folderPath);
+      await settingsService.update({ localIgnoredPaths: [...ignored] });
+    }
+    return { ok: true };
+  });
+  handleIpc("local:add-single", async (
+    _event,
+    args: {
+      folderPath?: string;
+      executablePath?: string;
+      titleOverride?: string;
+      match?: { provider: "steam" | "igdb"; externalId: string; title: string };
+    }
+  ) => {
+    const settings = await settingsService.get();
+    const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
+    const igdbAuth = settings.igdb
+      ? {
+          clientId: await nativeBridge.decryptSecret(settings.igdb.clientId),
+          clientSecret: await nativeBridge.decryptSecret(settings.igdb.clientSecret)
+        }
+      : undefined;
+
+    const result = await localImportService.addSingle(args, {
+      igdbAuth,
+      steamGridDbApiKey,
+      steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
+      searchSteamStore: async (query) => {
+        try {
+          const results = await searchSteamStore(query, net.fetch);
+          return results.slice(0, 6).map((entry): IdentifyCandidate => ({
+            provider: "steam",
+            externalId: entry.appId,
+            title: entry.title,
+            confidence: 0,
+            reason: "search",
+            releaseDate: entry.releaseDate,
+            coverUrl: entry.capsuleUrl
+          }));
+        } catch (error) {
+          console.warn("Steam search for single-add failed", error);
+          return [];
+        }
+      },
+      log: (level, message, details) => {
+        diagnosticLogService.log({ level, phase: "local:add-single", message, details });
+        syncStatusService.log(level, "local:add-single", message, details);
+      }
+    });
+
+    // If this candidate was previously flagged as an issue, drop it now that it has a resolution.
+    const report = localImportService.lastReport;
+    if (report && (args.match || result.identification.kind === "match")) {
+      report.issues = report.issues.filter((issue) => issue.candidateId !== result.candidateId);
+    }
+    return result;
+  });
+  handleIpc("local:repair-library", () => {
+    return repository.repairPhantomLocalGames();
+  });
+  handleIpc("local:resolve-ambiguous", async (
+    _event,
+    args: { candidateId: string; chosen: { provider: "steam" | "igdb"; externalId: string; title: string } | null }
+  ) => {
+    const settings = await settingsService.get();
+    const localId = makeGameId("local", args.candidateId);
+    const game = repository.getGame(localId);
+    if (!game) {
+      throw new Error("Local game candidate not found in library; rescan first.");
+    }
+    if (!args.chosen) {
+      // Mark as resolved with no match — leave as-is.
+      return { ok: true };
+    }
+    repository.attachSecondarySource({
+      gameId: localId,
+      provider: args.chosen.provider,
+      externalId: args.chosen.externalId
+    });
+
+    // Refresh metadata using the user-picked source.
+    let patch: GameMetadataPatch | undefined;
+    if (args.chosen.provider === "steam") {
+      patch = await refreshFusedMetadata(
+        {
+          provider: "steam",
+          externalId: args.chosen.externalId,
+          title: args.chosen.title,
+          installState: "installed"
+        } as ImportedGame,
+        {
+          steamGridDbApiKey: settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined,
+          steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
+          mode: "fast"
+        }
+      );
+    } else if (args.chosen.provider === "igdb" && settings.igdb) {
+      const { IgdbClient, mapIgdbGameToPatch } = await import("@hynite/metadata");
+      const client = new IgdbClient({
+        clientId: await nativeBridge.decryptSecret(settings.igdb.clientId),
+        clientSecret: await nativeBridge.decryptSecret(settings.igdb.clientSecret)
+      });
+      const igdbGame = await client.getGame(Number(args.chosen.externalId));
+      if (igdbGame) patch = mapIgdbGameToPatch(igdbGame);
+    }
+    if (patch && Object.keys(patch).length > 0) {
+      repository.applyMetadata(localId, patch);
+    }
+    // Remove the resolved issue from the in-memory scan report so the UI updates.
+    const report = localImportService.lastReport;
+    if (report) {
+      report.issues = report.issues.filter((issue) => issue.candidateId !== args.candidateId);
+    }
+    return { ok: true };
+  });
+  handleIpc("games:set-launch-exe", (_event, args: { gameId: string; executablePath: string }) => {
+    repository.setExecutablePath(args.gameId, args.executablePath);
+    return { ok: true };
+  });
+  handleIpc("dialog:pick-folder", async (_event, args: { title?: string; defaultPath?: string } = {}) => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: args.title ?? "Select folder",
+      defaultPath: args.defaultPath,
+      properties: ["openDirectory", "createDirectory"]
+    });
+    if (result.canceled) return undefined;
+    return result.filePaths[0];
+  });
+  handleIpc("dialog:pick-file", async (
+    _event,
+    args: { title?: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> } = {}
+  ) => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: args.title ?? "Select file",
+      defaultPath: args.defaultPath,
+      properties: ["openFile"],
+      filters: args.filters
+    });
+    if (result.canceled) return undefined;
+    return result.filePaths[0];
+  });
+  handleIpc("local:set-roots", async (_event, roots: Array<{ path: string; depth: number }>) => {
+    return settingsService.update({ localRoots: roots });
+  });
+  handleIpc("local:set-exclude-patterns", async (_event, patterns: string[]) => {
+    return settingsService.update({ localExcludePatterns: patterns });
+  });
+  handleIpc("metadata:save-igdb-credentials", async (_event, args: { clientId: string; clientSecret: string }) => {
+    const clientId = await nativeBridge.encryptSecret({ value: args.clientId, scope: "current-user" });
+    const clientSecret = await nativeBridge.encryptSecret({ value: args.clientSecret, scope: "current-user" });
+    return settingsService.update({ igdb: { clientId, clientSecret } });
+  });
+  handleIpc("metadata:clear-igdb-credentials", async () => {
+    return settingsService.update({ igdb: undefined });
   });
 
   handleIpc("library:list", (_event, query: LibraryQuery = {}) => repository.queryGames(query));
@@ -1213,6 +1536,8 @@ app.whenReady().then(() => {
   assetCacheService.registerProtocol(protocol);
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, join(userData, "sync-status.json"));
+  launchTracker = new LaunchTracker(repository);
+  localImportService = new LocalImportService(join(userData, "local-scan-cache.json"), repository, nativeBridge);
   profile("services:ready", "Main services initialized");
   registerIpc();
   profile("ipc:registered", "IPC handlers registered");
@@ -1224,6 +1549,15 @@ app.whenReady().then(() => {
       hasSteamWebApiKey: Boolean(settings.steamWebApiKey),
       hasSteamGridDbApiKey: Boolean(settings.steamGridDbApiKey)
     });
+    const localRoots = (settings.localRoots ?? []).filter((root) => root.path && root.path.trim().length > 0);
+    const runStartupLocalScan = (): void => {
+      if (localRoots.length === 0) return;
+      profile("startup:background:local-scan", "Starting background local scan", { rootCount: localRoots.length });
+      void runLocalScan().catch((error: unknown) => {
+        console.warn("Startup local scan failed", error);
+      });
+    };
+
     runAfterInitialRendererPaint(() => {
       profile("startup:background:start", "Startup background work started");
       if (canSync) {
@@ -1235,12 +1569,14 @@ app.whenReady().then(() => {
         }).finally(() => {
           profile("startup:background:rich-backfill", "Queueing rich metadata after startup Steam sync");
           enqueueRichMetadataBackfill();
+          runStartupLocalScan();
         });
         return;
       }
 
       profile("startup:background:rich-backfill", "Queueing rich metadata without startup Steam sync");
       enqueueRichMetadataBackfill();
+      runStartupLocalScan();
     });
   });
 });

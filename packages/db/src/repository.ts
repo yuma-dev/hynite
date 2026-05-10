@@ -540,6 +540,136 @@ export class HyniteRepository {
     return row ? this.mapGameRow(row) : undefined;
   }
 
+  addPlaytime(gameId: string, minutesToAdd: number, lastPlayedAt = new Date().toISOString()): void {
+    if (!Number.isFinite(minutesToAdd) || minutesToAdd <= 0) {
+      this.db
+        .prepare("UPDATE games SET last_played_at = ?, updated_at = ? WHERE id = ?")
+        .run(lastPlayedAt, new Date().toISOString(), gameId);
+      return;
+    }
+    this.db
+      .prepare(
+        `UPDATE games SET
+          playtime_minutes = COALESCE(playtime_minutes, 0) + ?,
+          last_played_at = ?,
+          updated_at = ?
+         WHERE id = ?`
+      )
+      .run(Math.round(minutesToAdd), lastPlayedAt, new Date().toISOString(), gameId);
+  }
+
+  setExecutablePath(gameId: string, executablePath: string): void {
+    this.db
+      .prepare("UPDATE games SET executable_path = ?, updated_at = ? WHERE id = ?")
+      .run(executablePath, new Date().toISOString(), gameId);
+  }
+
+  /**
+   * Attach a secondary provider source to an existing game without creating a duplicate
+   * top-level games row. Used when a local-imported game has been matched to a Steam appid
+   * or IGDB id — we want metadata fusion to find the secondary id, but the canonical game
+   * stays under the local: id.
+   */
+  attachSecondarySource(args: {
+    gameId: string;
+    provider: ProviderId;
+    externalId: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO game_sources (game_id, provider, external_id, share_type, family_owner_steamids_json, owner_steamid)
+         VALUES (?, ?, ?, 'owned', NULL, '')
+         ON CONFLICT(provider, external_id, owner_steamid) DO UPDATE SET
+           game_id = excluded.game_id`
+      )
+      .run(args.gameId, args.provider, args.externalId);
+  }
+
+  /**
+   * Repair phantom games left over from a previous bug where the local importer
+   * created duplicate `steam:<appid>` / `igdb:<id>` rows alongside their `local:` counterparts.
+   *
+   * A real Steam game always has at least one game_sources row with a non-empty owner_steamid
+   * (the steamid of the paired account that owns it). The local importer's secondary-source
+   * inserts always used owner_steamid = '', so any `steam:*` / `igdb:*` games where every
+   * source is owner_steamid = '' is a phantom safe to delete.
+   */
+  repairPhantomLocalGames(): { deleted: number } {
+    return this.transaction(() => {
+      const phantoms = this.db
+        .prepare(
+          `SELECT g.id FROM games g
+           WHERE (g.id LIKE 'steam:%' OR g.id LIKE 'igdb:%')
+             AND NOT EXISTS (
+               SELECT 1 FROM game_sources s
+               WHERE s.game_id = g.id AND s.owner_steamid IS NOT NULL AND s.owner_steamid != ''
+             )`
+        )
+        .all() as Array<{ id: string }>;
+
+      for (const row of phantoms) {
+        this.db.prepare("DELETE FROM game_sources WHERE game_id = ?").run(row.id);
+        this.db.prepare("DELETE FROM games WHERE id = ?").run(row.id);
+      }
+      return { deleted: phantoms.length };
+    });
+  }
+
+  removeGame(gameId: string): void {
+    this.transaction(() => {
+      this.db.prepare("DELETE FROM game_sources WHERE game_id = ?").run(gameId);
+      this.db.prepare("DELETE FROM games WHERE id = ?").run(gameId);
+    });
+  }
+
+  /** All games that have at least one source with provider = "local". */
+  listLocalGames(): Game[] {
+    const rows = this.db
+      .prepare(
+        `SELECT g.* FROM games g
+         INNER JOIN game_sources s ON s.game_id = g.id
+         WHERE s.provider = 'local'`
+      )
+      .all() as GameRow[];
+    const seen = new Set<string>();
+    const games: Game[] = [];
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      games.push(this.mapGameRow(row));
+    }
+    return games;
+  }
+
+  /** Remove every local-provider game and its sources. Returns the deleted count. */
+  removeAllLocalGames(): number {
+    return this.transaction(() => {
+      const games = this.listLocalGames();
+      for (const game of games) {
+        this.db.prepare("DELETE FROM game_sources WHERE game_id = ?").run(game.id);
+        this.db.prepare("DELETE FROM games WHERE id = ?").run(game.id);
+      }
+      return games.length;
+    });
+  }
+
+  /** Remove every local-provider game whose installDirectory is inside the given path. */
+  removeLocalGamesUnder(folderPath: string): number {
+    const prefix = folderPath.replace(/[\\/]+$/, "").toLowerCase();
+    const games = this.listLocalGames().filter((game) => {
+      if (!game.installDirectory) return false;
+      const dir = game.installDirectory.toLowerCase();
+      return dir === prefix || dir.startsWith(prefix + "\\") || dir.startsWith(prefix + "/");
+    });
+    return this.transaction(() => {
+      for (const game of games) {
+        this.db.prepare("DELETE FROM game_sources WHERE game_id = ?").run(game.id);
+        this.db.prepare("DELETE FROM games WHERE id = ?").run(game.id);
+      }
+      return games.length;
+    });
+  }
+
   getLaunchCommand(gameId: string): string | undefined {
     const row = this.db.prepare("SELECT launch_command FROM games WHERE id = ?").get(gameId) as { launch_command: string | null } | undefined;
     return row?.launch_command ?? undefined;
