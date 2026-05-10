@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { CURRENT_METADATA_VERSION, HyniteRepository } from "@hynite/db";
 import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider } from "@hynite/importers";
-import { makeGameId, type AppSettings, type EncryptedSecret, type Game, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncResult } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { fetchSteamMetadata, metadataFromSteamAppInfo, refreshFusedMetadata } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -858,72 +858,12 @@ type LaunchResult =
     }
   | { kind: "no-account"; reason: string };
 
-/**
- * Decide which paired Steam account should run a game. An account is "launchable" if:
- *  - It owns the game directly (an `owned` source row whose `ownerSteamid` is the account), OR
- *  - The game is family-shared and the account is either the family owner (someone in
- *    `familyOwnerSteamIds`) or one of our paired accounts that imported the title via family share.
- * Returns the account that should be active to play the game.
- */
-function resolveLaunchableAccounts(game: Game, accounts: SteamAccountSettings[]): {
-  owners: SteamAccountSettings[];
-  family: SteamAccountSettings[];
-} {
-  const accountById = new Map(accounts.map((account) => [account.steamId, account]));
-  const owners: SteamAccountSettings[] = [];
-  const family = new Set<SteamAccountSettings>();
-
-  for (const source of game.sourceIds) {
-    if (source.provider !== "steam") continue;
-    const isFamily = source.shareType === "family";
-    const importer = source.ownerSteamid ? accountById.get(source.ownerSteamid) : undefined;
-    if (importer) {
-      if (isFamily) family.add(importer);
-      else owners.push(importer);
-    }
-    if (isFamily) {
-      for (const ownerSteamId of source.familyOwnerSteamIds ?? []) {
-        const lender = accountById.get(ownerSteamId);
-        if (lender) {
-          owners.push(lender); // a family lender that we have paired = direct owner.
-        }
-      }
-    }
-  }
-
-  return { owners, family: [...family] };
-}
-
-async function resolveLaunchOrSwitch(id: string): Promise<LaunchResult> {
-  const game = repository.getGame(id);
-  if (!game) {
-    throw new Error(`Game ${id} was not found.`);
-  }
-
-  const settings = await settingsService.get();
-  const { owners, family } = resolveLaunchableAccounts(game, settings.steamAccounts);
-  const launchable = [...owners, ...family];
-  const hasSteamSource = game.sourceIds.some((source) => source.provider === "steam");
-
-  // Non-Steam game, or no paired accounts at all → just launch.
-  if (!hasSteamSource || settings.steamAccounts.length === 0) {
-    return performLaunch(id);
-  }
-
-  const active = await getActiveSteamUser();
-  const activeAccount = active.steamId ? settings.steamAccounts.find((account) => account.steamId === active.steamId) : undefined;
-  const activeIsLaunchable = activeAccount ? launchable.some((account) => account.steamId === activeAccount.steamId) : false;
-
-  if (activeIsLaunchable) {
-    return performLaunch(id);
-  }
-
-  // Pick a target — owners first, then family-borrower viewers; require a mapped local username.
-  const target = [...owners, ...family].find((account) => Boolean(account.localUsername));
-  if (!target) {
-    return performLaunch(id); // no usable target → fall back to plain launch
-  }
-
+function launchSwitchResult(
+  id: string,
+  game: Game,
+  active: Awaited<ReturnType<typeof getActiveSteamUser>>,
+  target: SteamLaunchAccountOption
+): LaunchResult {
   return {
     kind: "requires-switch",
     gameId: id,
@@ -936,6 +876,54 @@ async function resolveLaunchOrSwitch(id: string): Promise<LaunchResult> {
       personaName: target.personaName
     }
   };
+}
+
+async function resolveLaunchOrSwitch(id: string, preferredSteamId?: string): Promise<LaunchResult> {
+  const game = repository.getGame(id);
+  if (!game) {
+    throw new Error(`Game ${id} was not found.`);
+  }
+
+  const settings = await settingsService.get();
+  const launchable = resolveLaunchableSteamAccounts(game, settings.steamAccounts);
+  const hasSteamSource = game.sourceIds.some((source) => source.provider === "steam");
+
+  // Non-Steam game, or no paired accounts at all → just launch.
+  if (!hasSteamSource || settings.steamAccounts.length === 0) {
+    return performLaunch(id);
+  }
+
+  const active = await getActiveSteamUser();
+  const activeLaunchable = active.steamId ? launchable.find((account) => account.steamId === active.steamId) : undefined;
+  const savedSteamId = settings.launchAccountPreferences?.[id];
+  const selectedTarget =
+    (preferredSteamId ? launchable.find((account) => account.steamId === preferredSteamId) : undefined) ??
+    (savedSteamId ? launchable.find((account) => account.steamId === savedSteamId) : undefined);
+
+  if (selectedTarget) {
+    if (activeLaunchable?.steamId === selectedTarget.steamId) {
+      return performLaunch(id);
+    }
+    if (!selectedTarget.localUsername) {
+      const label = selectedTarget.personaName ?? selectedTarget.steamId;
+      return { kind: "no-account", reason: `Map a local Steam username to ${label} before switching accounts.` };
+    }
+    return launchSwitchResult(id, game, active, selectedTarget);
+  }
+
+  if (activeLaunchable) {
+    return performLaunch(id);
+  }
+
+  // Pick a target — owners first, then family-borrower viewers; require a mapped local username.
+  const target =
+    launchable.find((account) => account.kind === "owner" && Boolean(account.localUsername)) ??
+    launchable.find((account) => account.kind === "family" && Boolean(account.localUsername));
+  if (!target) {
+    return performLaunch(id); // no usable target → fall back to plain launch
+  }
+
+  return launchSwitchResult(id, game, active, target);
 }
 
 async function performLaunch(id: string): Promise<{ kind: "launched" } & LaunchSession> {
@@ -994,7 +982,7 @@ function registerIpc(): void {
     return { ...hydrated, sourceMatches: sourceService.searchTitle(hydrated.title) };
   });
 
-  handleIpc("games:launch", async (_event, id: string) => resolveLaunchOrSwitch(id));
+  handleIpc("games:launch", async (_event, id: string, preferredSteamId?: string) => resolveLaunchOrSwitch(id, preferredSteamId));
   handleIpc("steam:switchAndLaunch", async (_event, id: string, targetSteamId: string) => {
     const settings = await settingsService.get();
     const target = settings.steamAccounts.find((account) => account.steamId === targetSteamId);
@@ -1015,6 +1003,10 @@ function registerIpc(): void {
   handleIpc("steam:setAccountLocalUsername", async (_event, steamId: string, localUsername: string | undefined) => {
     const trimmed = localUsername?.trim();
     return settingsService.patchSteamAccount(steamId, { localUsername: trimmed ? trimmed : undefined });
+  });
+  handleIpc("steam:setPreferredLaunchAccount", async (_event, gameId: string, steamId: string | undefined) => {
+    const trimmed = steamId?.trim();
+    return settingsService.setLaunchAccountPreference(gameId, trimmed ? trimmed : undefined);
   });
   handleIpc("steam:removeAccount", async (_event, steamId: string) => settingsService.removeSteamAccount(steamId));
 

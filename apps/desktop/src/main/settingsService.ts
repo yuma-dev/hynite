@@ -8,7 +8,8 @@ const defaultSettings: AppSettings = {
   steamGridDbApiKey: undefined,
   cacheTtlHours: 24,
   reduceMotion: false,
-  libraryView: defaultLibraryView
+  libraryView: defaultLibraryView,
+  launchAccountPreferences: {}
 };
 
 type LegacyAccount = SteamAccountSettings & { webApiKey?: EncryptedSecret };
@@ -82,5 +83,16 @@ export class SettingsService {
   async removeSteamAccount(steamId: string): Promise<AppSettings> {
     const current = await this.get();
     return this.update({ steamAccounts: current.steamAccounts.filter((account) => account.steamId !== steamId) });
+  }
+
+  async setLaunchAccountPreference(gameId: string, steamId: string | undefined): Promise<AppSettings> {
+    const current = await this.get();
+    const next = { ...(current.launchAccountPreferences ?? {}) };
+    if (steamId) {
+      next[gameId] = steamId;
+    } else {
+      delete next[gameId];
+    }
+    return this.update({ launchAccountPreferences: next });
   }
 }

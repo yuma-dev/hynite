@@ -42,7 +42,8 @@ const api = {
   games: {
     get: (id: string): Promise<GameDetail> => ipcRenderer.invoke("games:get", id),
     hydrateDiscovery: (game: Game): Promise<GameDetail> => ipcRenderer.invoke("games:hydrateDiscovery", game),
-    launch: (id: string): Promise<LaunchOutcome> => ipcRenderer.invoke("games:launch", id),
+    launch: (id: string, preferredSteamId?: string): Promise<LaunchOutcome> =>
+      ipcRenderer.invoke("games:launch", id, preferredSteamId),
     onUpdated: (callback: (game: GameDetail) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, game: GameDetail) => callback(game);
       ipcRenderer.on("games:updated", listener);
@@ -94,6 +95,8 @@ const api = {
     getActiveUser: (): Promise<SteamActiveUser> => ipcRenderer.invoke("steam:getActiveUser"),
     setAccountLocalUsername: (steamId: string, localUsername: string | undefined): Promise<AppSettings> =>
       ipcRenderer.invoke("steam:setAccountLocalUsername", steamId, localUsername),
+    setPreferredLaunchAccount: (gameId: string, steamId: string | undefined): Promise<AppSettings> =>
+      ipcRenderer.invoke("steam:setPreferredLaunchAccount", gameId, steamId),
     switchAndLaunch: (gameId: string, targetSteamId: string): Promise<LaunchOutcome> =>
       ipcRenderer.invoke("steam:switchAndLaunch", gameId, targetSteamId)
   },

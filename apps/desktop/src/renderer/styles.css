@@ -363,7 +363,10 @@ button {
   color: var(--text-2);
   font-size: 12px;
   overflow: hidden;
-  min-height: 38px !important;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .recent-list {
@@ -376,7 +379,19 @@ button {
   display: none;
 }
 
-.recent-link span:last-child {
+.recent-details-button {
+  min-width: 0;
+  flex: 1;
+  min-height: 34px !important;
+  padding: 0 !important;
+  justify-content: flex-start;
+}
+
+.recent-details-button:hover {
+  color: var(--text);
+}
+
+.recent-details-button .rail-label {
   min-width: 0;
   display: grid;
   gap: 1px;
@@ -414,6 +429,45 @@ button {
   display: grid;
   place-items: center;
   overflow: hidden;
+  position: relative;
+}
+
+.recent-icon-button {
+  width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  flex: none;
+  padding: 0 !important;
+  display: grid !important;
+  place-items: center;
+  overflow: hidden;
+}
+
+.recent-play-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: rgb(0 0 0 / 69%);
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.recent-play-overlay svg {
+  position: absolute;
+  top: 45%;
+  left: 45%;
+  width: 13px;
+  height: 13px;
+  transform: translate(-50%, -50%);
+}
+
+.recent-link:hover .recent-play-overlay,
+.recent-link:focus-within .recent-play-overlay {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .recent-icon.has-image {
@@ -1042,14 +1096,17 @@ button {
 
 .filter-panel-backdrop {
   position: fixed;
-  inset: 0;
+  top: 32px;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: rgba(0, 0, 0, 0.45);
   z-index: 60;
 }
 
 .filter-panel {
   position: fixed;
-  top: 0;
+  top: 32px;
   right: 0;
   bottom: 0;
   width: min(380px, 100vw);
@@ -1618,7 +1675,7 @@ button {
 
 .cover-action {
   position: absolute;
-  top: 58%;
+  top: 45%;
   left: 50%;
   width: 54px;
   height: 54px;
@@ -1644,6 +1701,19 @@ button {
 .cover-action-play:hover {
   transform: translate(-50%, -50%) scale(1.08);
   background: #ffffff;
+}
+
+.cover-action-download {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.cover-action-download:hover {
+  transform: translate(-50%, -50%) scale(1.08);
+  background: rgba(255, 255, 255, 0.26);
 }
 
 .cover-action-details {
@@ -2197,6 +2267,32 @@ textarea {
   flex-wrap: wrap;
   gap: 0.55vw;
   margin-top: 0.9vw;
+}
+
+.detail-account-select {
+  display: grid;
+  gap: 0.35vw;
+  margin-top: 0.8vw;
+}
+
+.detail-account-select span {
+  color: var(--text-3);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.58vw;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.detail-account-select select {
+  width: 100%;
+  min-width: 0;
+  height: 1.9vw;
+  border: 0.04vw solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.4vw;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  padding: 0 0.55vw;
+  font-size: 0.7vw;
 }
 
 .detail-hero-stats {
@@ -3078,6 +3174,15 @@ dd {
     justify-content: center;
     padding: 0;
     gap: 0;
+  }
+
+  .rail:not(:hover):not(:focus-within) .recent-link {
+    justify-content: center;
+    gap: 0;
+  }
+
+  .rail:not(:hover):not(:focus-within) .recent-details-button {
+    display: none;
   }
 
   .rail button:not(.active) {

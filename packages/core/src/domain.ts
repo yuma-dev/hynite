@@ -351,6 +351,53 @@ export type SteamAccountSettings = {
   localUsername?: string;
 };
 
+export type SteamLaunchAccountOption = {
+  steamId: string;
+  personaName?: string;
+  localUsername?: string;
+  kind: "owner" | "family";
+};
+
+export function resolveLaunchableSteamAccounts(
+  game: Game,
+  accounts: SteamAccountSettings[]
+): SteamLaunchAccountOption[] {
+  const accountById = new Map(accounts.map((account) => [account.steamId, account]));
+  const owners = new Map<string, SteamLaunchAccountOption>();
+  const family = new Map<string, SteamLaunchAccountOption>();
+
+  function addAccount(account: SteamAccountSettings, kind: "owner" | "family"): void {
+    const option: SteamLaunchAccountOption = {
+      steamId: account.steamId,
+      personaName: account.personaName,
+      localUsername: account.localUsername,
+      kind
+    };
+    if (kind === "owner") {
+      owners.set(account.steamId, option);
+      family.delete(account.steamId);
+    } else if (!owners.has(account.steamId)) {
+      family.set(account.steamId, option);
+    }
+  }
+
+  for (const source of game.sourceIds) {
+    if (source.provider !== "steam") continue;
+    const importer = source.ownerSteamid ? accountById.get(source.ownerSteamid) : undefined;
+    if (importer) {
+      addAccount(importer, source.shareType === "family" ? "family" : "owner");
+    }
+    if (source.shareType === "family") {
+      for (const ownerSteamId of source.familyOwnerSteamIds ?? []) {
+        const owner = accountById.get(ownerSteamId);
+        if (owner) addAccount(owner, "owner");
+      }
+    }
+  }
+
+  return [...owners.values(), ...family.values()];
+}
+
 export type SteamLocalAccount = {
   steamId: string;
   accountName: string;
@@ -395,6 +442,8 @@ export type AppSettings = {
   cacheTtlHours: number;
   reduceMotion: boolean;
   libraryView?: LibraryView;
+  /** Per-game preferred paired Steam account used when launching from details/library/recent. */
+  launchAccountPreferences?: Record<string, string>;
 };
 
 export type ExecutableInfo = {

@@ -42,12 +42,16 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileStartup } from "./startupProfile";
 
-async function launchGame(id: string): Promise<void> {
-  const result = await window.hynite.games.launch(id);
-  if (result.kind === "launched" || result.kind === "no-account") {
+async function launchGame(id: string, preferredSteamId?: string): Promise<void> {
+  const result = await window.hynite.games.launch(id, preferredSteamId);
+  if (result.kind === "launched") {
+    return;
+  }
+  if (result.kind === "no-account") {
+    window.alert(result.reason);
     return;
   }
   if (result.kind === "requires-switch") {
@@ -59,7 +63,10 @@ async function launchGame(id: string): Promise<void> {
       `Launching ${result.gameTitle} requires switching from ${fromLabel} to ${toLabel}.\n\nSteam will close and restart silently. Continue?`
     );
     if (!confirmed) return;
-    await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
+    const switchResult = await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
+    if (switchResult.kind === "no-account") {
+      window.alert(switchResult.reason);
+    }
   }
 }
 
@@ -366,6 +373,19 @@ function canLaunch(game: Game): boolean {
   return game.installState === "installed" || game.sourceIds.some((source) => source.provider === "steam");
 }
 
+function normalizeLibraryView(view?: LibraryView): LibraryView {
+  return {
+    filters: {
+      ...defaultLibraryView.filters,
+      ...(view?.filters ?? {})
+    },
+    sort: {
+      ...defaultLibraryView.sort,
+      ...(view?.sort ?? {})
+    }
+  };
+}
+
 function heroMeta(game: Game): string[] {
   return [
     game.releaseDate ? `Released ${formatDate(game.releaseDate)}` : undefined,
@@ -603,10 +623,21 @@ function familySharedOwners(game: Game): string[] {
   return [...owners];
 }
 
-function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (game: Game) => void; wide?: boolean }) {
+function GameCover({
+  game,
+  onSelect,
+  wide = false,
+  inLibrary = true
+}: {
+  game: Game;
+  onSelect: (game: Game) => void;
+  wide?: boolean;
+  inLibrary?: boolean;
+}) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const cover = primaryCover(game);
   const isInstalled = game.installState === "installed";
+  const launchable = canLaunch(game);
   const playtimeLabel = formatHours(game.playtimeMinutes);
   const familyShared = isFamilySharedOnly(game);
   const familyOwnersTooltip = familyShared
@@ -656,6 +687,15 @@ function GameCover({ game, onSelect, wide = false }: { game: Game; onSelect: (ga
               aria-label={`Play ${game.title}`}
             >
               <Play size={22} fill="currentColor" />
+            </button>
+          ) : inLibrary && launchable ? (
+            <button
+              className="cover-action cover-action-download"
+              type="button"
+              onClick={(e) => { e.stopPropagation(); void launchGame(game.id); }}
+              aria-label={`Download ${game.title}`}
+            >
+              <Download size={22} />
             </button>
           ) : (
             <button
@@ -2655,11 +2695,15 @@ function ImageViewer({
 
 function DetailOverlay({
   game,
+  settings,
+  onSettingsChanged,
   reduceMotion,
   onClose,
   onChanged
 }: {
   game: GameDetail;
+  settings?: AppSettings;
+  onSettingsChanged: (settings: AppSettings) => void;
   reduceMotion?: boolean;
   onClose: () => void;
   onChanged: () => void;
@@ -2674,9 +2718,19 @@ function DetailOverlay({
   const [downloadError, setDownloadError] = useState<string | undefined>();
   const [expandedSourceIds, setExpandedSourceIds] = useState<Set<string>>(() => new Set());
   const [visibleBySource, setVisibleBySource] = useState<Record<string, number>>({});
+  const launchOptions = useMemo(
+    () => resolveLaunchableSteamAccounts(game, settings?.steamAccounts ?? []),
+    [game, settings?.steamAccounts]
+  );
+  const [selectedLaunchSteamId, setSelectedLaunchSteamId] = useState<string | undefined>();
 
   async function copy(text: string) {
     await window.hynite.clipboard.copy(text);
+  }
+
+  async function setPreferredLaunchAccount(steamId: string | undefined) {
+    setSelectedLaunchSteamId(steamId);
+    onSettingsChanged(await window.hynite.steam.setPreferredLaunchAccount(game.id, steamId));
   }
 
   async function searchDownloadOptions() {
@@ -2766,6 +2820,17 @@ function DetailOverlay({
     setExpandedSourceIds(new Set());
     setVisibleBySource({});
   }, [game.id]);
+
+  useEffect(() => {
+    const savedSteamId = settings?.launchAccountPreferences?.[game.id];
+    const saved = savedSteamId ? launchOptions.find((option) => option.steamId === savedSteamId) : undefined;
+    setSelectedLaunchSteamId(saved?.steamId ?? launchOptions[0]?.steamId);
+  }, [game.id, launchOptions, settings?.launchAccountPreferences]);
+
+  function launchAccountLabel(option: (typeof launchOptions)[number]): string {
+    const name = option.personaName ?? option.localUsername ?? option.steamId;
+    return `${name} (${option.kind === "owner" ? "Owner" : "Family"})`;
+  }
 
   return (
     <>
@@ -2870,8 +2935,23 @@ function DetailOverlay({
                 <p className="eyebrow">{game.discovery?.signal ?? "Steam library"}</p>
                 <h1>{game.title}</h1>
                 <p>{detailMeta || game.shortDescription || "Game details"}</p>
+                {launchOptions.length > 1 ? (
+                  <label className="detail-account-select">
+                    <span>Launch account</span>
+                    <select
+                      value={selectedLaunchSteamId ?? ""}
+                      onChange={(event) => void setPreferredLaunchAccount(event.target.value || undefined)}
+                    >
+                      {launchOptions.map((option) => (
+                        <option key={option.steamId} value={option.steamId}>
+                          {launchAccountLabel(option)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 <div className="detail-action-row">
-                  <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void launchGame(game.id)}>
+                  <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void launchGame(game.id, selectedLaunchSteamId)}>
                     <Play size={16} />
                     Play
                   </button>
@@ -3067,8 +3147,28 @@ export function App() {
   const [selected, setSelected] = useState<GameDetail | undefined>();
   const [settings, setSettings] = useState<AppSettings | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
-  const [query, setQuery] = useState("");
-  const [libraryView, setLibraryView] = useState<LibraryView>(defaultLibraryView);
+  const [query, setQueryState] = useState("");
+  const queryRef = useRef("");
+  const setQuery = useCallback((next: string) => {
+    queryRef.current = next;
+    setQueryState(next);
+  }, []);
+  const [libraryView, setLibraryViewState] = useState<LibraryView>(defaultLibraryView);
+  const libraryViewRef = useRef<LibraryView>(defaultLibraryView);
+  const setLibraryView = useCallback((next: LibraryView | ((current: LibraryView) => LibraryView)) => {
+    if (typeof next !== "function") {
+      const normalized = normalizeLibraryView(next);
+      libraryViewRef.current = normalized;
+      setLibraryViewState(normalized);
+      return;
+    }
+    setLibraryViewState((current) => {
+      const resolved = next(current);
+      const normalized = normalizeLibraryView(resolved);
+      libraryViewRef.current = normalized;
+      return normalized;
+    });
+  }, []);
   const libraryViewHydratedRef = useRef(false);
   const librarySaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -3087,36 +3187,37 @@ export function App() {
 
   async function refresh() {
     const startedAt = performance.now();
+    const effectiveQuery = queryRef.current;
+    let effectiveLibraryView = libraryViewRef.current;
+    let loadedSettings: AppSettings | undefined;
+    if (!libraryViewHydratedRef.current) {
+      loadedSettings = await window.hynite.settings.get();
+      effectiveLibraryView = normalizeLibraryView(loadedSettings.libraryView);
+      libraryViewRef.current = effectiveLibraryView;
+      setLibraryViewState(effectiveLibraryView);
+      libraryViewHydratedRef.current = true;
+    }
     profileStartup("refresh:start", "Renderer refresh started", {
-      query,
-      sort: libraryView.sort,
-      filters: libraryView.filters
+      query: effectiveQuery,
+      sort: effectiveLibraryView.sort,
+      filters: effectiveLibraryView.filters
     });
     const homePromise = window.hynite.home.get();
     const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
       window.hynite.library.list({
-        search: query,
-        sort: libraryView.sort.field,
-        sortDirection: libraryView.sort.direction,
-        ...libraryView.filters
+        search: effectiveQuery,
+        sort: effectiveLibraryView.sort.field,
+        sortDirection: effectiveLibraryView.sort.direction,
+        ...effectiveLibraryView.filters
       }),
       window.hynite.library.list({ search: "", sort: "recent", installState: "all" }),
-      window.hynite.settings.get()
+      loadedSettings ? Promise.resolve(loadedSettings) : window.hynite.settings.get()
     ]);
     setGames(nextGames);
     setAllGames(nextRecentGames);
     setLibraryGameIds(new Set(nextRecentGames.map((game) => game.id)));
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     setSettings(nextSettings);
-    if (!libraryViewHydratedRef.current && nextSettings.libraryView) {
-      libraryViewHydratedRef.current = true;
-      setLibraryView({
-        filters: { ...defaultLibraryView.filters, ...nextSettings.libraryView.filters },
-        sort: { ...defaultLibraryView.sort, ...nextSettings.libraryView.sort }
-      });
-    } else if (!libraryViewHydratedRef.current) {
-      libraryViewHydratedRef.current = true;
-    }
     profileStartup("refresh:end", "Renderer refresh local data loaded", {
       durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
       games: nextGames.length,
@@ -3193,17 +3294,19 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!libraryViewHydratedRef.current) return;
     const startedAt = performance.now();
+    const effectiveLibraryView = normalizeLibraryView(libraryView);
     profileStartup("library-filter:start", "Library filter query started", {
       query,
-      sort: libraryView.sort,
-      filters: libraryView.filters
+      sort: effectiveLibraryView.sort,
+      filters: effectiveLibraryView.filters
     });
     void window.hynite.library.list({
       search: query,
-      sort: libraryView.sort.field,
-      sortDirection: libraryView.sort.direction,
-      ...libraryView.filters
+      sort: effectiveLibraryView.sort.field,
+      sortDirection: effectiveLibraryView.sort.direction,
+      ...effectiveLibraryView.filters
     })
       .then((nextGames) => {
         profileStartup("library-filter:end", "Library filter query finished", {
@@ -3222,8 +3325,9 @@ export function App() {
   useEffect(() => {
     if (!libraryViewHydratedRef.current) return;
     if (librarySaveTimerRef.current) clearTimeout(librarySaveTimerRef.current);
+    const nextLibraryView = normalizeLibraryView(libraryView);
     librarySaveTimerRef.current = setTimeout(() => {
-      void window.hynite.settings.update({ libraryView }).catch((error: unknown) => {
+      void window.hynite.settings.update({ libraryView: nextLibraryView }).catch((error: unknown) => {
         console.error("Failed to persist libraryView", error);
       });
     }, 300);
@@ -3321,17 +3425,35 @@ export function App() {
               <span className="rail-label">Recent</span>
             </p>
             <div className="recent-list">
-              {recentGames.slice(0, 30).map((game) => (
-                <button key={game.id} className="recent-link" onClick={() => void selectGame(game)}>
-                  <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
-                    {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
-                  </span>
-                  <span className="rail-label">
-                    <strong>{game.title}</strong>
-                    <em>{activityLabel(game)}</em>
-                  </span>
-                </button>
-              ))}
+              {recentGames.slice(0, 30).map((game) => {
+                const isInstalled = game.installState === "installed";
+                const launchable = canLaunch(game);
+                const RecentActionIcon = isInstalled ? Play : launchable ? Download : Info;
+                const actionLabel = isInstalled ? `Play ${game.title}` : launchable ? `Download ${game.title}` : `View details for ${game.title}`;
+                return (
+                  <div key={game.id} className="recent-link">
+                    <button
+                      type="button"
+                      className="recent-icon-button"
+                      onClick={() => (launchable ? void launchGame(game.id) : void selectGame(game))}
+                      aria-label={actionLabel}
+                    >
+                      <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
+                        {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
+                        <span className="recent-play-overlay">
+                          <RecentActionIcon size={13} fill={isInstalled ? "currentColor" : "none"} />
+                        </span>
+                      </span>
+                    </button>
+                    <button type="button" className="recent-details-button" onClick={() => void selectGame(game)} aria-label={`View details for ${game.title}`}>
+                      <span className="rail-label">
+                        <strong>{game.title}</strong>
+                        <em>{activityLabel(game)}</em>
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </aside>
@@ -3349,7 +3471,16 @@ export function App() {
           </AnimatePresence>
         </section>
         <AnimatePresence>
-          {selected ? <DetailOverlay game={selected} reduceMotion={settings?.reduceMotion} onClose={() => setSelected(undefined)} onChanged={() => void refresh()} /> : null}
+          {selected ? (
+            <DetailOverlay
+              game={selected}
+              settings={settings}
+              onSettingsChanged={setSettings}
+              reduceMotion={settings?.reduceMotion}
+              onClose={() => setSelected(undefined)}
+              onChanged={() => void refresh()}
+            />
+          ) : null}
         </AnimatePresence>
       </div>
       <footer className="statusbar">
