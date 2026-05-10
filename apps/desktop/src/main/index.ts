@@ -6,9 +6,9 @@ import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider } fro
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
-import { fetchSteamMetadata, metadataFromSteamAppInfo, refreshFusedMetadata } from "@hynite/metadata";
+import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
 import { HomeService } from "./homeService";
 import { NativeBridge } from "./nativeBridge";
@@ -306,6 +306,469 @@ function steamImportedGameFromGame(game: Game): ImportedGame | undefined {
     addedAt: game.addedAt,
     communityIconUrl: game.communityIconUrl
   };
+}
+
+type SteamGridDbAsset = {
+  id?: number;
+  url?: string;
+  thumb?: string;
+  width?: number;
+  height?: number;
+  score?: number;
+  nsfw?: boolean;
+  humor?: boolean;
+};
+
+type SteamGridDbGame = {
+  id?: number;
+  name?: string;
+};
+
+type SteamGridDbListResponse<T> = {
+  success?: boolean;
+  data?: T[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function localizedAssetEntries(value: unknown): Array<{ label: string; path: string }> {
+  if (typeof value === "string" && value) {
+    return [{ label: "default", path: value }];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  return Object.entries(value)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[1]))
+    .map(([label, path]) => ({ label, path }));
+}
+
+function steamAssetUrl(appid: string, path: string): string {
+  return /^https?:\/\//i.test(path)
+    ? path
+    : `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${encodeURIComponent(appid)}/${path}`;
+}
+
+function assetUpdateToPatch(update: GameAssetUpdate): GameMetadataPatch {
+  const patch: GameMetadataPatch = {};
+  if (Object.prototype.hasOwnProperty.call(update, "grid")) {
+    patch.coverUrl = update.grid ?? undefined;
+    patch.libraryCapsuleUrl = update.grid ?? undefined;
+  }
+  if (Object.prototype.hasOwnProperty.call(update, "hero")) patch.backgroundUrl = update.hero ?? undefined;
+  if (Object.prototype.hasOwnProperty.call(update, "logo")) patch.logoUrl = update.logo ?? undefined;
+  if (Object.prototype.hasOwnProperty.call(update, "icon")) patch.communityIconUrl = update.icon ?? undefined;
+  if (Object.prototype.hasOwnProperty.call(update, "header")) patch.headerUrl = update.header ?? undefined;
+  if (Object.prototype.hasOwnProperty.call(update, "poster")) patch.trailerPosterUrl = update.poster ?? undefined;
+  return patch;
+}
+
+function patchToAssetUpdate(patch: GameMetadataPatch, original: GameAssetUpdate): GameAssetUpdate {
+  const update: GameAssetUpdate = {};
+  if (Object.prototype.hasOwnProperty.call(original, "grid")) update.grid = patch.libraryCapsuleUrl ?? patch.coverUrl ?? null;
+  if (Object.prototype.hasOwnProperty.call(original, "hero")) update.hero = patch.backgroundUrl ?? null;
+  if (Object.prototype.hasOwnProperty.call(original, "logo")) update.logo = patch.logoUrl ?? null;
+  if (Object.prototype.hasOwnProperty.call(original, "icon")) update.icon = patch.communityIconUrl ?? null;
+  if (Object.prototype.hasOwnProperty.call(original, "header")) update.header = patch.headerUrl ?? null;
+  if (Object.prototype.hasOwnProperty.call(original, "poster")) update.poster = patch.trailerPosterUrl ?? null;
+  return update;
+}
+
+function isLocalGame(game: Game): boolean {
+  return game.sourceIds.some((source) => source.provider === "local");
+}
+
+function addAssetCandidate(
+  candidates: GameAssetCandidate[],
+  seen: Set<string>,
+  candidate: Omit<GameAssetCandidate, "id">
+): void {
+  if (!candidate.url) return;
+  const key = `${candidate.kind}\u0000${candidate.url}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  candidates.push({
+    ...candidate,
+    id: `${candidate.provider}:${candidate.kind}:${candidates.length}`
+  });
+}
+
+function addCurrentAssetCandidates(game: Game, candidates: GameAssetCandidate[], seen: Set<string>): void {
+  const current: Array<{ kind: GameAssetKind; label: string; url?: string }> = [
+    { kind: "grid", label: "Current cover", url: game.libraryCapsuleUrl ?? game.coverUrl },
+    { kind: "hero", label: "Current hero", url: game.backgroundUrl },
+    { kind: "logo", label: "Current logo", url: game.logoUrl },
+    { kind: "icon", label: "Current icon", url: game.communityIconUrl },
+    { kind: "header", label: "Current header", url: game.headerUrl },
+    { kind: "poster", label: "Current trailer poster", url: game.trailerPosterUrl }
+  ];
+  for (const entry of current) {
+    if (entry.url) {
+      addAssetCandidate(candidates, seen, {
+        provider: "current",
+        kind: entry.kind,
+        label: entry.label,
+        url: entry.url,
+        source: "Saved"
+      });
+    }
+  }
+}
+
+function addSteamAppInfoAssetCandidates(
+  appid: string,
+  raw: unknown,
+  candidates: GameAssetCandidate[],
+  seen: Set<string>
+): void {
+  const data = isRecord(raw) && isRecord(raw.data) ? raw.data[appid] : undefined;
+  const common = isRecord(data) && isRecord(data.common) ? data.common : isRecord(raw) && isRecord(raw.common) ? raw.common : undefined;
+  if (!isRecord(common)) return;
+  const libraryAssets = isRecord(common.library_assets_full)
+    ? common.library_assets_full
+    : isRecord(common.libraryAssetsFull)
+      ? common.libraryAssetsFull
+      : undefined;
+
+  const assets: Array<{ kind: GameAssetKind; label: string; entry: unknown; camelEntry?: unknown }> = [
+    { kind: "grid", label: "Steam library grid", entry: libraryAssets?.library_capsule, camelEntry: libraryAssets?.libraryCapsule },
+    { kind: "hero", label: "Steam library hero", entry: libraryAssets?.library_hero, camelEntry: libraryAssets?.libraryHero },
+    { kind: "logo", label: "Steam logo", entry: libraryAssets?.library_logo, camelEntry: libraryAssets?.libraryLogo }
+  ];
+
+  for (const asset of assets) {
+    const value = isRecord(asset.entry) ? asset.entry : isRecord(asset.camelEntry) ? asset.camelEntry : undefined;
+    if (!value) continue;
+    for (const scale of ["image", "image2x"] as const) {
+      for (const entry of localizedAssetEntries(value[scale])) {
+        addAssetCandidate(candidates, seen, {
+          provider: "steam",
+          kind: asset.kind,
+          label: `${asset.label} (${entry.label}${scale === "image2x" ? ", 2x" : ""})`,
+          url: steamAssetUrl(appid, entry.path),
+          source: "Steam appinfo"
+        });
+      }
+    }
+  }
+
+  for (const entry of localizedAssetEntries(common.header_image ?? common.headerImage)) {
+    addAssetCandidate(candidates, seen, {
+      provider: "steam",
+      kind: "header",
+      label: `Steam header (${entry.label})`,
+      url: steamAssetUrl(appid, entry.path),
+      source: "Steam appinfo"
+    });
+  }
+  for (const entry of localizedAssetEntries(common.small_capsule ?? common.smallCapsule)) {
+    addAssetCandidate(candidates, seen, {
+      provider: "steam",
+      kind: "header",
+      label: `Steam small capsule (${entry.label})`,
+      url: steamAssetUrl(appid, entry.path),
+      source: "Steam appinfo"
+    });
+  }
+
+  const clientIcon = stringValue(common.clienticon);
+  const icon = stringValue(common.icon);
+  if (clientIcon) {
+    addAssetCandidate(candidates, seen, {
+      provider: "steam",
+      kind: "icon",
+      label: "Steam community icon",
+      url: `https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/${encodeURIComponent(appid)}/${clientIcon}.ico`,
+      source: "Steam appinfo"
+    });
+  }
+  if (icon) {
+    addAssetCandidate(candidates, seen, {
+      provider: "steam",
+      kind: "icon",
+      label: "Steam community image",
+      url: `https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/${encodeURIComponent(appid)}/${icon}.jpg`,
+      source: "Steam appinfo"
+    });
+  }
+}
+
+function addSteamStoreAssetCandidates(appid: string, raw: unknown, candidates: GameAssetCandidate[], seen: Set<string>): void {
+  const details = isRecord(raw) ? raw[appid] : undefined;
+  const data = isRecord(details) && isRecord(details.data) ? details.data : undefined;
+  if (!data) return;
+  const storeAssets: Array<{ kind: GameAssetKind; field: string; label: string }> = [
+    { kind: "header", field: "header_image", label: "Steam Store header" },
+    { kind: "header", field: "capsule_image", label: "Steam Store capsule" },
+    { kind: "header", field: "capsule_imagev5", label: "Steam Store capsule v5" },
+    { kind: "hero", field: "background_raw", label: "Steam Store background" },
+    { kind: "hero", field: "background", label: "Steam Store background" }
+  ];
+  for (const asset of storeAssets) {
+    const url = stringValue(data[asset.field]);
+    if (url) {
+      addAssetCandidate(candidates, seen, {
+        provider: "steam",
+        kind: asset.kind,
+        label: asset.label,
+        url,
+        source: "Steam Store"
+      });
+    }
+  }
+
+  const screenshots = Array.isArray(data.screenshots) ? data.screenshots : [];
+  screenshots.slice(0, 24).forEach((entry, index) => {
+    if (!isRecord(entry)) return;
+    const full = stringValue(entry.path_full);
+    const thumb = stringValue(entry.path_thumbnail);
+    if (full) {
+      addAssetCandidate(candidates, seen, {
+        provider: "steam",
+        kind: "hero",
+        label: `Steam screenshot ${index + 1}`,
+        url: full,
+        thumbnailUrl: thumb,
+        source: "Steam Store"
+      });
+    }
+  });
+
+  const movies = Array.isArray(data.movies) ? data.movies : [];
+  movies.slice(0, 8).forEach((entry, index) => {
+    if (!isRecord(entry)) return;
+    const thumb = stringValue(entry.thumbnail);
+    if (thumb) {
+      addAssetCandidate(candidates, seen, {
+        provider: "steam",
+        kind: "poster",
+        label: `Steam trailer poster ${index + 1}`,
+        url: thumb,
+        source: "Steam Store"
+      });
+    }
+  });
+}
+
+async function fetchSteamAssetCandidates(gameId: string, appid: string, candidates: GameAssetCandidate[], seen: Set<string>, warnings: string[]): Promise<void> {
+  try {
+    const response = await fetch(`https://api.steamcmd.net/v1/info/${encodeURIComponent(appid)}`);
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const raw = await response.json();
+    saveSteamRawMetadata(gameId, appid, "steam_appinfo", raw);
+    addSteamAppInfoAssetCandidates(appid, raw, candidates, seen);
+  } catch (error) {
+    const cached = repository.getRawGameMetadata("steam", appid, "steam_appinfo")?.raw;
+    if (cached) {
+      addSteamAppInfoAssetCandidates(appid, cached, candidates, seen);
+    } else {
+      warnings.push(`Steam appinfo assets unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  try {
+    const response = await fetch(`https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appid)}&cc=us&l=english`);
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const raw = await response.json();
+    saveSteamRawMetadata(gameId, appid, "steam_appdetails", raw);
+    addSteamStoreAssetCandidates(appid, raw, candidates, seen);
+  } catch (error) {
+    const cached = repository.getRawGameMetadata("steam", appid, "steam_appdetails")?.raw;
+    if (cached) {
+      addSteamStoreAssetCandidates(appid, cached, candidates, seen);
+    } else {
+      warnings.push(`Steam Store assets unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+async function fetchSteamGridDbList(path: string, idKind: "steam" | "game", id: string | number, apiKey: string): Promise<SteamGridDbAsset[]> {
+  const response = await fetch(`https://www.steamgriddb.com/api/v2/${path}/${idKind}/${encodeURIComponent(String(id))}`, {
+    headers: { Authorization: `Bearer ${apiKey}` }
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  const json = (await response.json()) as SteamGridDbListResponse<SteamGridDbAsset>;
+  return json.data ?? [];
+}
+
+async function fetchSteamGridDbSearch(title: string, apiKey: string): Promise<SteamGridDbGame | undefined> {
+  const response = await fetch(`https://www.steamgriddb.com/api/v2/search/autocomplete/${encodeURIComponent(title)}`, {
+    headers: { Authorization: `Bearer ${apiKey}` }
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  const json = (await response.json()) as SteamGridDbListResponse<SteamGridDbGame>;
+  const normalized = title.trim().toLocaleLowerCase();
+  return (json.data ?? []).find((entry) => entry.name?.trim().toLocaleLowerCase() === normalized) ?? json.data?.[0];
+}
+
+async function fetchSteamGridDbCandidates(
+  game: Game,
+  apiKey: string | undefined,
+  candidates: GameAssetCandidate[],
+  seen: Set<string>,
+  warnings: string[]
+): Promise<void> {
+  if (!apiKey) {
+    warnings.push("SteamGridDB API key is not configured.");
+    return;
+  }
+  const steamGridDbApiKey = apiKey;
+  const mappings: Array<{ path: string; kind: GameAssetKind; label: string }> = [
+    { path: "grids", kind: "grid", label: "SteamGridDB grid" },
+    { path: "heroes", kind: "hero", label: "SteamGridDB hero" },
+    { path: "logos", kind: "logo", label: "SteamGridDB logo" },
+    { path: "icons", kind: "icon", label: "SteamGridDB icon" }
+  ];
+  const appid = steamImportedGameFromGame(game)?.externalId;
+  let foundAny = false;
+
+  async function loadBy(idKind: "steam" | "game", id: string | number) {
+    await Promise.all(mappings.map(async (mapping) => {
+      try {
+        const assets = await fetchSteamGridDbList(mapping.path, idKind, id, steamGridDbApiKey);
+        assets.slice(0, 64).forEach((asset, index) => {
+          if (!asset.url) return;
+          foundAny = true;
+          addAssetCandidate(candidates, seen, {
+            provider: "steamgriddb",
+            kind: mapping.kind,
+            label: `${mapping.label} ${index + 1}`,
+            url: asset.url,
+            thumbnailUrl: asset.thumb,
+            width: numberValue(asset.width),
+            height: numberValue(asset.height),
+            score: numberValue(asset.score),
+            nsfw: booleanValue(asset.nsfw),
+            humor: booleanValue(asset.humor),
+            source: "SteamGridDB"
+          });
+        });
+      } catch (error) {
+        warnings.push(`${mapping.label} unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }));
+  }
+
+  if (appid) {
+    await loadBy("steam", appid);
+  }
+  if (!foundAny) {
+    try {
+      const match = await fetchSteamGridDbSearch(game.title, steamGridDbApiKey);
+      if (match?.id) {
+        await loadBy("game", match.id);
+      } else {
+        warnings.push("SteamGridDB did not find a title match.");
+      }
+    } catch (error) {
+      warnings.push(`SteamGridDB search unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+function addIgdbAssetCandidates(game: IgdbGame, candidates: GameAssetCandidate[], seen: Set<string>): void {
+  if (game.cover?.image_id) {
+    addAssetCandidate(candidates, seen, {
+      provider: "igdb",
+      kind: "grid",
+      label: "IGDB cover",
+      url: buildIgdbImageUrl(game.cover.image_id, "cover_big"),
+      source: "IGDB"
+    });
+  }
+  game.artworks?.forEach((entry, index) => {
+    if (!entry.image_id) return;
+    addAssetCandidate(candidates, seen, {
+      provider: "igdb",
+      kind: "hero",
+      label: `IGDB artwork ${index + 1}`,
+      url: buildIgdbImageUrl(entry.image_id, "1080p"),
+      source: "IGDB"
+    });
+  });
+  game.screenshots?.forEach((entry, index) => {
+    if (!entry.image_id) return;
+    addAssetCandidate(candidates, seen, {
+      provider: "igdb",
+      kind: "hero",
+      label: `IGDB screenshot ${index + 1}`,
+      url: buildIgdbImageUrl(entry.image_id, "screenshot_big"),
+      thumbnailUrl: buildIgdbImageUrl(entry.image_id, "thumb"),
+      source: "IGDB"
+    });
+  });
+}
+
+async function fetchIgdbAssetCandidates(
+  game: Game,
+  settings: AppSettings,
+  candidates: GameAssetCandidate[],
+  seen: Set<string>,
+  warnings: string[]
+): Promise<void> {
+  if (!settings.igdb) {
+    warnings.push("IGDB credentials are not configured.");
+    return;
+  }
+  try {
+    const client = new IgdbClient({
+      clientId: await nativeBridge.decryptSecret(settings.igdb.clientId),
+      clientSecret: await nativeBridge.decryptSecret(settings.igdb.clientSecret)
+    });
+    const igdbSource = game.sourceIds.find((source) => source.provider === "igdb");
+    const steamSource = game.sourceIds.find((source) => source.provider === "steam");
+    const igdbGame = igdbSource
+      ? await client.getGame(Number(igdbSource.externalId))
+      : steamSource
+        ? await client.lookupByExternal(steamSource.externalId, 1)
+        : (await client.searchGames(game.title, 1))[0];
+    if (igdbGame) {
+      addIgdbAssetCandidates(igdbGame, candidates, seen);
+    } else {
+      warnings.push("IGDB did not find a matching game.");
+    }
+  } catch (error) {
+    warnings.push(`IGDB assets unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function getAssetCandidates(game: Game): Promise<GameAssetCandidateResult> {
+  const settings = await settingsService.get();
+  const candidates: GameAssetCandidate[] = [];
+  const seen = new Set<string>();
+  const warnings: string[] = [];
+  addCurrentAssetCandidates(game, candidates, seen);
+
+  const steamSource = game.sourceIds.find((source) => source.provider === "steam");
+  if (steamSource) {
+    await fetchSteamAssetCandidates(game.id, steamSource.externalId, candidates, seen, warnings);
+  }
+
+  const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
+  await Promise.all([
+    fetchSteamGridDbCandidates(game, steamGridDbApiKey, candidates, seen, warnings),
+    fetchIgdbAssetCandidates(game, settings, candidates, seen, warnings)
+  ]);
+
+  return { candidates, warnings };
 }
 
 function hasRichDetailMetadata(game: Game): boolean {
@@ -1154,6 +1617,17 @@ function registerIpc(): void {
     }
     return { ok: true };
   });
+  handleIpc("local:remove-game", (_event, gameId: string) => {
+    const game = repository.getGame(gameId);
+    if (!game) {
+      return { ok: true };
+    }
+    if (!isLocalGame(game)) {
+      throw new Error("Only local games can be deleted from this menu.");
+    }
+    repository.removeGame(gameId);
+    return { ok: true };
+  });
   handleIpc("local:add-single", async (
     _event,
     args: {
@@ -1321,6 +1795,30 @@ function registerIpc(): void {
     }
     enqueueRichMetadata(game, true);
     return { ...game, sourceMatches: sourceService.search(id) };
+  });
+
+  handleIpc("games:get-asset-candidates", async (_event, id: string) => {
+    const game = repository.getGame(id);
+    if (!game) {
+      throw new Error(`Game ${id} was not found.`);
+    }
+    return getAssetCandidates(game);
+  });
+
+  handleIpc("games:update-assets", async (_event, id: string, update: GameAssetUpdate) => {
+    const game = repository.getGame(id);
+    if (!game) {
+      throw new Error(`Game ${id} was not found.`);
+    }
+    const cachedPatch = await cacheMetadataAssets(assetUpdateToPatch(update), true);
+    repository.updateGameAssets(id, patchToAssetUpdate(cachedPatch, update));
+    const updated = repository.getGame(id);
+    if (!updated) {
+      throw new Error(`Game ${id} was not found after asset update.`);
+    }
+    const detail = { ...updated, sourceMatches: sourceService.search(id) };
+    mainWindow?.webContents.send("games:updated", detail);
+    return detail;
   });
 
   handleIpc("games:hydrateDiscovery", async (_event, game: Game) => {

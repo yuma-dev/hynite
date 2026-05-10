@@ -11,6 +11,7 @@ import {
   Clipboard,
   Check,
   Clock3,
+  Crop,
   Download,
   ExternalLink,
   Film,
@@ -34,6 +35,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Save,
   Search,
   Settings,
   SlidersHorizontal,
@@ -49,7 +51,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileStartup } from "./startupProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
 
@@ -276,6 +278,84 @@ type ImageViewerItem = {
   url: string;
   label: string;
 };
+
+type AssetFitMode = "contain" | "crop";
+
+const ASSET_SLOTS: Array<{ kind: GameAssetKind; label: string; ratio: string; className: string }> = [
+  { kind: "grid", label: "Grid", ratio: "2:3", className: "grid" },
+  { kind: "hero", label: "Hero", ratio: "16:9", className: "hero" },
+  { kind: "logo", label: "Logo", ratio: "transparent", className: "logo" },
+  { kind: "icon", label: "Icon", ratio: "1:1", className: "icon" },
+  { kind: "header", label: "Header", ratio: "16:9", className: "header" },
+  { kind: "poster", label: "Poster", ratio: "16:9", className: "poster" }
+];
+
+const ASSET_PROVIDERS: Array<{ provider: GameAssetProvider | "all"; label: string }> = [
+  { provider: "all", label: "All" },
+  { provider: "current", label: "Current" },
+  { provider: "steamgriddb", label: "SteamGridDB" },
+  { provider: "steam", label: "Steam" },
+  { provider: "igdb", label: "IGDB" },
+  { provider: "custom", label: "Custom" }
+];
+
+function assetSlot(kind: GameAssetKind) {
+  return ASSET_SLOTS.find((slot) => slot.kind === kind) ?? ASSET_SLOTS[0]!;
+}
+
+function gameAssetUrl(game: Game, kind: GameAssetKind): string | undefined {
+  if (kind === "grid") return game.libraryCapsuleUrl ?? game.coverUrl;
+  if (kind === "hero") return game.backgroundUrl;
+  if (kind === "logo") return game.logoUrl;
+  if (kind === "icon") return game.communityIconUrl;
+  if (kind === "header") return game.headerUrl;
+  return game.trailerPosterUrl;
+}
+
+function providerLabel(provider: GameAssetProvider): string {
+  return ASSET_PROVIDERS.find((entry) => entry.provider === provider)?.label ?? provider;
+}
+
+function outputSizeForAsset(kind: GameAssetKind): { width: number; height: number } {
+  if (kind === "grid") return { width: 600, height: 900 };
+  if (kind === "icon") return { width: 512, height: 512 };
+  if (kind === "logo") return { width: 960, height: 360 };
+  return { width: 1920, height: 1080 };
+}
+
+function loadImageForCrop(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Image could not be loaded for cropping."));
+    image.src = url;
+  });
+}
+
+async function cropAssetToDataUrl(url: string, kind: GameAssetKind, crop: { x: number; y: number; zoom: number }): Promise<string> {
+  const image = await loadImageForCrop(url);
+  const { width, height } = outputSizeForAsset(kind);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Canvas rendering is unavailable.");
+  }
+  context.clearRect(0, 0, width, height);
+  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight) * crop.zoom;
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  const spareX = Math.max(0, drawWidth - width);
+  const spareY = Math.max(0, drawHeight - height);
+  const offsetX = (crop.x / 100) * spareX;
+  const offsetY = (crop.y / 100) * spareY;
+  const x = (width - drawWidth) / 2 - offsetX;
+  const y = (height - drawHeight) / 2 - offsetY;
+  context.drawImage(image, x, y, drawWidth, drawHeight);
+  return canvas.toDataURL(kind === "grid" || kind === "header" || kind === "hero" || kind === "poster" ? "image/jpeg" : "image/png", 0.92);
+}
 
 function formatHours(minutes?: number): string {
   if (!minutes) {
@@ -2941,12 +3021,355 @@ function ImageViewer({
   );
 }
 
+function GameAssetEditor({
+  game,
+  reduceMotion,
+  onSaved,
+  onClose
+}: {
+  game: GameDetail;
+  reduceMotion?: boolean;
+  onSaved: (game: GameDetail) => void;
+  onClose: () => void;
+}) {
+  const [activeKind, setActiveKind] = useState<GameAssetKind>("grid");
+  const [providerFilter, setProviderFilter] = useState<GameAssetProvider | "all">("all");
+  const [candidates, setCandidates] = useState<GameAssetCandidate[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const [customUrl, setCustomUrl] = useState("");
+  const [selectedUrls, setSelectedUrls] = useState<Record<GameAssetKind, string | undefined>>(() => ({
+    grid: gameAssetUrl(game, "grid"),
+    hero: gameAssetUrl(game, "hero"),
+    logo: gameAssetUrl(game, "logo"),
+    icon: gameAssetUrl(game, "icon"),
+    header: gameAssetUrl(game, "header"),
+    poster: gameAssetUrl(game, "poster")
+  }));
+  const [fitModes, setFitModes] = useState<Record<GameAssetKind, AssetFitMode>>({
+    grid: "crop",
+    hero: "crop",
+    logo: "contain",
+    icon: "crop",
+    header: "crop",
+    poster: "crop"
+  });
+  const [cropByKind, setCropByKind] = useState<Record<GameAssetKind, { x: number; y: number; zoom: number }>>({
+    grid: { x: 0, y: 0, zoom: 1 },
+    hero: { x: 0, y: 0, zoom: 1 },
+    logo: { x: 0, y: 0, zoom: 1 },
+    icon: { x: 0, y: 0, zoom: 1 },
+    header: { x: 0, y: 0, zoom: 1 },
+    poster: { x: 0, y: 0, zoom: 1 }
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(undefined);
+    void window.hynite.games.getAssetCandidates(game.id)
+      .then((result) => {
+        if (cancelled) return;
+        setCandidates(result.candidates);
+        setWarnings(result.warnings);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load assets.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [game.id]);
+
+  const filteredCandidates = useMemo(() => {
+    return candidates.filter((candidate) =>
+      candidate.kind === activeKind && (providerFilter === "all" || candidate.provider === providerFilter)
+    );
+  }, [activeKind, candidates, providerFilter]);
+
+  const activeUrl = selectedUrls[activeKind];
+  const activeSlot = assetSlot(activeKind);
+  const activeCrop = cropByKind[activeKind];
+  const activeFit = fitModes[activeKind];
+  const dirty = ASSET_SLOTS.some((slot) => selectedUrls[slot.kind] !== gameAssetUrl(game, slot.kind));
+
+  function selectCandidate(candidate: GameAssetCandidate) {
+    setSelectedUrls((current) => ({ ...current, [candidate.kind]: candidate.url }));
+    setCropByKind((current) => ({ ...current, [candidate.kind]: { x: 0, y: 0, zoom: 1 } }));
+    setError(undefined);
+  }
+
+  function applyCustomUrl() {
+    const trimmed = customUrl.trim();
+    if (!trimmed) return;
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        setError("Custom assets must use http or https.");
+        return;
+      }
+    } catch {
+      setError("Enter a valid image URL.");
+      return;
+    }
+    setSelectedUrls((current) => ({ ...current, [activeKind]: trimmed }));
+    setProviderFilter("all");
+    setError(undefined);
+  }
+
+  async function saveAssets() {
+    const update: GameAssetUpdate = {};
+    for (const slot of ASSET_SLOTS) {
+      const next = selectedUrls[slot.kind];
+      if (next !== gameAssetUrl(game, slot.kind)) {
+        update[slot.kind] = next ?? null;
+      }
+    }
+    if (Object.keys(update).length === 0) {
+      onClose();
+      return;
+    }
+
+    setSaving(true);
+    setError(undefined);
+    try {
+      const croppedUpdate: GameAssetUpdate = { ...update };
+      for (const slot of ASSET_SLOTS) {
+        const value = croppedUpdate[slot.kind];
+        if (value && fitModes[slot.kind] === "crop") {
+          try {
+            croppedUpdate[slot.kind] = await cropAssetToDataUrl(value, slot.kind, cropByKind[slot.kind]);
+          } catch (cropError) {
+            console.warn("Asset crop failed; saving original URL", cropError);
+          }
+        }
+      }
+      const updated = await window.hynite.games.updateAssets(game.id, croppedUpdate);
+      onSaved(updated);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Asset update failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <motion.div className="modal-backdrop asset-editor-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <button className="image-viewer-scrim" type="button" aria-label="Close asset editor" onClick={onClose} />
+      <motion.section
+        className="asset-editor"
+        initial={reduceMotion ? false : { opacity: 0, y: 18, scale: 0.985 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 12, scale: 0.985 }}
+        transition={{ duration: reduceMotion ? 0 : 0.18 }}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="asset-editor-title"
+      >
+        <div className="modal-head asset-editor-head">
+          <div>
+            <p className="eyebrow">Artwork</p>
+            <h2 id="asset-editor-title">Edit game assets</h2>
+          </div>
+          <button className="close-button inline-close" type="button" onClick={onClose} aria-label="Close asset editor">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="asset-editor-body">
+          <aside className="asset-slot-list" aria-label="Asset slots">
+            {ASSET_SLOTS.map((slot) => {
+              const url = selectedUrls[slot.kind];
+              return (
+                <button
+                  key={slot.kind}
+                  type="button"
+                  className={slot.kind === activeKind ? "active" : undefined}
+                  onClick={() => setActiveKind(slot.kind)}
+                  aria-current={slot.kind === activeKind ? "true" : undefined}
+                >
+                  <span className={`asset-slot-thumb ${slot.className}`}>
+                    {url ? <img src={url} alt="" /> : null}
+                  </span>
+                  <span>
+                    <strong>{slot.label}</strong>
+                    <em>{slot.ratio}</em>
+                  </span>
+                </button>
+              );
+            })}
+          </aside>
+          <main className="asset-editor-main">
+            <div className="asset-preview-row">
+              <div className={`asset-preview-frame ${activeSlot.className}`}>
+                {activeUrl ? (
+                  <img
+                    src={activeUrl}
+                    alt=""
+                    style={{
+                      objectFit: activeFit === "contain" ? "contain" : "cover",
+                      transform: activeFit === "crop" ? `scale(${activeCrop.zoom}) translate(${-activeCrop.x / 8}%, ${-activeCrop.y / 8}%)` : undefined
+                    }}
+                  />
+                ) : (
+                  <span>No asset selected</span>
+                )}
+              </div>
+              <div className="asset-controls">
+                <div>
+                  <h3>{activeSlot.label}</h3>
+                  <p>{activeSlot.ratio}</p>
+                </div>
+                <div className="segmented-control">
+                  <button
+                    type="button"
+                    className={activeFit === "crop" ? "active" : undefined}
+                    onClick={() => setFitModes((current) => ({ ...current, [activeKind]: "crop" }))}
+                  >
+                    <Crop size={14} />
+                    Crop
+                  </button>
+                  <button
+                    type="button"
+                    className={activeFit === "contain" ? "active" : undefined}
+                    onClick={() => setFitModes((current) => ({ ...current, [activeKind]: "contain" }))}
+                  >
+                    <Images size={14} />
+                    Fit
+                  </button>
+                </div>
+                {activeFit === "crop" ? (
+                  <div className="crop-controls">
+                    <label>
+                      <span>Zoom</span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="2.2"
+                        step="0.02"
+                        value={activeCrop.zoom}
+                        onChange={(event) => setCropByKind((current) => ({ ...current, [activeKind]: { ...current[activeKind], zoom: Number(event.target.value) } }))}
+                      />
+                    </label>
+                    <label>
+                      <span>X</span>
+                      <input
+                        type="range"
+                        min="-50"
+                        max="50"
+                        step="1"
+                        value={activeCrop.x}
+                        onChange={(event) => setCropByKind((current) => ({ ...current, [activeKind]: { ...current[activeKind], x: Number(event.target.value) } }))}
+                      />
+                    </label>
+                    <label>
+                      <span>Y</span>
+                      <input
+                        type="range"
+                        min="-50"
+                        max="50"
+                        step="1"
+                        value={activeCrop.y}
+                        onChange={(event) => setCropByKind((current) => ({ ...current, [activeKind]: { ...current[activeKind], y: Number(event.target.value) } }))}
+                      />
+                    </label>
+                  </div>
+                ) : null}
+                <label className="custom-asset-url">
+                  <span>Custom URL</span>
+                  <div>
+                    <input value={customUrl} onChange={(event) => setCustomUrl(event.target.value)} placeholder="https://..." />
+                    <button type="button" className="icon-action" onClick={applyCustomUrl}>
+                      <Link2 size={14} />
+                      Use
+                    </button>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div className="asset-provider-tabs">
+              {ASSET_PROVIDERS.map((entry) => (
+                <button
+                  key={entry.provider}
+                  type="button"
+                  className={providerFilter === entry.provider ? "active" : undefined}
+                  onClick={() => setProviderFilter(entry.provider)}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+
+            {error ? <p className="error-line">{error}</p> : null}
+            {warnings.length ? <p className="asset-warning">{warnings.slice(0, 3).join(" ")}</p> : null}
+            {loading ? (
+              <div className="asset-loading">
+                <RefreshCw size={16} />
+                Loading assets
+              </div>
+            ) : filteredCandidates.length ? (
+              <div className="asset-candidate-grid">
+                {filteredCandidates.map((candidate) => {
+                  const selected = selectedUrls[candidate.kind] === candidate.url;
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      className={selected ? "selected" : undefined}
+                      onClick={() => selectCandidate(candidate)}
+                    >
+                      <span className={`asset-candidate-image ${assetSlot(candidate.kind).className}`}>
+                        <img src={candidate.thumbnailUrl ?? candidate.url} alt="" loading="lazy" />
+                      </span>
+                      <span className="asset-candidate-meta">
+                        <strong>{candidate.label}</strong>
+                        <em>
+                          {[
+                            providerLabel(candidate.provider),
+                            candidate.width && candidate.height ? `${candidate.width}x${candidate.height}` : undefined,
+                            candidate.score !== undefined ? `score ${candidate.score}` : undefined,
+                            candidate.nsfw ? "NSFW" : undefined,
+                            candidate.humor ? "Humor" : undefined
+                          ].filter(Boolean).join(" / ")}
+                        </em>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="muted">No assets for this slot and provider.</p>
+            )}
+          </main>
+        </div>
+        <div className="asset-editor-actions">
+          <button type="button" className="secondary-action" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="primary-action" disabled={saving || !dirty} onClick={() => void saveAssets()}>
+            <Save size={15} />
+            {saving ? "Saving..." : "Save assets"}
+          </button>
+        </div>
+      </motion.section>
+    </motion.div>
+  );
+}
+
 function DetailOverlay({
   game,
   settings,
   onSettingsChanged,
   reduceMotion,
   onClose,
+  onGameUpdated,
   onChanged
 }: {
   game: GameDetail;
@@ -2954,12 +3377,14 @@ function DetailOverlay({
   onSettingsChanged: (settings: AppSettings) => void;
   reduceMotion?: boolean;
   onClose: () => void;
+  onGameUpdated: (game: GameDetail) => void;
   onChanged: () => void;
 }) {
   type DetailMediaItem =
     | { kind: "trailer"; label: string; sourceUrl: string; posterUrl?: string }
     | { kind: "image"; label: string; sourceUrl: string; thumbnailUrl: string };
   const [viewer, setViewer] = useState<{ images: ImageViewerItem[]; index: number } | undefined>();
+  const [assetEditorOpen, setAssetEditorOpen] = useState(false);
   const [downloadQuery, setDownloadQuery] = useState(game.title);
   const [downloadMatches, setDownloadMatches] = useState<SourceMatch[]>(game.sourceMatches);
   const [downloadSearching, setDownloadSearching] = useState(false);
@@ -3215,6 +3640,10 @@ function DetailOverlay({
                       Website
                     </button>
                   ) : null}
+                  <button className="secondary-action" onClick={() => setAssetEditorOpen(true)}>
+                    <Pencil size={16} />
+                    Edit
+                  </button>
                 </div>
               </div>
             </section>
@@ -3381,6 +3810,19 @@ function DetailOverlay({
       </motion.section>
     </motion.div>
     {viewer ? <ImageViewer images={viewer.images} initialIndex={viewer.index} reduceMotion={reduceMotion} onClose={() => setViewer(undefined)} /> : null}
+    <AnimatePresence>
+      {assetEditorOpen ? (
+        <GameAssetEditor
+          game={game}
+          reduceMotion={reduceMotion}
+          onSaved={(updated) => {
+            onGameUpdated(updated);
+            onChanged();
+          }}
+          onClose={() => setAssetEditorOpen(false)}
+        />
+      ) : null}
+    </AnimatePresence>
     </>
   );
 }
@@ -3529,16 +3971,18 @@ function MenuDivider() {
 function MenuItem({
   children,
   icon,
+  danger,
   disabled,
   onClick
 }: {
   children: React.ReactNode;
   icon?: React.ReactNode;
+  danger?: boolean;
   disabled?: boolean;
   onClick?: () => void;
 }) {
   return (
-    <button type="button" className="context-menu-item" disabled={disabled} onClick={onClick}>
+    <button type="button" className={danger ? "context-menu-item danger" : "context-menu-item"} disabled={disabled} onClick={onClick}>
       <span className="context-menu-icon">{icon}</span>
       <span>{children}</span>
     </button>
@@ -3692,6 +4136,7 @@ function GameContextMenu({
   const launchable = canLaunch(game);
   const locationPath = gameLocationPath(game);
   const appId = steamAppId(game);
+  const isLocal = game.sourceIds.some((source) => source.provider === "local");
   const launchAccounts = resolveLaunchableSteamAccounts(game, settings?.steamAccounts ?? []);
   const manualGroups = normalizeGroups(settings).filter((group): group is ManualGameGroup => group.kind === "manual");
   const currentPreferred = settings?.launchAccountPreferences?.[game.id];
@@ -3732,6 +4177,14 @@ function GameContextMenu({
     await launchGame(game!.id, steamId);
   }
 
+  async function deleteLocalGame() {
+    if (!game || !window.confirm(`Delete "${game.title}" from the local library?`)) {
+      return;
+    }
+    await window.hynite.local.removeGame(game.id);
+    onChanged();
+  }
+
   const run = (task: () => void | Promise<void>) => {
     onClose();
     void Promise.resolve(task()).catch(console.error);
@@ -3757,6 +4210,11 @@ function GameContextMenu({
         <MenuItem icon={<Info size={14} />} onClick={() => run(() => onSelect(game))}>
           Details
         </MenuItem>
+        {isLocal ? (
+          <MenuItem icon={<Trash2 size={14} />} danger onClick={() => run(deleteLocalGame)}>
+            Delete
+          </MenuItem>
+        ) : null}
         <MenuItem
           icon={<FolderOpen size={14} />}
           disabled={!locationPath}
@@ -4420,6 +4878,7 @@ export function App() {
               onSettingsChanged={setSettings}
               reduceMotion={settings?.reduceMotion}
               onClose={() => setSelected(undefined)}
+              onGameUpdated={setSelected}
               onChanged={() => void refresh()}
             />
           ) : null}

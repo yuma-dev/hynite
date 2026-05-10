@@ -12,6 +12,19 @@ function isRemoteUrl(value: string | undefined): value is string {
   return Boolean(value && /^https?:\/\//i.test(value));
 }
 
+function isDataImageUrl(value: string | undefined): value is string {
+  return Boolean(value && /^data:image\/(?:png|jpe?g|webp);base64,/i.test(value));
+}
+
+function extensionFromDataUrl(value: string): string {
+  const match = /^data:image\/(?<type>png|jpe?g|webp);base64,/i.exec(value);
+  const type = match?.groups?.type?.toLocaleLowerCase();
+  if (type === "jpeg" || type === "jpg") return ".jpg";
+  if (type === "png") return ".png";
+  if (type === "webp") return ".webp";
+  return ".bin";
+}
+
 function extensionFromUrl(value: string): string {
   try {
     const ext = extname(new URL(value).pathname).toLocaleLowerCase();
@@ -86,6 +99,8 @@ export class AssetCacheService {
       const value = cached[field];
       if (isRemoteUrl(value)) {
         cached[field] = await this.cacheUrl(value, options);
+      } else if (isDataImageUrl(value)) {
+        cached[field] = await this.cacheDataUrl(value);
       }
     }));
 
@@ -124,6 +139,29 @@ export class AssetCacheService {
         return value;
       }
       await writeFile(targetPath, Buffer.from(await response.arrayBuffer()));
+      return `${CACHE_SCHEME}://${CACHE_HOST}/${fileName}`;
+    } catch {
+      return value;
+    }
+  }
+
+  private async cacheDataUrl(value: string): Promise<string> {
+    const extension = extensionFromDataUrl(value);
+    if (extension === ".bin") {
+      return value;
+    }
+
+    const comma = value.indexOf(",");
+    if (comma < 0) {
+      return value;
+    }
+
+    try {
+      const data = Buffer.from(value.slice(comma + 1), "base64");
+      const hash = createHash("sha256").update(data).digest("hex");
+      const fileName = `${hash}${extension}`;
+      await mkdir(this.cacheDir, { recursive: true });
+      await writeFile(join(this.cacheDir, fileName), data);
       return `${CACHE_SCHEME}://${CACHE_HOST}/${fileName}`;
     } catch {
       return value;

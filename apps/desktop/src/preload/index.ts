@@ -3,6 +3,8 @@ import type {
   AppSettings,
   DownloadSourceInfo,
   Game,
+  GameAssetCandidateResult,
+  GameAssetUpdate,
   GameDetail,
   HomeModel,
   LaunchSession,
@@ -41,6 +43,8 @@ const api = {
   },
   games: {
     get: (id: string): Promise<GameDetail> => ipcRenderer.invoke("games:get", id),
+    getAssetCandidates: (id: string): Promise<GameAssetCandidateResult> => ipcRenderer.invoke("games:get-asset-candidates", id),
+    updateAssets: (id: string, update: GameAssetUpdate): Promise<GameDetail> => ipcRenderer.invoke("games:update-assets", id, update),
     hydrateDiscovery: (game: Game): Promise<GameDetail> => ipcRenderer.invoke("games:hydrateDiscovery", game),
     launch: (id: string, preferredSteamId?: string): Promise<LaunchOutcome> =>
       ipcRenderer.invoke("games:launch", id, preferredSteamId),
@@ -103,6 +107,7 @@ const api = {
     setIgnored: (paths: string[]): Promise<AppSettings> => ipcRenderer.invoke("local:set-ignored", paths),
     removeAndIgnore: (gameId: string, folderPath?: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke("local:remove-and-ignore", { gameId, folderPath }),
+    removeGame: (gameId: string): Promise<{ ok: true }> => ipcRenderer.invoke("local:remove-game", gameId),
     countUnder: (folderPath: string): Promise<number> => ipcRenderer.invoke("local:count-under", folderPath),
     removeUnder: (folderPath: string): Promise<{ removed: number }> => ipcRenderer.invoke("local:remove-under", folderPath),
     removeAll: (): Promise<{ removed: number }> => ipcRenderer.invoke("local:remove-all"),

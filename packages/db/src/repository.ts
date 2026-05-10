@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   type DownloadSourceInfo,
   type Game,
+  type GameAssetUpdate,
   type GameDiscovery,
   type GameMetadataPatch,
   type GamePlatforms,
@@ -386,6 +387,48 @@ export class HyniteRepository {
         patch.publishers ? serializeArray(patch.publishers) : null,
         patch.releaseDate ?? null,
         patch.metadataStatus ?? null,
+        new Date().toISOString(),
+        gameId
+      );
+  }
+
+  updateGameAssets(gameId: string, assets: GameAssetUpdate): void {
+    const has = (kind: keyof GameAssetUpdate) => Object.prototype.hasOwnProperty.call(assets, kind);
+    const grid = has("grid") ? (assets.grid ?? null) : null;
+    const hero = has("hero") ? (assets.hero ?? null) : null;
+    const logo = has("logo") ? (assets.logo ?? null) : null;
+    const icon = has("icon") ? (assets.icon ?? null) : null;
+    const header = has("header") ? (assets.header ?? null) : null;
+    const poster = has("poster") ? (assets.poster ?? null) : null;
+
+    this.db
+      .prepare(
+        `UPDATE games SET
+          cover_url = CASE WHEN ? THEN ? ELSE cover_url END,
+          library_capsule_url = CASE WHEN ? THEN ? ELSE library_capsule_url END,
+          background_url = CASE WHEN ? THEN ? ELSE background_url END,
+          logo_url = CASE WHEN ? THEN ? ELSE logo_url END,
+          community_icon_url = CASE WHEN ? THEN ? ELSE community_icon_url END,
+          header_url = CASE WHEN ? THEN ? ELSE header_url END,
+          trailer_poster_url = CASE WHEN ? THEN ? ELSE trailer_poster_url END,
+          updated_at = ?
+        WHERE id = ?`
+      )
+      .run(
+        has("grid") ? 1 : 0,
+        grid,
+        has("grid") ? 1 : 0,
+        grid,
+        has("hero") ? 1 : 0,
+        hero,
+        has("logo") ? 1 : 0,
+        logo,
+        has("icon") ? 1 : 0,
+        icon,
+        has("header") ? 1 : 0,
+        header,
+        has("poster") ? 1 : 0,
+        poster,
         new Date().toISOString(),
         gameId
       );

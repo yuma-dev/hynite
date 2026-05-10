@@ -182,6 +182,31 @@ export type GameMetadataPatch = Partial<
   >
 >;
 
+export type GameAssetKind = "grid" | "hero" | "logo" | "icon" | "header" | "poster";
+export type GameAssetProvider = "current" | "steam" | "steamgriddb" | "igdb" | "custom";
+
+export type GameAssetCandidate = {
+  id: string;
+  provider: GameAssetProvider;
+  kind: GameAssetKind;
+  label: string;
+  url: string;
+  thumbnailUrl?: string;
+  width?: number;
+  height?: number;
+  score?: number;
+  nsfw?: boolean;
+  humor?: boolean;
+  source?: string;
+};
+
+export type GameAssetCandidateResult = {
+  candidates: GameAssetCandidate[];
+  warnings: string[];
+};
+
+export type GameAssetUpdate = Partial<Record<GameAssetKind, string | null>>;
+
 export type ImporterProvider = {
   id: Exclude<ProviderId, "manual" | "igdb">;
   label: string;
