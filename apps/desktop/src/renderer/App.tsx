@@ -64,8 +64,29 @@ type SteamSwitchPrompt = {
   resolve: (confirmed: boolean) => void;
 };
 
+type LaunchGameInput = string | Game | GameDetail;
+
+type LaunchGameEventDetail = {
+  id: string;
+  game?: Game | GameDetail;
+  preferredSteamId?: string;
+  handled: boolean;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
+
+type LaunchHandoffState = {
+  token: number;
+  game: Game | GameDetail;
+  reduceMotion: boolean;
+};
+
 const STEAM_SWITCH_CONFIRM_EVENT = "hynite:steam-switch-confirm";
+const LAUNCH_GAME_EVENT = "hynite:launch-game";
 const TRAILER_AUDIO_STORAGE_KEY = "hynite:trailer-audio:v1";
+const LAUNCH_HANDOFF_PREVIEW_MS = 1800;
+const LAUNCH_HANDOFF_REDUCED_PREVIEW_MS = 450;
+const LAUNCH_HANDOFF_MAX_MS = 10_000;
 
 function readTrailerAudioState(): { volume: number; muted: boolean } {
   try {
@@ -100,14 +121,14 @@ function requestSteamSwitchConfirmation(prompt: Omit<SteamSwitchPrompt, "resolve
   });
 }
 
-async function launchGame(id: string, preferredSteamId?: string): Promise<void> {
+async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boolean> {
   const result = await window.hynite.games.launch(id, preferredSteamId);
   if (result.kind === "launched") {
-    return;
+    return true;
   }
   if (result.kind === "no-account") {
     window.alert(result.reason);
-    return;
+    return false;
   }
   if (result.kind === "requires-switch") {
     const fromLabel = result.currentAccountName ?? "the currently active account";
@@ -121,12 +142,40 @@ async function launchGame(id: string, preferredSteamId?: string): Promise<void> 
       toLabel,
       targetSteamId: result.target.steamId
     });
-    if (!confirmed) return;
+    if (!confirmed) return false;
     const switchResult = await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
+    if (switchResult.kind === "launched") {
+      return true;
+    }
     if (switchResult.kind === "no-account") {
       window.alert(switchResult.reason);
     }
   }
+  return false;
+}
+
+function launchInputId(input: LaunchGameInput): string {
+  return typeof input === "string" ? input : input.id;
+}
+
+async function launchGame(input: LaunchGameInput, preferredSteamId?: string): Promise<void> {
+  const id = launchInputId(input);
+  const game = typeof input === "string" ? undefined : input;
+  const handledPromise = new Promise<void>((resolve, reject) => {
+    const detail: LaunchGameEventDetail = {
+      id,
+      game,
+      preferredSteamId,
+      handled: false,
+      resolve,
+      reject
+    };
+    window.dispatchEvent(new CustomEvent(LAUNCH_GAME_EVENT, { detail }));
+    if (!detail.handled) {
+      void runLaunchFlow(id, preferredSteamId).then(() => resolve()).catch(reject);
+    }
+  });
+  return handledPromise;
 }
 
 type Route = "home" | "trending" | "library" | "search" | "local" | "settings";
@@ -251,6 +300,67 @@ function primaryCover(game: Game): string | undefined {
 
 function heroStill(game: Game): string | undefined {
   return game.headerUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.fullUrl ?? game.backgroundUrl;
+}
+
+function launchHandoffBackground(game: Game | GameDetail): string | undefined {
+  return game.backgroundUrl ?? game.headerUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.fullUrl ?? primaryCover(game);
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setPrefersReducedMotion(query.matches);
+    const onChange = (event: MediaQueryListEvent) => setPrefersReducedMotion(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
+function LaunchHandoffOverlay({ state }: { state: LaunchHandoffState }) {
+  const image = launchHandoffBackground(state.game);
+  const reduced = state.reduceMotion;
+  const backgroundStyle = image ? { backgroundImage: `url(${image})` } : undefined;
+
+  return (
+    <motion.div
+      className={reduced ? "launch-handoff reduce-motion" : "launch-handoff"}
+      style={fallbackArt(state.game)}
+      aria-hidden="true"
+      initial={reduced ? { opacity: 0 } : { opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: reduced ? 0.08 : 0.18, ease: "easeOut" }}
+    >
+      <div className="launch-handoff-bg launch-handoff-bg-blur" style={backgroundStyle} />
+      <motion.div
+        className="launch-handoff-bg launch-handoff-bg-main"
+        style={backgroundStyle}
+        initial={reduced ? false : { opacity: 0.2, scale: 1.045 }}
+        animate={reduced ? { opacity: 0.84 } : { opacity: 0.88, scale: 1 }}
+        transition={{ duration: reduced ? 0.01 : 1.25, ease: "easeOut" }}
+      />
+      <div className="launch-handoff-tint" />
+      <motion.div
+        className="launch-handoff-identity"
+        initial={reduced ? false : { opacity: 0, scale: 0.965, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: reduced ? 0.01 : 0.32, ease: "easeOut", delay: reduced ? 0 : 0.08 }}
+      >
+        {state.game.logoUrl ? (
+          <img className="launch-handoff-logo" src={state.game.logoUrl} alt="" draggable={false} />
+        ) : (
+          <h1>{state.game.title}</h1>
+        )}
+        <span className="launch-handoff-line">
+          <span />
+        </span>
+      </motion.div>
+    </motion.div>
+  );
 }
 
 function plainSummary(value?: string): string | undefined {
@@ -884,7 +994,7 @@ function GameCover({
             <button
               className="cover-action cover-action-play"
               type="button"
-              onClick={(e) => { e.stopPropagation(); void launchGame(game.id); }}
+              onClick={(e) => { e.stopPropagation(); void launchGame(game); }}
               aria-label={`Play ${game.title}`}
             >
               <Play size={22} fill="currentColor" />
@@ -893,7 +1003,7 @@ function GameCover({
             <button
               className="cover-action cover-action-download"
               type="button"
-              onClick={(e) => { e.stopPropagation(); void launchGame(game.id); }}
+              onClick={(e) => { e.stopPropagation(); void launchGame(game); }}
               aria-label={`Download ${game.title}`}
             >
               <Download size={22} />
@@ -2668,6 +2778,11 @@ function SettingsScreen({
     setSteamMessage(`Cleared ${result.cleared} games from the local library.`);
   }
 
+  async function setAutoHideAfterLaunch(value: boolean) {
+    const next = await window.hynite.settings.update({ autoHideAfterLaunch: value });
+    setSettings(next);
+  }
+
   return (
     <main className="page settings-page">
       <div className="screen-title">
@@ -2909,17 +3024,34 @@ function SettingsScreen({
           {tab === "sources" ? <SourcesScreen /> : null}
 
           {tab === "advanced" ? (
-            <section className="settings-section">
-              <h2>Development</h2>
-              <div className="settings-actions">
-                <button className="secondary-action" onClick={() => void clearLibrary()}>
-                  Clear library
-                </button>
-                <button className="secondary-action" onClick={onSeed}>
-                  Add demo game
-                </button>
-              </div>
-            </section>
+            <>
+              <section className="settings-section">
+                <h2>Launch behavior</h2>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings?.autoHideAfterLaunch !== false}
+                    onChange={(event) => void setAutoHideAfterLaunch(event.currentTarget.checked)}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Hide Hynite after launching a game</strong>
+                    <em>Shows a short game splash, then minimizes Hynite to the taskbar.</em>
+                  </span>
+                </label>
+              </section>
+              <section className="settings-section">
+                <h2>Development</h2>
+                <div className="settings-actions">
+                  <button className="secondary-action" onClick={() => void clearLibrary()}>
+                    Clear library
+                  </button>
+                  <button className="secondary-action" onClick={onSeed}>
+                    Add demo game
+                  </button>
+                </div>
+              </section>
+            </>
           ) : null}
         </div>
       </section>
@@ -3624,7 +3756,7 @@ function DetailOverlay({
                   </label>
                 ) : null}
                 <div className="detail-action-row">
-                  <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void launchGame(game.id, selectedLaunchSteamId)}>
+                  <button className="primary-action" disabled={!canLaunch(game)} onClick={() => void launchGame(game, selectedLaunchSteamId)}>
                     <Play size={16} />
                     Play
                   </button>
@@ -4174,7 +4306,7 @@ function GameContextMenu({
   async function setLaunchPreference(steamId: string | undefined) {
     const next = await window.hynite.steam.setPreferredLaunchAccount(game!.id, steamId);
     onSettingsChanged(next);
-    await launchGame(game!.id, steamId);
+    await launchGame(game!, steamId);
   }
 
   async function deleteLocalGame() {
@@ -4204,7 +4336,7 @@ function GameContextMenu({
           <strong>{game.title}</strong>
           <span>{isInstalled ? "Installed" : launchable ? "Launchable" : "Details only"}</span>
         </div>
-        <MenuItem icon={isInstalled ? <Play size={14} fill="currentColor" /> : <Download size={14} />} disabled={!launchable} onClick={() => run(() => launchGame(game.id))}>
+        <MenuItem icon={isInstalled ? <Play size={14} fill="currentColor" /> : <Download size={14} />} disabled={!launchable} onClick={() => run(() => launchGame(game))}>
           {isInstalled ? "Play" : "Download"}
         </MenuItem>
         <MenuItem icon={<Info size={14} />} onClick={() => run(() => onSelect(game))}>
@@ -4290,6 +4422,7 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<GameContextMenuRequest | undefined>();
   const [nameDialog, setNameDialog] = useState<NameDialogState | undefined>();
   const [switchPrompt, setSwitchPrompt] = useState<SteamSwitchPrompt | undefined>();
+  const [launchHandoff, setLaunchHandoff] = useState<LaunchHandoffState | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
   const [query, setQueryState] = useState("");
   const queryRef = useRef("");
@@ -4317,11 +4450,20 @@ export function App() {
   const librarySaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const activeGroupIdRef = useRef<string | undefined>();
   const settingsRef = useRef<AppSettings | undefined>();
+  const gamesRef = useRef<Game[]>([]);
+  const allGamesRef = useRef<Game[]>([]);
+  const recentGamesRef = useRef<Game[]>([]);
+  const selectedRef = useRef<GameDetail | undefined>();
+  const launchHandoffTokenRef = useRef(0);
+  const launchHandoffTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const launchHandoffFocusCleanupRef = useRef<(() => void) | undefined>();
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [startupDone, setStartupDone] = useState(false);
   const contentRef = useRef<HTMLElement | null>(null);
   const handledSyncSuccessAtRef = useRef<string | undefined>();
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const reduceLaunchMotion = Boolean(settings?.reduceMotion || prefersReducedMotion);
 
   useEffect(() => {
     profileStartup("app:mounted", "App component mounted");
@@ -4358,9 +4500,149 @@ export function App() {
     settingsRef.current = settings;
   }, [settings]);
 
+  useEffect(() => {
+    gamesRef.current = games;
+  }, [games]);
+
+  useEffect(() => {
+    allGamesRef.current = allGames;
+  }, [allGames]);
+
+  useEffect(() => {
+    recentGamesRef.current = recentGames;
+  }, [recentGames]);
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+
   const setActiveGroupId = useCallback((next: string | undefined) => {
     activeGroupIdRef.current = next;
     setActiveGroupIdState(next);
+  }, []);
+
+  const resolveLaunchSnapshot = useCallback(async (detail: LaunchGameEventDetail): Promise<Game | GameDetail | undefined> => {
+    if (detail.game) {
+      return detail.game;
+    }
+    const selectedGame = selectedRef.current;
+    if (selectedGame?.id === detail.id) {
+      return selectedGame;
+    }
+    const localGame =
+      gamesRef.current.find((game) => game.id === detail.id) ??
+      allGamesRef.current.find((game) => game.id === detail.id) ??
+      recentGamesRef.current.find((game) => game.id === detail.id);
+    if (localGame) {
+      return localGame;
+    }
+    try {
+      return await window.hynite.games.get(detail.id);
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const startLaunchHandoff = useCallback((game: Game | GameDetail, options?: { minimize?: boolean; durationMs?: number }) => {
+    const token = launchHandoffTokenRef.current + 1;
+    launchHandoffTokenRef.current = token;
+    if (launchHandoffTimerRef.current) {
+      clearTimeout(launchHandoffTimerRef.current);
+    }
+    launchHandoffFocusCleanupRef.current?.();
+    launchHandoffFocusCleanupRef.current = undefined;
+    setLaunchHandoff({ token, game, reduceMotion: reduceLaunchMotion });
+
+    const finish = () => {
+      if (launchHandoffTokenRef.current !== token) {
+        return;
+      }
+      if (launchHandoffTimerRef.current) {
+        clearTimeout(launchHandoffTimerRef.current);
+        launchHandoffTimerRef.current = undefined;
+      }
+      launchHandoffFocusCleanupRef.current?.();
+      launchHandoffFocusCleanupRef.current = undefined;
+      if (options?.minimize === false) {
+        setLaunchHandoff(undefined);
+        return;
+      }
+      void window.hynite.window.minimize()
+        .catch((error: unknown) => console.error("Failed to minimize after launch", error))
+        .finally(() => {
+          if (launchHandoffTokenRef.current === token) {
+            setLaunchHandoff(undefined);
+          }
+        });
+    };
+
+    if (options?.minimize === false) {
+      const duration = options.durationMs ?? (reduceLaunchMotion ? LAUNCH_HANDOFF_REDUCED_PREVIEW_MS : LAUNCH_HANDOFF_PREVIEW_MS);
+      launchHandoffTimerRef.current = setTimeout(finish, duration);
+      return;
+    }
+
+    const onBlur = () => finish();
+    window.addEventListener("blur", onBlur, { once: true });
+    launchHandoffFocusCleanupRef.current = () => window.removeEventListener("blur", onBlur);
+    launchHandoffTimerRef.current = setTimeout(finish, options?.durationMs ?? LAUNCH_HANDOFF_MAX_MS);
+    if (!document.hasFocus()) {
+      setTimeout(finish, 0);
+    }
+  }, [reduceLaunchMotion]);
+
+  useEffect(() => {
+    window.hyniteDebugSplash = (durationMs?: number) => {
+      const candidates = [
+        ...allGamesRef.current,
+        ...gamesRef.current,
+        ...recentGamesRef.current
+      ];
+      const unique = [...new Map(candidates.map((game) => [game.id, game])).values()];
+      const game = unique[Math.floor(Math.random() * unique.length)];
+      if (!game) {
+        console.warn("No games are loaded yet.");
+        return;
+      }
+      startLaunchHandoff(game, {
+        minimize: false,
+        durationMs: typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0 ? durationMs : undefined
+      });
+    };
+    return () => {
+      delete window.hyniteDebugSplash;
+    };
+  }, [startLaunchHandoff]);
+
+  useEffect(() => {
+    const onLaunchGame = (event: Event) => {
+      const detail = (event as CustomEvent<LaunchGameEventDetail>).detail;
+      if (!detail) {
+        return;
+      }
+      detail.handled = true;
+      void (async () => {
+        const game = await resolveLaunchSnapshot(detail);
+        const launched = await runLaunchFlow(detail.id, detail.preferredSteamId);
+        if (launched && game && settingsRef.current?.autoHideAfterLaunch !== false) {
+          startLaunchHandoff(game);
+        }
+      })().then(detail.resolve, detail.reject);
+    };
+
+    window.addEventListener(LAUNCH_GAME_EVENT, onLaunchGame);
+    return () => window.removeEventListener(LAUNCH_GAME_EVENT, onLaunchGame);
+  }, [resolveLaunchSnapshot, startLaunchHandoff]);
+
+  useEffect(() => {
+    return () => {
+      launchHandoffTokenRef.current += 1;
+      if (launchHandoffTimerRef.current) {
+        clearTimeout(launchHandoffTimerRef.current);
+      }
+      launchHandoffFocusCleanupRef.current?.();
+      launchHandoffFocusCleanupRef.current = undefined;
+    };
   }, []);
 
   useEffect(() => {
@@ -4834,7 +5116,7 @@ export function App() {
                       <button
                         type="button"
                         className="recent-icon-button"
-                        onClick={() => (launchable ? void launchGame(game.id) : void selectGame(game))}
+                        onClick={() => (launchable ? void launchGame(game) : void selectGame(game))}
                         aria-label={actionLabel}
                       >
                         <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
@@ -4911,6 +5193,9 @@ export function App() {
         <StartupLoading syncStatus={syncStatus} />
       </div>
     )}
+    <AnimatePresence>
+      {launchHandoff ? <LaunchHandoffOverlay key={launchHandoff.token} state={launchHandoff} /> : null}
+    </AnimatePresence>
     </>
   );
 }

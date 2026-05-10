@@ -501,6 +501,8 @@ export type AppSettings = {
   steamGridDbApiKey?: EncryptedSecret;
   cacheTtlHours: number;
   reduceMotion: boolean;
+  /** Shows a game launch handoff before minimizing Hynite after successful launches. */
+  autoHideAfterLaunch: boolean;
   libraryView?: LibraryView;
   /** Per-game preferred paired Steam account used when launching from details/library/recent. */
   launchAccountPreferences?: Record<string, string>;

@@ -26,8 +26,31 @@ describe("SettingsService", () => {
     await expect(service.get()).resolves.toMatchObject({
       cacheTtlHours: 12,
       reduceMotion: true,
+      autoHideAfterLaunch: true,
       launchAccountPreferences: {},
       gameGroups: []
+    });
+  });
+
+  it("persists launch auto-hide without dropping other settings", async () => {
+    const service = createService();
+    await service.update({
+      cacheTtlHours: 6,
+      reduceMotion: true,
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }]
+    });
+
+    await expect(service.update({ autoHideAfterLaunch: false })).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      reduceMotion: true,
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }],
+      autoHideAfterLaunch: false
+    });
+
+    await expect(service.update({ autoHideAfterLaunch: true })).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      reduceMotion: true,
+      autoHideAfterLaunch: true
     });
   });
 

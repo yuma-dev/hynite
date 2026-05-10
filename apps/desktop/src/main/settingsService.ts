@@ -20,6 +20,7 @@ const defaultSettings: AppSettings = {
   steamGridDbApiKey: undefined,
   cacheTtlHours: 24,
   reduceMotion: false,
+  autoHideAfterLaunch: true,
   libraryView: defaultLibraryView,
   launchAccountPreferences: {},
   gameGroups: [],
