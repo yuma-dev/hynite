@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { defaultLibraryView, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type SteamAccountSettings } from "@hynite/core";
+import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings } from "@hynite/core";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
   "^_redist$",
@@ -14,6 +14,12 @@ export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
   "^_CommonRedist$"
 ];
 
+const DEFAULT_SOUND_SETTINGS: SoundSettings = {
+  masterVolume: 0.8,
+  muted: false,
+  effects: {}
+};
+
 const defaultSettings: AppSettings = {
   steamAccounts: [],
   steamWebApiKey: undefined,
@@ -25,7 +31,8 @@ const defaultSettings: AppSettings = {
   launchAccountPreferences: {},
   gameGroups: [],
   localRoots: [],
-  localExcludePatterns: DEFAULT_LOCAL_EXCLUDE_PATTERNS
+  localExcludePatterns: DEFAULT_LOCAL_EXCLUDE_PATTERNS,
+  sound: DEFAULT_SOUND_SETTINGS
 };
 
 type LegacyAccount = SteamAccountSettings & { webApiKey?: EncryptedSecret };
@@ -88,6 +95,43 @@ function sanitizeGameGroups(value: unknown): GameGroup[] {
   });
 }
 
+function clampVolume(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value))
+    : fallback;
+}
+
+function sanitizePlayback(value: unknown): SoundEffectPlayback | undefined {
+  return value === "overlap" || value === "restart" || value === "fade" ? value : undefined;
+}
+
+function sanitizeSoundSettings(value: unknown): SoundSettings {
+  const candidate = value && typeof value === "object" ? value as Partial<SoundSettings> : {};
+  const rawEffects = candidate.effects && typeof candidate.effects === "object" ? candidate.effects : {};
+  const effects: SoundSettings["effects"] = {};
+
+  for (const id of soundEffectIds) {
+    const raw = rawEffects[id];
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const effect = raw as { filePath?: unknown; volume?: unknown; enabled?: unknown; playback?: unknown };
+    const filePath = typeof effect.filePath === "string" ? effect.filePath.trim() : "";
+    effects[id] = {
+      filePath: filePath || undefined,
+      volume: clampVolume(effect.volume, 1),
+      enabled: effect.enabled !== false,
+      playback: sanitizePlayback(effect.playback)
+    };
+  }
+
+  return {
+    masterVolume: clampVolume(candidate.masterVolume, DEFAULT_SOUND_SETTINGS.masterVolume),
+    muted: candidate.muted === true,
+    effects
+  };
+}
+
 function migrate(raw: LegacySettings): AppSettings {
   const rawAccounts: LegacyAccount[] = Array.isArray(raw.steamAccounts)
     ? raw.steamAccounts
@@ -111,7 +155,8 @@ function migrate(raw: LegacySettings): AppSettings {
     ...rest,
     steamAccounts: cleanedAccounts,
     steamWebApiKey: liftedKey,
-    gameGroups: sanitizeGameGroups(raw.gameGroups)
+    gameGroups: sanitizeGameGroups(raw.gameGroups),
+    sound: sanitizeSoundSettings(raw.sound)
   };
 }
 
@@ -133,6 +178,7 @@ export class SettingsService {
       next.steamAccounts = [];
     }
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
+    next.sound = sanitizeSoundSettings(next.sound);
     await mkdir(dirname(this.filePath), { recursive: true });
     await writeFile(this.filePath, JSON.stringify(next, null, 2));
     return next;

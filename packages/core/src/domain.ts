@@ -494,6 +494,25 @@ export type IgdbCredentials = {
   clientSecret: EncryptedSecret;
 };
 
+export const soundEffectIds = ["startup", "gameSelect", "gameLaunch", "navigation"] as const;
+
+export type SoundEffectId = typeof soundEffectIds[number];
+
+export type SoundEffectPlayback = "overlap" | "restart" | "fade";
+
+export type SoundEffectSettings = {
+  filePath?: string;
+  volume?: number;
+  enabled?: boolean;
+  playback?: SoundEffectPlayback;
+};
+
+export type SoundSettings = {
+  masterVolume: number;
+  muted?: boolean;
+  effects?: Partial<Record<SoundEffectId, SoundEffectSettings>>;
+};
+
 export type AppSettings = {
   steamAccounts: SteamAccountSettings[];
   /** Single Steam Web API key shared by every paired account (one key fetches any public profile). */
@@ -516,6 +535,8 @@ export type AppSettings = {
   localIgnoredPaths?: string[];
   /** Twitch app credentials for IGDB metadata (client-credentials OAuth). */
   igdb?: IgdbCredentials;
+  /** Local UI sound effects decoded by the renderer and served through main's sound protocol. */
+  sound?: SoundSettings;
 };
 
 export type ExecutableInfo = {

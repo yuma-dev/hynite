@@ -43,6 +43,8 @@ import {
   TrendingUp,
   Trophy,
   Users,
+  Volume2,
+  VolumeX,
   X
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -51,9 +53,10 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileStartup } from "./startupProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
+import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 
 type SteamSwitchPrompt = {
   gameId: string;
@@ -126,6 +129,7 @@ function requestSteamSwitchConfirmation(prompt: Omit<SteamSwitchPrompt, "resolve
 async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boolean> {
   const result = await window.hynite.games.launch(id, preferredSteamId);
   if (result.kind === "launched") {
+    soundEngine.play("gameLaunch");
     return true;
   }
   if (result.kind === "no-account") {
@@ -147,6 +151,7 @@ async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boo
     if (!confirmed) return false;
     const switchResult = await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
     if (switchResult.kind === "launched") {
+      soundEngine.play("gameLaunch");
       return true;
     }
     if (switchResult.kind === "no-account") {
@@ -2660,7 +2665,7 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
   );
 }
 
-type SettingsTab = "steam" | "metadata" | "sources" | "advanced";
+type SettingsTab = "steam" | "metadata" | "sources" | "sound" | "advanced";
 
 function formatRelativeExpiry(expiresAt: string): string {
   const expiry = Date.parse(expiresAt);
@@ -2677,6 +2682,39 @@ function formatRelativeExpiry(expiresAt: string): string {
     return `in ${hours}h ${minutes}m`;
   }
   return `in ${minutes}m`;
+}
+
+function soundFileName(filePath?: string): string {
+  if (!filePath) {
+    return "No file selected";
+  }
+  const parts = filePath.split(/[\\/]/);
+  return parts[parts.length - 1] || filePath;
+}
+
+function soundSettingsPatch(settings: SoundSettings | undefined, patch: Partial<SoundSettings>): SoundSettings {
+  return normalizeSoundSettings({
+    ...normalizeSoundSettings(settings),
+    ...patch
+  });
+}
+
+function soundEffectUpdate(
+  settings: SoundSettings | undefined,
+  effectId: SoundEffectId,
+  patch: Partial<SoundEffectSettings>
+): SoundSettings {
+  const current = normalizeSoundSettings(settings);
+  return normalizeSoundSettings({
+    ...current,
+    effects: {
+      ...current.effects,
+      [effectId]: {
+        ...current.effects?.[effectId],
+        ...patch
+      }
+    }
+  });
 }
 
 function SettingsScreen({
@@ -2706,11 +2744,25 @@ function SettingsScreen({
   const [activeSteamUser, setActiveSteamUser] = useState<string | undefined>();
   const [pairing, setPairing] = useState(false);
   const [expandedExtras, setExpandedExtras] = useState<Record<string, boolean>>({});
+  const [soundDraft, setSoundDraft] = useState<SoundSettings>(() => normalizeSoundSettings(settings?.sound));
+  const soundSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
 
   useEffect(() => {
     void window.hynite.steam.listLocalAccounts().then(setLocalAccounts).catch(() => undefined);
     void window.hynite.steam.getActiveUser().then((info) => setActiveSteamUser(info.accountName)).catch(() => undefined);
   }, [settings?.steamAccounts.length]);
+
+  useEffect(() => {
+    setSoundDraft(normalizeSoundSettings(settings?.sound));
+  }, [settings?.sound]);
+
+  useEffect(() => {
+    return () => {
+      if (soundSaveTimerRef.current) {
+        clearTimeout(soundSaveTimerRef.current);
+      }
+    };
+  }, []);
 
   async function pairSteam() {
     setSteamMessage(undefined);
@@ -2809,6 +2861,67 @@ function SettingsScreen({
     setSettings(next);
   }
 
+  async function updateSound(sound: SoundSettings) {
+    if (soundSaveTimerRef.current) {
+      clearTimeout(soundSaveTimerRef.current);
+      soundSaveTimerRef.current = undefined;
+    }
+    setSoundDraft(sound);
+    soundEngine.applySettings(sound);
+    const next = await window.hynite.settings.update({ sound });
+    soundEngine.applySettings(next);
+    setSoundDraft(normalizeSoundSettings(next.sound));
+    setSettings(next);
+  }
+
+  function previewSound(sound: SoundSettings) {
+    setSoundDraft(sound);
+    soundEngine.applySettings(sound);
+  }
+
+  function scheduleSoundUpdate(sound: SoundSettings) {
+    previewSound(sound);
+    if (soundSaveTimerRef.current) {
+      clearTimeout(soundSaveTimerRef.current);
+    }
+    soundSaveTimerRef.current = setTimeout(() => {
+      soundSaveTimerRef.current = undefined;
+      void updateSound(sound).catch(console.error);
+    }, 250);
+  }
+
+  async function setMasterSoundVolume(value: number) {
+    scheduleSoundUpdate(soundSettingsPatch(soundDraft, { masterVolume: value }));
+  }
+
+  async function setSoundMuted(value: boolean) {
+    await updateSound(soundSettingsPatch(soundDraft, { muted: value }));
+  }
+
+  async function setEffectSound(effectId: SoundEffectId, patch: Partial<SoundEffectSettings>) {
+    await updateSound(soundEffectUpdate(soundDraft, effectId, patch));
+  }
+
+  function setEffectSoundVolume(effectId: SoundEffectId, value: number) {
+    scheduleSoundUpdate(soundEffectUpdate(soundDraft, effectId, { volume: value }));
+  }
+
+  async function chooseSoundFile(effectId: SoundEffectId) {
+    const filePath = await window.hynite.dialog.pickFile({
+      title: "Select sound effect",
+      filters: [
+        { name: "Audio", extensions: ["wav", "mp3", "ogg", "opus", "m4a", "aac", "flac", "webm"] },
+        { name: "All files", extensions: ["*"] }
+      ]
+    });
+    if (!filePath) {
+      return;
+    }
+    await setEffectSound(effectId, { filePath, enabled: true });
+  }
+
+  const soundSettings = soundDraft;
+
   return (
     <main className="page settings-page">
       <div className="screen-title">
@@ -2827,6 +2940,7 @@ function SettingsScreen({
             ["steam", "Steam"],
             ["metadata", "Metadata"],
             ["sources", "Sources"],
+            ["sound", "Sound"],
             ["advanced", "Advanced"]
           ].map(([id, label]) => (
             <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id as SettingsTab)}>
@@ -3048,6 +3162,107 @@ function SettingsScreen({
           ) : null}
 
           {tab === "sources" ? <SourcesScreen /> : null}
+
+          {tab === "sound" ? (
+            <section className="settings-section sound-settings">
+              <div className="settings-section-head">
+                <div>
+                  <h2>Sound</h2>
+                  <p className="settings-hint">Local UI effects are decoded once and mixed in the renderer for low-latency playback.</p>
+                </div>
+                <button className="secondary-action" onClick={() => void setSoundMuted(!soundSettings.muted)}>
+                  {soundSettings.muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                  {soundSettings.muted ? "Muted" : "Mute"}
+                </button>
+              </div>
+              <label className="sound-volume-row">
+                <span>Master volume</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={soundSettings.masterVolume}
+                  onChange={(event) => void setMasterSoundVolume(Number(event.currentTarget.value))}
+                  onPointerUp={(event) => void updateSound(soundSettingsPatch(soundDraft, { masterVolume: Number(event.currentTarget.value) }))}
+                  onKeyUp={(event) => void updateSound(soundSettingsPatch(soundDraft, { masterVolume: Number(event.currentTarget.value) }))}
+                />
+                <strong>{Math.round(soundSettings.masterVolume * 100)}%</strong>
+              </label>
+
+              <div className="sound-effect-list">
+                {SOUND_EFFECT_DEFINITIONS.map((definition) => {
+                  const effect = soundSettings.effects?.[definition.id];
+                  const enabled = effect?.enabled !== false;
+                  return (
+                    <div key={definition.id} className="sound-effect-row">
+                      <div className="sound-effect-main">
+                        <strong>{definition.label}</strong>
+                        <span>{definition.description}</span>
+                        <code title={effect?.filePath}>{soundFileName(effect?.filePath)}</code>
+                      </div>
+                      <div className="sound-effect-controls">
+                        <label className="settings-toggle-row compact-toggle">
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={(event) => void setEffectSound(definition.id, { enabled: event.currentTarget.checked })}
+                          />
+                          <span className="settings-toggle-control" aria-hidden="true" />
+                          <span>
+                            <strong>Enabled</strong>
+                          </span>
+                        </label>
+                        <label className="sound-volume-row effect-volume">
+                          <span>Volume</span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value={effect?.volume ?? 1}
+                            onChange={(event) => setEffectSoundVolume(definition.id, Number(event.currentTarget.value))}
+                            onPointerUp={(event) => void updateSound(soundEffectUpdate(soundDraft, definition.id, { volume: Number(event.currentTarget.value) }))}
+                            onKeyUp={(event) => void updateSound(soundEffectUpdate(soundDraft, definition.id, { volume: Number(event.currentTarget.value) }))}
+                          />
+                          <strong>{Math.round((effect?.volume ?? 1) * 100)}%</strong>
+                        </label>
+                        <select
+                          className="plain-input sound-playback-select"
+                          value={effect?.playback ?? definition.defaultPlayback}
+                          onChange={(event) => void setEffectSound(definition.id, { playback: event.currentTarget.value as SoundEffectPlayback })}
+                          aria-label={`${definition.label} playback mode`}
+                        >
+                          <option value="overlap">Overlap</option>
+                          <option value="restart">Restart</option>
+                          <option value="fade">Fade</option>
+                        </select>
+                        <div className="sound-effect-actions">
+                          <button className="secondary-action" type="button" onClick={() => void chooseSoundFile(definition.id)}>
+                            <FolderOpen size={14} />
+                            Choose
+                          </button>
+                          <button className="secondary-action" type="button" disabled={!effect?.filePath} onClick={() => soundEngine.play(definition.id)}>
+                            <Play size={14} fill="currentColor" />
+                            Test
+                          </button>
+                          <button
+                            className="secondary-action"
+                            type="button"
+                            disabled={!effect?.filePath}
+                            onClick={() => void setEffectSound(definition.id, { filePath: undefined })}
+                          >
+                            <X size={14} />
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
 
           {tab === "advanced" ? (
             <>
@@ -4483,6 +4698,8 @@ export function App() {
   const launchHandoffTokenRef = useRef(0);
   const launchHandoffTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const launchHandoffFocusCleanupRef = useRef<(() => void) | undefined>();
+  const startupSoundPlayedRef = useRef(false);
+  const navigationSoundReadyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [startupDone, setStartupDone] = useState(false);
@@ -4493,6 +4710,22 @@ export function App() {
 
   useEffect(() => {
     profileStartup("app:mounted", "App component mounted");
+  }, []);
+
+  useEffect(() => {
+    if (!navigationSoundReadyRef.current) {
+      navigationSoundReadyRef.current = true;
+      return;
+    }
+    soundEngine.play("navigation");
+  }, [route]);
+
+  useEffect(() => {
+    void window.hynite.settings.get().then((nextSettings) => {
+      soundEngine.applySettings(nextSettings);
+    }).catch((error: unknown) => {
+      console.error("Failed to initialize sound settings", error);
+    });
   }, []);
 
   useEffect(() => {
@@ -4746,6 +4979,7 @@ export function App() {
     setLibraryGameIds(new Set(nextRecentGames.map((game) => game.id)));
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     settingsRef.current = nextSettings;
+    soundEngine.applySettings(nextSettings);
     setSettings(nextSettings);
     void window.hynite.local
       .getIssues()
@@ -4781,6 +5015,14 @@ export function App() {
       setStartupDone(true);
     }));
   }, [initialLoadComplete]);
+
+  useEffect(() => {
+    if (!startupDone || startupSoundPlayedRef.current) {
+      return;
+    }
+    startupSoundPlayedRef.current = true;
+    soundEngine.play("startup");
+  }, [startupDone]);
 
   useEffect(() => {
     profileStartup("initial-load:start", "Initial renderer load started");
@@ -5001,6 +5243,7 @@ export function App() {
   }
 
   async function selectGame(game: Game) {
+    soundEngine.play("gameSelect");
     try {
       setSelected(await window.hynite.games.get(game.id));
     } catch {

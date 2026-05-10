@@ -15,6 +15,7 @@ import type {
   SourceImportResult,
   SourceMatch,
   SourceSearchOptions,
+  SoundEffectId,
   SteamActiveUser,
   SteamLocalAccount,
   SteamPairingResult,
@@ -144,6 +145,9 @@ const api = {
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke("settings:get"),
     update: (patch: Partial<AppSettings>): Promise<AppSettings> => ipcRenderer.invoke("settings:update", patch)
+  },
+  sound: {
+    url: (effectId: SoundEffectId): string => `hynite-sound:///${encodeURIComponent(effectId)}`
   },
   steam: {
     pair: (): Promise<SteamPairingResult> => ipcRenderer.invoke("steam:pair"),

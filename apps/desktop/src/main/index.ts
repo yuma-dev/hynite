@@ -13,6 +13,7 @@ import { DiagnosticLogService } from "./diagnosticLogService";
 import { HomeService } from "./homeService";
 import { NativeBridge } from "./nativeBridge";
 import { SettingsService } from "./settingsService";
+import { SoundFileService } from "./soundFileService";
 import { SourceService } from "./sourceService";
 import { searchSteamStore } from "./steamSearchService";
 import { StartupProfileService } from "./startupProfileService";
@@ -33,6 +34,7 @@ let sourceService: SourceService;
 let nativeBridge: NativeBridge;
 let syncStatusService: SyncStatusService;
 let assetCacheService: AssetCacheService;
+let soundFileService: SoundFileService;
 let diagnosticLogService: DiagnosticLogService;
 let localImportService: LocalImportService;
 let launchTracker: LaunchTracker;
@@ -47,7 +49,8 @@ const RICH_METADATA_STARTUP_LIMIT = Number.POSITIVE_INFINITY;
 const STARTUP_BACKGROUND_DELAY_MS = 1_000;
 const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
 protocol.registerSchemesAsPrivileged([
-  { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true } }
+  { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
 ]);
 const richMetadataQueued = new Set<string>();
 const richMetadataQueue: string[] = [];
@@ -2032,6 +2035,8 @@ app.whenReady().then(() => {
   sourceService = new SourceService(repository);
   assetCacheService = new AssetCacheService(join(userData, "asset-cache"));
   assetCacheService.registerProtocol(protocol);
+  soundFileService = new SoundFileService(() => settingsService.get());
+  soundFileService.registerProtocol(protocol);
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, join(userData, "sync-status.json"));
   launchTracker = new LaunchTracker(repository);

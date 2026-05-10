@@ -54,6 +54,33 @@ describe("SettingsService", () => {
     });
   });
 
+  it("persists and sanitizes sound settings", async () => {
+    const service = createService();
+    await service.update({
+      sound: {
+        masterVolume: 1.8,
+        muted: true,
+        effects: {
+          startup: { filePath: " C:\\Sounds\\boot.wav ", volume: -1, enabled: true, playback: "restart" },
+          gameSelect: { filePath: "C:\\Sounds\\select.mp3", volume: 0.35, enabled: false, playback: "overlap" },
+          gameLaunch: { filePath: "C:\\Sounds\\launch.ogg", volume: 2, enabled: true, playback: "fade" }
+        }
+      }
+    });
+
+    await expect(service.get()).resolves.toMatchObject({
+      sound: {
+        masterVolume: 1,
+        muted: true,
+        effects: {
+          startup: { filePath: "C:\\Sounds\\boot.wav", volume: 0, enabled: true, playback: "restart" },
+          gameSelect: { filePath: "C:\\Sounds\\select.mp3", volume: 0.35, enabled: false, playback: "overlap" },
+          gameLaunch: { filePath: "C:\\Sounds\\launch.ogg", volume: 1, enabled: true, playback: "fade" }
+        }
+      }
+    });
+  });
+
   it("writes and clears per-game launch account preferences without dropping settings", async () => {
     const service = createService();
     await service.update({

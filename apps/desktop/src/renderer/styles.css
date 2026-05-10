@@ -3392,6 +3392,13 @@ dd {
   gap: 10px;
 }
 
+.settings-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .settings-toggle-row {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr);
@@ -3460,6 +3467,109 @@ dd {
   font-size: 12.5px;
   font-style: normal;
   line-height: 1.35;
+}
+
+.compact-toggle {
+  grid-template-columns: 42px auto;
+}
+
+.compact-toggle strong {
+  font-size: 12px;
+}
+
+.sound-settings {
+  display: grid;
+  gap: 18px;
+}
+
+.sound-volume-row {
+  display: grid;
+  grid-template-columns: 120px minmax(130px, 1fr) 48px;
+  gap: 12px;
+  align-items: center;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.sound-volume-row input[type="range"] {
+  width: 100%;
+  accent-color: rgba(143, 240, 179, 0.9);
+}
+
+.sound-volume-row strong {
+  color: var(--text);
+  font-size: 12px;
+  text-align: right;
+}
+
+.sound-effect-list {
+  display: grid;
+  gap: 12px;
+}
+
+.sound-effect-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.78fr) minmax(300px, 1.22fr);
+  gap: 18px;
+  padding: 14px;
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.sound-effect-main,
+.sound-effect-controls {
+  min-width: 0;
+}
+
+.sound-effect-main {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.sound-effect-main strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.sound-effect-main span {
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.sound-effect-main code {
+  overflow: hidden;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-3);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sound-effect-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.effect-volume {
+  grid-template-columns: 54px minmax(110px, 1fr) 44px;
+}
+
+.sound-playback-select {
+  max-width: 160px;
+}
+
+.sound-effect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .settings-source-tab .screen-title h1 {
@@ -4119,7 +4229,7 @@ dd {
 
   .settings-tabs {
     position: static;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
   }
 
   .settings-tabs button {
@@ -4129,6 +4239,10 @@ dd {
 
   .sync-summary {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .sound-effect-row {
+    grid-template-columns: 1fr;
   }
 
   .detail-modal {
@@ -4223,6 +4337,20 @@ dd {
     overflow-x: auto;
     border-right: 0;
     border-bottom: 0.5px solid var(--line);
+  }
+
+  .settings-section-head,
+  .sound-effect-actions {
+    display: grid;
+  }
+
+  .sound-volume-row,
+  .effect-volume {
+    grid-template-columns: 1fr 52px;
+  }
+
+  .sound-volume-row span {
+    grid-column: 1 / -1;
   }
 }
 
