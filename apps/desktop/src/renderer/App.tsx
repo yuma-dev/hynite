@@ -9,11 +9,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Clipboard,
+  Check,
   Clock3,
   Download,
   ExternalLink,
   Film,
   Flame,
+  Folder,
+  FolderOpen,
   Globe2,
   Home,
   Images,
@@ -26,23 +29,26 @@ import {
   Minimize2,
   Minus,
   Monitor,
+  Pencil,
   Play,
+  Plus,
   RefreshCw,
   Search,
   Settings,
   SlidersHorizontal,
+  Trash2,
   TrendingUp,
   Trophy,
   Users,
   X
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileStartup } from "./startupProfile";
 
 async function launchGame(id: string, preferredSteamId?: string): Promise<void> {
@@ -386,6 +392,57 @@ function normalizeLibraryView(view?: LibraryView): LibraryView {
   };
 }
 
+function normalizeGroups(settings?: AppSettings): GameGroup[] {
+  return settings?.gameGroups ?? [];
+}
+
+function makeGroupId(kind: GameGroup["kind"]): string {
+  const random = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${kind}-${random}`;
+}
+
+function updateGroupList(settings: AppSettings | undefined, nextGroups: GameGroup[]): AppSettings | undefined {
+  return settings ? { ...settings, gameGroups: nextGroups } : undefined;
+}
+
+function gameLocationPath(game: Game): string | undefined {
+  if (game.installDirectory) {
+    return game.installDirectory;
+  }
+  if (!game.executablePath) {
+    return undefined;
+  }
+  const normalized = game.executablePath.replace(/\//g, "\\");
+  const index = normalized.lastIndexOf("\\");
+  return index > 0 ? normalized.slice(0, index) : undefined;
+}
+
+function steamAppId(game: Game): string | undefined {
+  return game.sourceIds.find((source) => source.provider === "steam")?.externalId;
+}
+
+function defaultSmartGroupName(query: string, view: LibraryView): string {
+  const pills = buildActiveFilterPills(view.filters, () => undefined);
+  if (query.trim()) {
+    return query.trim();
+  }
+  return pills.length === 1 ? pills[0]!.label : "Filtered group";
+}
+
+function libraryQueryForView(search: string, view: LibraryView, group?: GameGroup) {
+  const effectiveView = group?.kind === "smart" ? normalizeLibraryView(group.view) : normalizeLibraryView(view);
+  const effectiveSearch = group?.kind === "smart" ? (group.search ?? "") : search;
+  return {
+    search: effectiveSearch,
+    sort: effectiveView.sort.field,
+    sortDirection: effectiveView.sort.direction,
+    ...(group?.kind === "manual" ? { gameIds: group.gameIds } : {}),
+    ...effectiveView.filters
+  };
+}
+
 function heroMeta(game: Game): string[] {
   return [
     game.releaseDate ? `Released ${formatDate(game.releaseDate)}` : undefined,
@@ -626,11 +683,13 @@ function familySharedOwners(game: Game): string[] {
 function GameCover({
   game,
   onSelect,
+  onContextMenu,
   wide = false,
   inLibrary = true
 }: {
   game: Game;
   onSelect: (game: Game) => void;
+  onContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
   wide?: boolean;
   inLibrary?: boolean;
 }) {
@@ -653,7 +712,17 @@ function GameCover({
       tabIndex={0}
       aria-label={game.title}
       onClick={() => onSelect(game)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(game); } }}
+      onContextMenu={(event) => onContextMenu?.(event, game)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(game);
+        }
+        if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+          e.preventDefault();
+          onContextMenu?.(e, game);
+        }
+      }}
     >
       <span className="cover-art">
         {cover ? (
@@ -719,7 +788,19 @@ function GameCover({
   );
 }
 
-function GameRow({ title, description, games, onSelect }: { title: string; description?: string; games: Game[]; onSelect: (game: Game) => void }) {
+function GameRow({
+  title,
+  description,
+  games,
+  onSelect,
+  onGameContextMenu
+}: {
+  title: string;
+  description?: string;
+  games: Game[];
+  onSelect: (game: Game) => void;
+  onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
+}) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(stripRef);
   const [visibleCount, setVisibleCount] = useState(HOME_ROW_BATCH_SIZE);
@@ -806,7 +887,7 @@ function GameRow({ title, description, games, onSelect }: { title: string; descr
         ) : null}
         <div className="cover-strip" ref={stripRef} onScroll={onRowScroll} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
           {visibleGames.map((game) => (
-            <GameCover key={game.id} game={game} onSelect={onSelect} />
+            <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
           ))}
         </div>
         {canScrollRight ? (
@@ -936,13 +1017,13 @@ function Hero({
   settings,
   libraryGameIds,
   onSelect,
-  onSync
+  onOpenSettings
 }: {
   home?: HomeModel;
   settings?: AppSettings;
   libraryGameIds: Set<string>;
   onSelect: (game: Game) => void;
-  onSync: () => void;
+  onOpenSettings: () => void;
 }) {
   const heroGames = useMemo(() => {
     const rows = home?.popularNow ?? [];
@@ -1143,9 +1224,9 @@ function Hero({
             <BrandLogo className="hero-logo" sizes="clamp(72px, 8vw, 104px)" />
           </h1>
           <p>Pair Steam to build the first library view.</p>
-          <button className="primary-action" onClick={onSync}>
-            <RefreshCw size={16} />
-            Sync Steam
+          <button className="primary-action" onClick={onOpenSettings}>
+            <Settings size={16} />
+            Open settings
           </button>
         </div>
       )}
@@ -1158,19 +1239,21 @@ function HomeScreen({
   settings,
   libraryGameIds,
   onSelect,
-  onSync
+  onOpenSettings,
+  onGameContextMenu
 }: {
   home?: HomeModel;
   settings?: AppSettings;
   libraryGameIds: Set<string>;
   onSelect: (game: Game) => void;
-  onSync: () => void;
+  onOpenSettings: () => void;
+  onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
 }) {
   return (
     <main className="page">
-      <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onSync={onSync} />
-      <GameRow title="Recently played" games={home?.continuePlaying ?? []} onSelect={onSelect} />
-      <GameRow title="Most played" games={home?.mostPlayed ?? []} onSelect={onSelect} />
+      <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onOpenSettings={onOpenSettings} />
+      <GameRow title="Recently played" games={home?.continuePlaying ?? []} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
+      <GameRow title="Most played" games={home?.mostPlayed ?? []} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
     </main>
   );
 }
@@ -1195,7 +1278,19 @@ function scrollToTrendRow(row: HomeTrendRow) {
   document.getElementById(`trend-row-${row.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function TrendingScreen({ home, settings, libraryGameIds, onSelect }: { home?: HomeModel; settings?: AppSettings; libraryGameIds: Set<string>; onSelect: (game: Game) => void }) {
+function TrendingScreen({
+  home,
+  settings,
+  libraryGameIds,
+  onSelect,
+  onGameContextMenu
+}: {
+  home?: HomeModel;
+  settings?: AppSettings;
+  libraryGameIds: Set<string>;
+  onSelect: (game: Game) => void;
+  onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
+}) {
   const rows = home?.trendingRows ?? [];
   const spotlight = rows.find((row) => row.games.length > 0)?.games[0] ?? home?.popularNow[0];
   const spotlightImage = spotlight ? heroStill(spotlight) : undefined;
@@ -1273,7 +1368,7 @@ function TrendingScreen({ home, settings, libraryGameIds, onSelect }: { home?: H
       <div className="trend-rows">
         {rows.map((row) => (
           <div key={row.id} id={`trend-row-${row.id}`} className="trend-row-anchor">
-            <GameRow title={row.title} description={row.description} games={row.games} onSelect={onSelect} />
+            <GameRow title={row.title} description={row.description} games={row.games} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
           </div>
         ))}
       </div>
@@ -1341,6 +1436,48 @@ function toggleInArray<T>(arr: T[] | undefined, value: T): T[] {
   return next.includes(value) ? next.filter((item) => item !== value) : [...next, value];
 }
 
+function applyLibraryFilters(games: Game[], filters: LibraryFilters): Game[] {
+  let next = games;
+  const installState = filters.installState ?? "all";
+  const ownership = filters.ownership ?? "all";
+  const recentCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  if (installState !== "all") {
+    next = next.filter((game) => game.installState === installState);
+  }
+  if (ownership !== "all") {
+    next = next.filter((game) => {
+      if (game.sourceIds.length === 0) return ownership === "owned";
+      const allFamily = game.sourceIds.every((source) => source.shareType === "family");
+      return ownership === "family" ? allFamily : !allFamily;
+    });
+  }
+  if ((filters.sources ?? []).length > 0) {
+    next = next.filter((game) => game.sourceIds.some((source) => filters.sources?.includes(source.provider)));
+  }
+  if ((filters.genres ?? []).length > 0) {
+    next = next.filter((game) => game.genres.some((genre) => filters.genres?.includes(genre)));
+  }
+  if ((filters.tags ?? []).length > 0) {
+    next = next.filter((game) => game.tags.some((tag) => filters.tags?.includes(tag)));
+  }
+  if ((filters.playerModes ?? []).length > 0) {
+    next = next.filter((game) => game.playerModes.some((mode) => filters.playerModes?.includes(mode)));
+  }
+  if (filters.dateFilter && filters.dateFilter !== "any") {
+    next = next.filter((game) => {
+      if (filters.dateFilter === "recently_added") {
+        return (Date.parse(game.importedAt ?? game.addedAt ?? "") || 0) >= recentCutoff;
+      }
+      if (filters.dateFilter === "recently_played") {
+        return (Date.parse(game.lastPlayedAt ?? "") || 0) >= recentCutoff;
+      }
+      return !game.lastPlayedAt;
+    });
+  }
+  return next;
+}
+
 function FilterChip({ label, pressed, onClick }: { label: string; pressed: boolean; onClick: () => void }) {
   return (
     <button type="button" className="chip" aria-pressed={pressed} onClick={onClick}>
@@ -1376,7 +1513,9 @@ function LibraryFiltersPanel({
   filters,
   onChange,
   onReset,
-  facets
+  facets,
+  query,
+  onRequestSmartGroup
 }: {
   open: boolean;
   onClose: () => void;
@@ -1384,6 +1523,8 @@ function LibraryFiltersPanel({
   onChange: (next: LibraryFilters) => void;
   onReset: () => void;
   facets: { sources: ProviderId[]; genres: string[]; tags: string[]; playerModes: PlayerMode[] };
+  query: string;
+  onRequestSmartGroup: (defaultName: string) => void;
 }) {
   const [tagSearch, setTagSearch] = useState("");
   const visibleTags = useMemo(() => {
@@ -1391,6 +1532,12 @@ function LibraryFiltersPanel({
     const list = needle ? facets.tags.filter((tag) => tag.toLocaleLowerCase().includes(needle)) : facets.tags;
     return list.slice(0, 60);
   }, [facets.tags, tagSearch]);
+  const canCreateSmartGroup = countActiveFilters(filters) > 0 || query.trim().length > 0;
+
+  function createSmartGroup() {
+    onRequestSmartGroup(defaultSmartGroupName(query, { filters, sort: defaultLibraryView.sort }));
+    onClose();
+  }
 
   return (
     <AnimatePresence>
@@ -1521,6 +1668,12 @@ function LibraryFiltersPanel({
                   </div>
                 </FilterSection>
               ) : null}
+            </div>
+            <div className="filter-panel-footer">
+              <button type="button" className="secondary-action" disabled={!canCreateSmartGroup} onClick={createSmartGroup}>
+                <Plus size={14} />
+                Create smart group
+              </button>
             </div>
           </motion.aside>
         </>
@@ -1680,8 +1833,13 @@ function LibraryScreen({
   setQuery,
   view,
   setView,
+  activeGroup,
   onSelect,
-  onSync
+  onGameContextMenu,
+  onCreateSmartGroup,
+  onRenameGroup,
+  onDeleteGroup,
+  onOpenSettings
 }: {
   games: Game[];
   facetGames: Game[];
@@ -1689,8 +1847,13 @@ function LibraryScreen({
   setQuery: (query: string) => void;
   view: LibraryView;
   setView: (next: LibraryView) => void;
+  activeGroup?: GameGroup;
   onSelect: (game: Game) => void;
-  onSync: () => void;
+  onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
+  onCreateSmartGroup: (name: string) => void;
+  onRenameGroup: (group: GameGroup) => void;
+  onDeleteGroup: (group: GameGroup) => void;
+  onOpenSettings: () => void;
 }) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(gridRef, 180);
@@ -1729,8 +1892,11 @@ function LibraryScreen({
     <main className="page">
       <div className="library-head">
         <div>
-          <h1>Library</h1>
-          <p>{games.length} games</p>
+          <h1>{activeGroup?.name ?? "Library"}</h1>
+          <p>
+            {games.length} games
+            {activeGroup?.kind === "smart" ? " / smart group" : activeGroup?.kind === "manual" ? " / manual group" : ""}
+          </p>
         </div>
         <div className="toolbar library-toolbar">
           <label className="search-box">
@@ -1743,10 +1909,18 @@ function LibraryScreen({
             {activeCount > 0 ? <span className="filter-trigger-badge">{activeCount}</span> : null}
           </button>
           <LibrarySortMenu field={view.sort.field} direction={view.sort.direction} onChange={setSort} />
-          <button className="secondary-action" onClick={onSync}>
-            <RefreshCw size={16} />
-            Sync
-          </button>
+          {activeGroup ? (
+            <>
+              <button className="secondary-action" onClick={() => onRenameGroup(activeGroup)}>
+                <Pencil size={14} />
+                Rename
+              </button>
+              <button className="secondary-action" onClick={() => onDeleteGroup(activeGroup)}>
+                <Trash2 size={14} />
+                Delete
+              </button>
+            </>
+          ) : null}
         </div>
         <ActiveFilterPills
           filters={view.filters}
@@ -1764,16 +1938,16 @@ function LibraryScreen({
               Clear filters
             </button>
           ) : (
-            <button className="primary-action" onClick={onSync}>
-              <RefreshCw size={16} />
-              Sync Steam
+            <button className="primary-action" onClick={onOpenSettings}>
+              <Settings size={16} />
+              Open settings
             </button>
           )}
         </div>
       ) : (
         <div className="library-grid" ref={gridRef} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
           {games.map((game) => (
-            <GameCover key={game.id} game={game} onSelect={onSelect} />
+            <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
           ))}
         </div>
       )}
@@ -1784,6 +1958,8 @@ function LibraryScreen({
         onChange={setFilters}
         onReset={() => setView({ ...view, filters: defaultLibraryView.filters })}
         facets={facets}
+        query={query}
+        onRequestSmartGroup={onCreateSmartGroup}
       />
     </main>
   );
@@ -2227,12 +2403,16 @@ function SettingsScreen({
   settings,
   setSettings,
   syncStatus,
+  syncBusy,
+  onSync,
   onSeed,
   onLibraryCleared
 }: {
   settings?: AppSettings;
   setSettings: (settings: AppSettings) => void;
   syncStatus?: SyncStatus;
+  syncBusy: boolean;
+  onSync: () => void;
   onSeed: () => void;
   onLibraryCleared: () => void;
 }) {
@@ -2383,6 +2563,10 @@ function SettingsScreen({
                 <button className="primary-action" disabled={pairing} onClick={() => void pairSteam()}>
                   <Link2 size={16} />
                   {pairing ? "Waiting for Steam…" : "Add Steam account"}
+                </button>
+                <button className="primary-action" disabled={syncBusy} onClick={onSync}>
+                  <RefreshCw size={16} />
+                  {syncBusy ? "Syncing" : "Sync Steam"}
                 </button>
               </div>
 
@@ -3137,6 +3321,375 @@ function DetailOverlay({
   );
 }
 
+type GameContextMenuRequest = {
+  game: Game;
+  x: number;
+  y: number;
+};
+
+type NameDialogState = {
+  title: string;
+  initialValue: string;
+  submitLabel?: string;
+  onSubmit: (value: string) => void;
+};
+
+function NameDialog({ state, onClose }: { state: NameDialogState; onClose: () => void }) {
+  const [value, setValue] = useState(state.initialValue);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setValue(state.initialValue);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+  }, [state]);
+
+  function submit() {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    state.onSubmit(trimmed);
+    onClose();
+  }
+
+  return (
+    <motion.div className="modal-backdrop name-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <button className="image-viewer-scrim" type="button" aria-label="Close dialog" onClick={onClose} />
+      <motion.form
+        className="name-dialog"
+        initial={{ opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 8 }}
+        transition={{ duration: 0.14 }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <div className="modal-head">
+          <h2>{state.title}</h2>
+          <button className="close-button inline-close" type="button" onClick={onClose} aria-label="Close dialog">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="name-dialog-body">
+          <input
+            ref={inputRef}
+            className="plain-input"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+          <div className="settings-actions">
+            <button className="primary-action" type="submit" disabled={!value.trim()}>
+              {state.submitLabel ?? "Save"}
+            </button>
+            <button className="secondary-action" type="button" onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </motion.form>
+    </motion.div>
+  );
+}
+
+function MenuDivider() {
+  return <div className="context-menu-divider" role="separator" />;
+}
+
+function MenuItem({
+  children,
+  icon,
+  disabled,
+  onClick
+}: {
+  children: React.ReactNode;
+  icon?: React.ReactNode;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button type="button" className="context-menu-item" disabled={disabled} onClick={onClick}>
+      <span className="context-menu-icon">{icon}</span>
+      <span>{children}</span>
+    </button>
+  );
+}
+
+function MenuSubmenu({
+  label,
+  icon,
+  children,
+  disabled
+}: {
+  label: string;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+
+  function closeIfTransient() {
+    if (!pinned) {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div
+      className={[
+        "context-menu-submenu",
+        disabled ? "disabled" : "",
+        open ? "open" : "",
+        pinned ? "pinned" : ""
+      ].filter(Boolean).join(" ")}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={closeIfTransient}
+    >
+      <button
+        type="button"
+        className="context-menu-item"
+        disabled={disabled}
+        aria-expanded={open}
+        onClick={(event) => {
+          event.preventDefault();
+          if (disabled) return;
+          setOpen((value) => !value || !pinned);
+          setPinned((value) => !value);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowRight") {
+            event.preventDefault();
+            setOpen(true);
+            setPinned(true);
+          }
+          if (event.key === "Escape") {
+            setOpen(false);
+            setPinned(false);
+          }
+        }}
+      >
+        <span className="context-menu-icon">{icon}</span>
+        <span>{label}</span>
+        <ChevronRight size={14} />
+      </button>
+      {!disabled ? <div className="context-submenu-panel">{children}</div> : null}
+    </div>
+  );
+}
+
+function GameContextMenu({
+  request,
+  settings,
+  activeGroup,
+  onClose,
+  onSelect,
+  onSettingsChanged,
+  onCreateManualGroup,
+  onChanged
+}: {
+  request?: GameContextMenuRequest;
+  settings?: AppSettings;
+  activeGroup?: GameGroup;
+  onClose: () => void;
+  onSelect: (game: Game) => void;
+  onSettingsChanged: (settings: AppSettings) => void;
+  onCreateManualGroup: (game: Game) => void;
+  onChanged: () => void;
+}) {
+  const game = request?.game;
+  const open = Boolean(request && game);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ left: number; top: number }>({ left: 0, top: 0 });
+
+  useLayoutEffect(() => {
+    if (!request) {
+      return;
+    }
+    const margin = 8;
+    const approximateWidth = 260;
+    const approximateHeight = 380;
+    const base = {
+      left: Math.max(margin, Math.min(request.x, window.innerWidth - approximateWidth - margin)),
+      top: Math.max(margin, Math.min(request.y, window.innerHeight - approximateHeight - margin))
+    };
+    setPosition(base);
+    requestAnimationFrame(() => {
+      const menu = menuRef.current;
+      if (!menu) return;
+      setPosition({
+        left: Math.max(margin, Math.min(request.x, window.innerWidth - menu.offsetWidth - margin)),
+        top: Math.max(margin, Math.min(request.y, window.innerHeight - menu.offsetHeight - margin))
+      });
+    });
+  }, [request]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => onClose();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [open, onClose]);
+
+  if (!open || !game) {
+    return null;
+  }
+
+  const isInstalled = game.installState === "installed";
+  const launchable = canLaunch(game);
+  const locationPath = gameLocationPath(game);
+  const appId = steamAppId(game);
+  const launchAccounts = resolveLaunchableSteamAccounts(game, settings?.steamAccounts ?? []);
+  const manualGroups = normalizeGroups(settings).filter((group): group is ManualGameGroup => group.kind === "manual");
+  const currentPreferred = settings?.launchAccountPreferences?.[game.id];
+  const currentManualGroup = activeGroup?.kind === "manual" ? activeGroup : undefined;
+
+  async function saveGroups(nextGroups: GameGroup[]) {
+    const next = await window.hynite.settings.update({ gameGroups: nextGroups });
+    onSettingsChanged(next);
+  }
+
+  async function toggleManualGroup(group: ManualGameGroup) {
+    const now = new Date().toISOString();
+    const hasGame = group.gameIds.includes(game!.id);
+    const nextGroups = normalizeGroups(settings).map((item) =>
+      item.id === group.id && item.kind === "manual"
+        ? { ...item, gameIds: hasGame ? item.gameIds.filter((id) => id !== game!.id) : [...item.gameIds, game!.id], updatedAt: now }
+        : item
+    );
+    await saveGroups(nextGroups);
+    onChanged();
+  }
+
+  async function removeFromCurrentGroup() {
+    if (!currentManualGroup) return;
+    const now = new Date().toISOString();
+    const nextGroups = normalizeGroups(settings).map((item) =>
+      item.id === currentManualGroup.id && item.kind === "manual"
+        ? { ...item, gameIds: item.gameIds.filter((id) => id !== game!.id), updatedAt: now }
+        : item
+    );
+    await saveGroups(nextGroups);
+    onChanged();
+  }
+
+  async function setLaunchPreference(steamId: string | undefined) {
+    const next = await window.hynite.steam.setPreferredLaunchAccount(game!.id, steamId);
+    onSettingsChanged(next);
+    await launchGame(game!.id, steamId);
+  }
+
+  const run = (task: () => void | Promise<void>) => {
+    onClose();
+    void Promise.resolve(task()).catch(console.error);
+  };
+
+  return (
+      <motion.div
+        ref={menuRef}
+        className={request.x > window.innerWidth - 520 ? "context-menu submenu-left" : "context-menu"}
+        style={{ left: position.left, top: position.top }}
+        initial={settings?.reduceMotion ? false : { opacity: 0, scale: 0.98, y: -2 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: settings?.reduceMotion ? 0 : 0.12 }}
+        role="menu"
+      >
+        <div className="context-menu-title">
+          <strong>{game.title}</strong>
+          <span>{isInstalled ? "Installed" : launchable ? "Launchable" : "Details only"}</span>
+        </div>
+        <MenuItem icon={isInstalled ? <Play size={14} fill="currentColor" /> : <Download size={14} />} disabled={!launchable} onClick={() => run(() => launchGame(game.id))}>
+          {isInstalled ? "Play" : "Download"}
+        </MenuItem>
+        <MenuItem icon={<Info size={14} />} onClick={() => run(() => onSelect(game))}>
+          Details
+        </MenuItem>
+        <MenuItem
+          icon={<FolderOpen size={14} />}
+          disabled={!locationPath}
+          onClick={() => locationPath ? run(async () => {
+            const error = await window.hynite.native.openFolder(locationPath);
+            if (error) window.alert(error);
+          }) : undefined}
+        >
+          Open game location
+        </MenuItem>
+        <MenuItem icon={<ExternalLink size={14} />} disabled={!steamStoreUrl(game)} onClick={() => run(() => openExternalUrl(steamStoreUrl(game)))}>
+          Open Steam store
+        </MenuItem>
+        {launchAccounts.length > 0 ? (
+          <MenuSubmenu label="Launch account" icon={<Users size={14} />}>
+            <MenuItem icon={!currentPreferred ? <Check size={14} /> : null} onClick={() => run(() => setLaunchPreference(undefined))}>
+              Automatic
+            </MenuItem>
+            {launchAccounts.map((account) => (
+              <MenuItem
+                key={account.steamId}
+                icon={currentPreferred === account.steamId ? <Check size={14} /> : null}
+                onClick={() => run(() => setLaunchPreference(account.steamId))}
+              >
+                {(account.personaName ?? account.localUsername ?? account.steamId)} · {account.kind === "owner" ? "Owner" : "Family"}
+              </MenuItem>
+            ))}
+          </MenuSubmenu>
+        ) : null}
+        <MenuSubmenu label="Add to group" icon={<Plus size={14} />}>
+          {manualGroups.length === 0 ? <div className="context-menu-note">No manual groups</div> : null}
+          {manualGroups.map((group) => (
+            <MenuItem
+              key={group.id}
+              icon={group.gameIds.includes(game.id) ? <Check size={14} /> : null}
+              onClick={() => run(() => toggleManualGroup(group))}
+            >
+              {group.name}
+            </MenuItem>
+          ))}
+          <MenuDivider />
+          <MenuItem icon={<Plus size={14} />} onClick={() => run(() => onCreateManualGroup(game))}>
+            New manual group...
+          </MenuItem>
+        </MenuSubmenu>
+        {currentManualGroup?.gameIds.includes(game.id) ? (
+          <MenuItem icon={<X size={14} />} onClick={() => run(removeFromCurrentGroup)}>
+            Remove from this group
+          </MenuItem>
+        ) : null}
+        <MenuDivider />
+        <MenuItem icon={<Clipboard size={14} />} onClick={() => run(() => window.hynite.clipboard.copy(game.title))}>
+          Copy title
+        </MenuItem>
+        <MenuItem icon={<Clipboard size={14} />} disabled={!appId} onClick={() => appId ? run(() => window.hynite.clipboard.copy(appId)) : undefined}>
+          Copy Steam app ID
+        </MenuItem>
+      </motion.div>
+  );
+}
+
 export function App() {
   const [route, setRoute] = useState<Route>("home");
   const [home, setHome] = useState<HomeModel | undefined>();
@@ -3146,6 +3699,9 @@ export function App() {
   const [libraryGameIds, setLibraryGameIds] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<GameDetail | undefined>();
   const [settings, setSettings] = useState<AppSettings | undefined>();
+  const [activeGroupId, setActiveGroupIdState] = useState<string | undefined>();
+  const [contextMenu, setContextMenu] = useState<GameContextMenuRequest | undefined>();
+  const [nameDialog, setNameDialog] = useState<NameDialogState | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
   const [query, setQueryState] = useState("");
   const queryRef = useRef("");
@@ -3171,6 +3727,8 @@ export function App() {
   }, []);
   const libraryViewHydratedRef = useRef(false);
   const librarySaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const activeGroupIdRef = useRef<string | undefined>();
+  const settingsRef = useRef<AppSettings | undefined>();
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [startupDone, setStartupDone] = useState(false);
@@ -3182,8 +3740,49 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  const setActiveGroupId = useCallback((next: string | undefined) => {
+    activeGroupIdRef.current = next;
+    setActiveGroupIdState(next);
+  }, []);
+
+  useEffect(() => {
     contentRef.current?.scrollTo({ top: 0 });
+    setContextMenu(undefined);
   }, [route]);
+
+  const groups = normalizeGroups(settings);
+  const activeGroup = groups.find((group) => group.id === activeGroupId);
+  const activeQuery = activeGroup?.kind === "smart" ? (activeGroup.search ?? "") : query;
+  const activeLibraryView = useMemo(
+    () => activeGroup?.kind === "smart" ? normalizeLibraryView(activeGroup.view) : libraryView,
+    [activeGroup, libraryView]
+  );
+  const groupCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    const currentGroups = normalizeGroups(settings);
+    for (const group of currentGroups) {
+      if (group.kind === "manual") {
+        counts.set(group.id, allGames.filter((game) => group.gameIds.includes(game.id)).length);
+      } else {
+        const normalized = normalizeLibraryView(group.view);
+        let scoped = [...allGames];
+        const scopedSearch = (group.search ?? "").trim().toLocaleLowerCase();
+        if (scopedSearch) scoped = scoped.filter((game) => game.title.toLocaleLowerCase().includes(scopedSearch));
+        scoped = applyLibraryFilters(scoped, normalized.filters);
+        counts.set(group.id, scoped.length);
+      }
+    }
+    return counts;
+  }, [settings, allGames]);
+
+  useEffect(() => {
+    if (activeGroupId && settings && !activeGroup) {
+      setActiveGroupId(undefined);
+    }
+  }, [activeGroupId, activeGroup, settings, setActiveGroupId]);
 
   async function refresh() {
     const startedAt = performance.now();
@@ -3197,19 +3796,17 @@ export function App() {
       setLibraryViewState(effectiveLibraryView);
       libraryViewHydratedRef.current = true;
     }
+    const effectiveSettings = loadedSettings ?? settingsRef.current;
+    const effectiveGroup = normalizeGroups(effectiveSettings).find((group) => group.id === activeGroupIdRef.current);
     profileStartup("refresh:start", "Renderer refresh started", {
       query: effectiveQuery,
       sort: effectiveLibraryView.sort,
-      filters: effectiveLibraryView.filters
+      filters: effectiveLibraryView.filters,
+      groupId: effectiveGroup?.id
     });
     const homePromise = window.hynite.home.get();
     const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
-      window.hynite.library.list({
-        search: effectiveQuery,
-        sort: effectiveLibraryView.sort.field,
-        sortDirection: effectiveLibraryView.sort.direction,
-        ...effectiveLibraryView.filters
-      }),
+      window.hynite.library.list(libraryQueryForView(effectiveQuery, effectiveLibraryView, effectiveGroup)),
       window.hynite.library.list({ search: "", sort: "recent", installState: "all" }),
       loadedSettings ? Promise.resolve(loadedSettings) : window.hynite.settings.get()
     ]);
@@ -3217,6 +3814,7 @@ export function App() {
     setAllGames(nextRecentGames);
     setLibraryGameIds(new Set(nextRecentGames.map((game) => game.id)));
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
+    settingsRef.current = nextSettings;
     setSettings(nextSettings);
     profileStartup("refresh:end", "Renderer refresh local data loaded", {
       durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
@@ -3296,18 +3894,14 @@ export function App() {
   useEffect(() => {
     if (!libraryViewHydratedRef.current) return;
     const startedAt = performance.now();
-    const effectiveLibraryView = normalizeLibraryView(libraryView);
+    const effectiveLibraryView = activeLibraryView;
     profileStartup("library-filter:start", "Library filter query started", {
-      query,
+      query: activeQuery,
       sort: effectiveLibraryView.sort,
-      filters: effectiveLibraryView.filters
+      filters: effectiveLibraryView.filters,
+      groupId: activeGroup?.id
     });
-    void window.hynite.library.list({
-      search: query,
-      sort: effectiveLibraryView.sort.field,
-      sortDirection: effectiveLibraryView.sort.direction,
-      ...effectiveLibraryView.filters
-    })
+    void window.hynite.library.list(libraryQueryForView(query, libraryView, activeGroup))
       .then((nextGames) => {
         profileStartup("library-filter:end", "Library filter query finished", {
           durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
@@ -3319,7 +3913,7 @@ export function App() {
         profileStartup("library-filter:error", "Library filter query failed", { error: error instanceof Error ? error.message : String(error) });
         console.error(error);
       });
-  }, [query, libraryView]);
+  }, [query, libraryView, activeGroup, activeQuery, activeLibraryView]);
 
   // Persist filters/sort to settings (debounced) once hydration has happened.
   useEffect(() => {
@@ -3348,6 +3942,129 @@ export function App() {
     }
   }
 
+  function openGameContextMenu(event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) {
+    event.preventDefault();
+    event.stopPropagation();
+    const mouse = "clientX" in event && event.clientX > 0 && event.clientY > 0;
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    setContextMenu({
+      game,
+      x: mouse ? event.clientX : rect.left + Math.min(36, rect.width / 2),
+      y: mouse ? event.clientY : rect.top + Math.min(36, rect.height / 2)
+    });
+  }
+
+  async function persistGroups(nextGroups: GameGroup[]): Promise<AppSettings | undefined> {
+    const next = await window.hynite.settings.update({ gameGroups: nextGroups });
+    settingsRef.current = next;
+    setSettings(next);
+    return next;
+  }
+
+  function createSmartGroup(name: string) {
+    const now = new Date().toISOString();
+    const nextGroup: GameGroup = {
+      id: makeGroupId("smart"),
+      kind: "smart",
+      name,
+      search: activeQuery.trim() ? activeQuery : undefined,
+      view: normalizeLibraryView(activeLibraryView),
+      createdAt: now,
+      updatedAt: now
+    };
+    void persistGroups([...normalizeGroups(settings), nextGroup]).then(() => {
+      setActiveGroupId(nextGroup.id);
+      setRoute("library");
+    }).catch(console.error);
+  }
+
+  function requestSmartGroup(defaultName: string) {
+    setNameDialog({
+      title: "Create smart group",
+      initialValue: defaultName,
+      submitLabel: "Create",
+      onSubmit: createSmartGroup
+    });
+  }
+
+  function createManualGroupForGame(game: Game, name: string) {
+    const now = new Date().toISOString();
+    const nextGroup: GameGroup = {
+      id: makeGroupId("manual"),
+      kind: "manual",
+      name,
+      gameIds: [game.id],
+      createdAt: now,
+      updatedAt: now
+    };
+    void persistGroups([...normalizeGroups(settingsRef.current), nextGroup]).then(() => {
+      setActiveGroupId(nextGroup.id);
+      setRoute("library");
+      void refresh();
+    }).catch(console.error);
+  }
+
+  function requestManualGroup(game: Game) {
+    setNameDialog({
+      title: "Create manual group",
+      initialValue: game.title,
+      submitLabel: "Create",
+      onSubmit: (name) => createManualGroupForGame(game, name)
+    });
+  }
+
+  function updateSmartGroup(group: GameGroup, patch: Partial<Extract<GameGroup, { kind: "smart" }>>) {
+    if (group.kind !== "smart") {
+      return;
+    }
+    const now = new Date().toISOString();
+    const nextGroups = normalizeGroups(settings).map((item) =>
+      item.id === group.id && item.kind === "smart" ? { ...item, ...patch, updatedAt: now } : item
+    );
+    void persistGroups(nextGroups).catch(console.error);
+  }
+
+  function setScopedQuery(next: string) {
+    if (activeGroup?.kind === "smart") {
+      updateSmartGroup(activeGroup, { search: next.trim() ? next : undefined });
+    } else {
+      setQuery(next);
+    }
+  }
+
+  function setScopedLibraryView(next: LibraryView) {
+    if (activeGroup?.kind === "smart") {
+      updateSmartGroup(activeGroup, { view: normalizeLibraryView(next) });
+    } else {
+      setLibraryView(next);
+    }
+  }
+
+  function renameGroup(group: GameGroup) {
+    setNameDialog({
+      title: "Rename group",
+      initialValue: group.name,
+      submitLabel: "Rename",
+      onSubmit: (name) => {
+        if (name === group.name) return;
+        const now = new Date().toISOString();
+        void persistGroups(normalizeGroups(settingsRef.current).map((item) => item.id === group.id ? { ...item, name, updatedAt: now } : item)).catch(console.error);
+      }
+    });
+  }
+
+  function deleteGroup(group: GameGroup) {
+    const confirmed = window.confirm(`Delete "${group.name}"?`);
+    if (!confirmed) {
+      return;
+    }
+    void persistGroups(normalizeGroups(settings).filter((item) => item.id !== group.id)).then(() => {
+      if (activeGroupId === group.id) {
+        setActiveGroupId(undefined);
+      }
+    }).catch(console.error);
+  }
+
   async function selectGame(game: Game) {
     try {
       setSelected(await window.hynite.games.get(game.id));
@@ -3362,22 +4079,27 @@ export function App() {
 
   const routeContent = useMemo(() => {
     if (route === "home") {
-      return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onSync={() => void syncSteam()} />;
+      return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} />;
     }
     if (route === "trending") {
-      return <TrendingScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} />;
+      return <TrendingScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onGameContextMenu={openGameContextMenu} />;
     }
     if (route === "library") {
       return (
         <LibraryScreen
           games={games}
           facetGames={allGames.length > 0 ? allGames : games}
-          query={query}
-          setQuery={setQuery}
-          view={libraryView}
-          setView={setLibraryView}
+          query={activeQuery}
+          setQuery={setScopedQuery}
+          view={activeLibraryView}
+          setView={setScopedLibraryView}
+          activeGroup={activeGroup}
           onSelect={(game) => void selectGame(game)}
-          onSync={() => void syncSteam()}
+          onGameContextMenu={openGameContextMenu}
+          onCreateSmartGroup={requestSmartGroup}
+          onRenameGroup={renameGroup}
+          onDeleteGroup={deleteGroup}
+          onOpenSettings={() => setRoute("settings")}
         />
       );
     }
@@ -3389,6 +4111,8 @@ export function App() {
         settings={settings}
         setSettings={setSettings}
         syncStatus={syncStatus}
+        syncBusy={busy || Boolean(syncStatus?.active)}
+        onSync={() => void syncSteam()}
         onLibraryCleared={() => {
           setSelected(undefined);
           void refresh();
@@ -3396,7 +4120,7 @@ export function App() {
         onSeed={() => void window.hynite.debug.seed().then(() => refresh())}
       />
     );
-  }, [route, home, games, recentGames, allGames, query, settings, syncStatus, libraryGameIds, libraryView]);
+  }, [route, home, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy]);
 
   return (
     <>
@@ -3409,51 +4133,89 @@ export function App() {
           </div>
           {routes.map((item) => {
             const Icon = item.icon;
+            const isLibrary = item.id === "library";
+            const isActive = route === item.id && !(isLibrary && Boolean(activeGroupId));
             return (
-              <button key={item.id} className={route === item.id ? "active" : ""} onClick={() => setRoute(item.id)}>
+              <button
+                key={item.id}
+                className={isActive ? "active" : ""}
+                onClick={() => {
+                  if (item.id === "library") {
+                    setActiveGroupId(undefined);
+                  }
+                  setRoute(item.id);
+                }}
+              >
                 <Icon size={17} />
                 <span className="rail-label">{item.label}</span>
+                {isLibrary ? <span className="rail-count-pill">{allGames.length}</span> : null}
               </button>
             );
           })}
-          <button className="rail-sync" disabled={busy} onClick={() => void syncSteam()}>
-            <RefreshCw size={15} />
-            <span className="rail-label">{busy ? "Syncing" : "Steam sync"}</span>
-          </button>
-          <div className="rail-section">
-            <p>
-              <span className="rail-label">Recent</span>
-            </p>
-            <div className="recent-list">
-              {recentGames.slice(0, 30).map((game) => {
-                const isInstalled = game.installState === "installed";
-                const launchable = canLaunch(game);
-                const RecentActionIcon = isInstalled ? Play : launchable ? Download : Info;
-                const actionLabel = isInstalled ? `Play ${game.title}` : launchable ? `Download ${game.title}` : `View details for ${game.title}`;
-                return (
-                  <div key={game.id} className="recent-link">
-                    <button
-                      type="button"
-                      className="recent-icon-button"
-                      onClick={() => (launchable ? void launchGame(game.id) : void selectGame(game))}
-                      aria-label={actionLabel}
-                    >
-                      <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
-                        {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
-                        <span className="recent-play-overlay">
-                          <RecentActionIcon size={13} fill={isInstalled ? "currentColor" : "none"} />
+          <div className={groups.length > 0 ? "rail-lists has-groups" : "rail-lists"}>
+            {groups.length > 0 ? (
+              <div className="rail-section rail-groups-section">
+                <p>
+                  <span className="rail-label">Groups</span>
+                </p>
+                <div className="group-list">
+                  {groups.map((group) => {
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        className={activeGroupId === group.id && route === "library" ? "group-link active" : "group-link"}
+                        onClick={() => {
+                          setActiveGroupId(group.id);
+                          setRoute("library");
+                        }}
+                      >
+                        <Folder size={14} />
+                        <span className="rail-label group-copy">
+                          <strong>{group.name}</strong>
                         </span>
-                      </span>
-                    </button>
-                    <button type="button" className="recent-details-button" onClick={() => void selectGame(game)} aria-label={`View details for ${game.title}`}>
-                      <span className="rail-label">
-                        <strong>{game.title}</strong>
-                        <em>{activityLabel(game)}</em>
-                      </span>
-                    </button>
-                  </div>
-                );
-              })}
+                        <span className="rail-count-pill">{groupCounts.get(group.id) ?? 0}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            <div className="rail-section rail-recents-section">
+              <p>
+                <span className="rail-label">Recent</span>
+              </p>
+              <div className="recent-list">
+                {recentGames.slice(0, 30).map((game) => {
+                  const isInstalled = game.installState === "installed";
+                  const launchable = canLaunch(game);
+                  const RecentActionIcon = isInstalled ? Play : launchable ? Download : Info;
+                  const actionLabel = isInstalled ? `Play ${game.title}` : launchable ? `Download ${game.title}` : `View details for ${game.title}`;
+                  return (
+                    <div key={game.id} className="recent-link" onContextMenu={(event) => openGameContextMenu(event, game)}>
+                      <button
+                        type="button"
+                        className="recent-icon-button"
+                        onClick={() => (launchable ? void launchGame(game.id) : void selectGame(game))}
+                        aria-label={actionLabel}
+                      >
+                        <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
+                          {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
+                          <span className="recent-play-overlay">
+                            <RecentActionIcon size={13} fill={isInstalled ? "currentColor" : "none"} />
+                          </span>
+                        </span>
+                      </button>
+                      <button type="button" className="recent-details-button" onClick={() => void selectGame(game)} aria-label={`View details for ${game.title}`}>
+                        <span className="rail-label">
+                          <strong>{game.title}</strong>
+                          <em>{activityLabel(game)}</em>
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </aside>
@@ -3482,6 +4244,20 @@ export function App() {
             />
           ) : null}
         </AnimatePresence>
+        <GameContextMenu
+          request={contextMenu}
+          settings={settings}
+          activeGroup={activeGroup}
+          onClose={() => setContextMenu(undefined)}
+          onSelect={(game) => void selectGame(game)}
+          onSettingsChanged={(next) => {
+            settingsRef.current = next;
+            setSettings(next);
+          }}
+          onCreateManualGroup={requestManualGroup}
+          onChanged={() => void refresh()}
+        />
+        {nameDialog ? <NameDialog state={nameDialog} onClose={() => setNameDialog(undefined)} /> : null}
       </div>
       <footer className="statusbar">
         <span className="status-dot" />

@@ -75,7 +75,8 @@ const api = {
     copy: (text: string): Promise<void> => ipcRenderer.invoke("clipboard:copy", text)
   },
   native: {
-    openExternal: (url: string): Promise<void> => ipcRenderer.invoke("native:openExternal", url)
+    openExternal: (url: string): Promise<void> => ipcRenderer.invoke("native:openExternal", url),
+    openFolder: (path: string): Promise<string> => ipcRenderer.invoke("native:openFolder", path)
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke("settings:get"),

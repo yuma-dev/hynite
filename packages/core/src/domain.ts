@@ -213,6 +213,7 @@ export type LibraryQuery = LibraryFilters & {
   search?: string;
   sort?: LibrarySortField;
   sortDirection?: LibrarySortDirection;
+  gameIds?: string[];
 };
 
 export type LibraryView = {
@@ -232,6 +233,29 @@ export const defaultLibraryView: LibraryView = {
   },
   sort: { field: "title", direction: "asc" }
 };
+
+export type GameGroupKind = "manual" | "smart";
+
+export type ManualGameGroup = {
+  id: string;
+  kind: "manual";
+  name: string;
+  gameIds: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SmartGameGroup = {
+  id: string;
+  kind: "smart";
+  name: string;
+  search?: string;
+  view: LibraryView;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GameGroup = ManualGameGroup | SmartGameGroup;
 
 export type SyncResult = {
   providerId: ProviderId;
@@ -444,6 +468,8 @@ export type AppSettings = {
   libraryView?: LibraryView;
   /** Per-game preferred paired Steam account used when launching from details/library/recent. */
   launchAccountPreferences?: Record<string, string>;
+  /** User-defined library groups. Manual groups pin game ids; smart groups store a library filter view. */
+  gameGroups?: GameGroup[];
 };
 
 export type ExecutableInfo = {

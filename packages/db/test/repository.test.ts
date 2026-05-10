@@ -136,6 +136,43 @@ describe("HyniteRepository", () => {
     repository.close();
   });
 
+  it("filters library queries by an explicit game id set", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({ provider: "steam", externalId: "1", title: "Alpha", installState: "unknown" });
+    repository.upsertImportedGame({ provider: "steam", externalId: "2", title: "Beta", installState: "unknown" });
+    repository.upsertImportedGame({ provider: "steam", externalId: "3", title: "Gamma", installState: "unknown" });
+
+    expect(repository.queryGames({ gameIds: ["steam:1", "steam:3"] }).map((game) => game.id)).toEqual(["steam:1", "steam:3"]);
+
+    repository.close();
+  });
+
+  it("composes explicit game id filtering with search, filters, and sorting", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({ provider: "steam", externalId: "1", title: "Alpha Quest", installState: "installed", playtimeMinutes: 10 });
+    repository.upsertImportedGame({ provider: "steam", externalId: "2", title: "Beta Quest", installState: "installed", playtimeMinutes: 50 });
+    repository.upsertImportedGame({ provider: "steam", externalId: "3", title: "Alpha Demo", installState: "not_installed", playtimeMinutes: 100 });
+
+    expect(repository.queryGames({
+      gameIds: ["steam:1", "steam:2", "steam:3"],
+      search: "alpha",
+      installState: "installed",
+      sort: "playtime",
+      sortDirection: "desc"
+    }).map((game) => game.id)).toEqual(["steam:1"]);
+
+    repository.close();
+  });
+
+  it("returns no library rows for an empty explicit game id set", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({ provider: "steam", externalId: "1", title: "Alpha", installState: "unknown" });
+
+    expect(repository.queryGames({ gameIds: [] })).toEqual([]);
+
+    repository.close();
+  });
+
   it("persists rich metadata fields", () => {
     const repository = createRepository();
     repository.upsertImportedGame({ provider: "steam", externalId: "1086940", title: "Baldur's Gate 3", installState: "unknown" });

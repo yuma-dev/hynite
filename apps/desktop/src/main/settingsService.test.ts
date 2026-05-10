@@ -26,7 +26,8 @@ describe("SettingsService", () => {
     await expect(service.get()).resolves.toMatchObject({
       cacheTtlHours: 12,
       reduceMotion: true,
-      launchAccountPreferences: {}
+      launchAccountPreferences: {},
+      gameGroups: []
     });
   });
 
@@ -46,6 +47,48 @@ describe("SettingsService", () => {
     await expect(service.setLaunchAccountPreference("steam:10", undefined)).resolves.toMatchObject({
       cacheTtlHours: 6,
       launchAccountPreferences: {}
+    });
+  });
+
+  it("writes and sanitizes game groups without dropping other settings", async () => {
+    const service = createService();
+    await service.update({ cacheTtlHours: 6, reduceMotion: true });
+    const createdAt = "2026-05-10T00:00:00.000Z";
+    const updatedAt = "2026-05-10T01:00:00.000Z";
+
+    await expect(service.setGameGroups([
+      {
+        id: "manual-1",
+        kind: "manual",
+        name: "Favorites",
+        gameIds: ["steam:10"],
+        createdAt,
+        updatedAt
+      },
+      {
+        id: "smart-1",
+        kind: "smart",
+        name: "Installed RPGs",
+        search: "rpg",
+        view: {
+          filters: { installState: "installed", ownership: "all", sources: [], genres: ["RPG"], tags: [], playerModes: [], dateFilter: "any" },
+          sort: { field: "title", direction: "asc" }
+        },
+        createdAt,
+        updatedAt
+      }
+    ])).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      reduceMotion: true,
+      gameGroups: [
+        { id: "manual-1", kind: "manual", name: "Favorites", gameIds: ["steam:10"] },
+        { id: "smart-1", kind: "smart", name: "Installed RPGs", search: "rpg" }
+      ]
+    });
+
+    await expect(service.setGameGroups([])).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      gameGroups: []
     });
   });
 });

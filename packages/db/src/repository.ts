@@ -459,6 +459,14 @@ export class HyniteRepository {
 
     let games = this.listGames();
 
+    if (query.gameIds) {
+      if (query.gameIds.length === 0) {
+        return [];
+      }
+      const allowedIds = new Set(query.gameIds);
+      games = games.filter((game) => allowedIds.has(game.id));
+    }
+
     const normalizedSearch = (query.search ?? "").trim().toLocaleLowerCase();
     if (normalizedSearch) {
       games = games.filter((game) => game.title.toLocaleLowerCase().includes(normalizedSearch));

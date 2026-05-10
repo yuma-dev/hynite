@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { defaultLibraryView, type AppSettings, type EncryptedSecret, type SteamAccountSettings } from "@hynite/core";
+import { defaultLibraryView, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type SteamAccountSettings } from "@hynite/core";
 
 const defaultSettings: AppSettings = {
   steamAccounts: [],
@@ -9,7 +9,8 @@ const defaultSettings: AppSettings = {
   cacheTtlHours: 24,
   reduceMotion: false,
   libraryView: defaultLibraryView,
-  launchAccountPreferences: {}
+  launchAccountPreferences: {},
+  gameGroups: []
 };
 
 type LegacyAccount = SteamAccountSettings & { webApiKey?: EncryptedSecret };
@@ -17,6 +18,60 @@ type LegacySettings = Partial<Omit<AppSettings, "steamAccounts">> & {
   steamAccount?: LegacyAccount;
   steamAccounts?: LegacyAccount[];
 };
+
+function normalizeLibraryView(view: unknown): LibraryView {
+  const candidate = view && typeof view === "object" ? view as Partial<LibraryView> : {};
+  return {
+    filters: {
+      ...defaultLibraryView.filters,
+      ...(candidate.filters ?? {})
+    },
+    sort: {
+      ...defaultLibraryView.sort,
+      ...(candidate.sort ?? {})
+    }
+  };
+}
+
+function sanitizeGameGroups(value: unknown): GameGroup[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry): GameGroup[] => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+    const group = entry as Partial<GameGroup>;
+    if (typeof group.id !== "string" || !group.id || typeof group.name !== "string" || !group.name) {
+      return [];
+    }
+    const createdAt = typeof group.createdAt === "string" ? group.createdAt : new Date().toISOString();
+    const updatedAt = typeof group.updatedAt === "string" ? group.updatedAt : createdAt;
+    if (group.kind === "manual") {
+      return [{
+        id: group.id,
+        kind: "manual",
+        name: group.name,
+        gameIds: Array.isArray(group.gameIds) ? group.gameIds.filter((id): id is string => typeof id === "string" && Boolean(id)) : [],
+        createdAt,
+        updatedAt
+      }];
+    }
+    if (group.kind === "smart") {
+      return [{
+        id: group.id,
+        kind: "smart",
+        name: group.name,
+        search: typeof group.search === "string" ? group.search : undefined,
+        view: normalizeLibraryView(group.view),
+        createdAt,
+        updatedAt
+      }];
+    }
+    return [];
+  });
+}
 
 function migrate(raw: LegacySettings): AppSettings {
   const rawAccounts: LegacyAccount[] = Array.isArray(raw.steamAccounts)
@@ -40,7 +95,8 @@ function migrate(raw: LegacySettings): AppSettings {
     ...defaultSettings,
     ...rest,
     steamAccounts: cleanedAccounts,
-    steamWebApiKey: liftedKey
+    steamWebApiKey: liftedKey,
+    gameGroups: sanitizeGameGroups(raw.gameGroups)
   };
 }
 
@@ -61,6 +117,7 @@ export class SettingsService {
     if (!Array.isArray(next.steamAccounts)) {
       next.steamAccounts = [];
     }
+    next.gameGroups = sanitizeGameGroups(next.gameGroups);
     await mkdir(dirname(this.filePath), { recursive: true });
     await writeFile(this.filePath, JSON.stringify(next, null, 2));
     return next;
@@ -94,5 +151,9 @@ export class SettingsService {
       delete next[gameId];
     }
     return this.update({ launchAccountPreferences: next });
+  }
+
+  async setGameGroups(gameGroups: GameGroup[]): Promise<AppSettings> {
+    return this.update({ gameGroups });
   }
 }
