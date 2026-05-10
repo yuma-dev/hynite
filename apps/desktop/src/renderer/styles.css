@@ -269,9 +269,7 @@ button {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 50% 46%, rgba(255, 255, 255, 0.14), transparent 23%),
-    linear-gradient(180deg, rgba(5, 6, 8, 0.42), rgba(5, 6, 8, 0.8) 72%, rgba(5, 6, 8, 0.94)),
-    linear-gradient(90deg, rgba(5, 6, 8, 0.72), rgba(5, 6, 8, 0.2) 50%, rgba(5, 6, 8, 0.72));
+    radial-gradient(circle at 50% 46%, rgba(255, 255, 255, 0.027), transparent 23%), linear-gradient(180deg, rgba(5, 6, 8, 0.42), rgba(5, 6, 8, 0.8) 72%, rgba(5, 6, 8, 0.94)), linear-gradient(90deg, rgba(5, 6, 8, 0.72), rgba(5, 6, 8, 0.2) 50%, rgba(5, 6, 8, 0.72));
 }
 
 .launch-handoff-identity {
@@ -322,7 +320,7 @@ button {
   height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.96), transparent);
   transform: translateX(-115%);
-  animation: launchHandoffLine 1.34s cubic-bezier(0.22, 1, 0.36, 1) 0.22s forwards;
+  animation: launchHandoffLine 2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
 .launch-handoff:not(.reduce-motion)::after {
@@ -350,6 +348,14 @@ button {
 }
 
 @keyframes launchHandoffLine {
+  0% {
+    transform: translateX(-115%);
+  }
+
+  72% {
+    transform: translateX(115%);
+  }
+
   to {
     transform: translateX(115%);
   }

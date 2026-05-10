@@ -78,6 +78,8 @@ type LaunchGameEventDetail = {
 type LaunchHandoffState = {
   token: number;
   game: Game | GameDetail;
+  backgroundUrl?: string;
+  logoUrl?: string;
   reduceMotion: boolean;
 };
 
@@ -86,7 +88,7 @@ const LAUNCH_GAME_EVENT = "hynite:launch-game";
 const TRAILER_AUDIO_STORAGE_KEY = "hynite:trailer-audio:v1";
 const LAUNCH_HANDOFF_PREVIEW_MS = 1800;
 const LAUNCH_HANDOFF_REDUCED_PREVIEW_MS = 450;
-const LAUNCH_HANDOFF_MAX_MS = 10_000;
+const LAUNCH_HANDOFF_MAX_MS = 40_000;
 
 function readTrailerAudioState(): { volume: number; muted: boolean } {
   try {
@@ -306,6 +308,31 @@ function launchHandoffBackground(game: Game | GameDetail): string | undefined {
   return game.backgroundUrl ?? game.headerUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.fullUrl ?? primaryCover(game);
 }
 
+function loadSplashAsset(url: string | undefined): Promise<string | undefined> {
+  if (!url) {
+    return Promise.resolve(undefined);
+  }
+
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      const decoded = typeof image.decode === "function" ? image.decode() : Promise.resolve();
+      void decoded.then(() => resolve(url)).catch(() => resolve(url));
+    };
+    image.onerror = () => resolve(undefined);
+    image.src = url;
+  });
+}
+
+async function loadLaunchHandoffAssets(game: Game | GameDetail): Promise<{ backgroundUrl?: string; logoUrl?: string }> {
+  const [backgroundUrl, logoUrl] = await Promise.all([
+    loadSplashAsset(launchHandoffBackground(game)),
+    loadSplashAsset(game.logoUrl)
+  ]);
+  return { backgroundUrl, logoUrl };
+}
+
 function usePrefersReducedMotion(): boolean {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
 
@@ -321,9 +348,8 @@ function usePrefersReducedMotion(): boolean {
 }
 
 function LaunchHandoffOverlay({ state }: { state: LaunchHandoffState }) {
-  const image = launchHandoffBackground(state.game);
   const reduced = state.reduceMotion;
-  const backgroundStyle = image ? { backgroundImage: `url(${image})` } : undefined;
+  const backgroundStyle = state.backgroundUrl ? { backgroundImage: `url(${state.backgroundUrl})` } : undefined;
 
   return (
     <motion.div
@@ -350,8 +376,8 @@ function LaunchHandoffOverlay({ state }: { state: LaunchHandoffState }) {
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: reduced ? 0.01 : 0.32, ease: "easeOut", delay: reduced ? 0 : 0.08 }}
       >
-        {state.game.logoUrl ? (
-          <img className="launch-handoff-logo" src={state.game.logoUrl} alt="" draggable={false} />
+        {state.logoUrl ? (
+          <img className="launch-handoff-logo" src={state.logoUrl} alt="" draggable={false} />
         ) : (
           <h1>{state.game.title}</h1>
         )}
@@ -4548,10 +4574,11 @@ export function App() {
     launchHandoffTokenRef.current = token;
     if (launchHandoffTimerRef.current) {
       clearTimeout(launchHandoffTimerRef.current);
+      launchHandoffTimerRef.current = undefined;
     }
     launchHandoffFocusCleanupRef.current?.();
     launchHandoffFocusCleanupRef.current = undefined;
-    setLaunchHandoff({ token, game, reduceMotion: reduceLaunchMotion });
+    setLaunchHandoff(undefined);
 
     const finish = () => {
       if (launchHandoffTokenRef.current !== token) {
@@ -4576,19 +4603,26 @@ export function App() {
         });
     };
 
-    if (options?.minimize === false) {
-      const duration = options.durationMs ?? (reduceLaunchMotion ? LAUNCH_HANDOFF_REDUCED_PREVIEW_MS : LAUNCH_HANDOFF_PREVIEW_MS);
-      launchHandoffTimerRef.current = setTimeout(finish, duration);
-      return;
-    }
+    void loadLaunchHandoffAssets(game).then((assets) => {
+      if (launchHandoffTokenRef.current !== token) {
+        return;
+      }
+      setLaunchHandoff({ token, game, ...assets, reduceMotion: reduceLaunchMotion });
 
-    const onBlur = () => finish();
-    window.addEventListener("blur", onBlur, { once: true });
-    launchHandoffFocusCleanupRef.current = () => window.removeEventListener("blur", onBlur);
-    launchHandoffTimerRef.current = setTimeout(finish, options?.durationMs ?? LAUNCH_HANDOFF_MAX_MS);
-    if (!document.hasFocus()) {
-      setTimeout(finish, 0);
-    }
+      if (options?.minimize === false) {
+        const duration = options.durationMs ?? (reduceLaunchMotion ? LAUNCH_HANDOFF_REDUCED_PREVIEW_MS : LAUNCH_HANDOFF_PREVIEW_MS);
+        launchHandoffTimerRef.current = setTimeout(finish, duration);
+        return;
+      }
+
+      const onBlur = () => finish();
+      window.addEventListener("blur", onBlur, { once: true });
+      launchHandoffFocusCleanupRef.current = () => window.removeEventListener("blur", onBlur);
+      launchHandoffTimerRef.current = setTimeout(finish, options?.durationMs ?? LAUNCH_HANDOFF_MAX_MS);
+      if (!document.hasFocus()) {
+        setTimeout(finish, 0);
+      }
+    });
   }, [reduceLaunchMotion]);
 
   useEffect(() => {
