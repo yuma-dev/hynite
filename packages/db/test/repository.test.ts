@@ -90,8 +90,8 @@ describe("HyniteRepository", () => {
         },
         {
           id: "entry-2",
-          title: "BALDURS GATE 3 Deluxe Edition",
-          normalizedTitle: normalizeTitle("BALDURS GATE 3 Deluxe Edition"),
+          title: "BALDURS GATE 3 Deluxe Edition [P] [RUS + ENG + 9] (2026, TBS) (1.0) [Portable]",
+          normalizedTitle: normalizeTitle("BALDURS GATE 3 Deluxe Edition [P] [RUS + ENG + 9] (2026, TBS) (1.0) [Portable]"),
           uris: ["magnet:?xt=urn:btih:b"]
         }
       ]
@@ -109,8 +109,8 @@ describe("HyniteRepository", () => {
         },
         {
           id: "entry-4",
-          title: "Baldurs Gate 2",
-          normalizedTitle: normalizeTitle("Baldurs Gate 2"),
+          title: "Baldurs Gate 30",
+          normalizedTitle: normalizeTitle("Baldurs Gate 30"),
           uris: ["magnet:?xt=urn:btih:d"]
         }
       ]
@@ -120,6 +120,22 @@ describe("HyniteRepository", () => {
       { sourceId: "source-1", sourceName: "Source A", count: 2 },
       { sourceId: "source-2", sourceName: "Source B", count: 1 }
     ]);
+
+    repository.close();
+  });
+
+  it("prunes provider source rows that disappeared from a synced account", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({ provider: "steam", externalId: "1", title: "Still Owned", installState: "unknown", ownerSteamid: "owner-a" });
+    repository.upsertImportedGame({ provider: "steam", externalId: "2", title: "Old Playtest", installState: "unknown", ownerSteamid: "owner-a" });
+    repository.upsertImportedGame({ provider: "steam", externalId: "3", title: "Other Account", installState: "unknown", ownerSteamid: "owner-b" });
+
+    const result = repository.pruneProviderSources("steam", ["owner-a"], [{ externalId: "1", ownerSteamid: "owner-a" }]);
+
+    expect(result).toEqual({ sourcesRemoved: 1, gamesRemoved: 1 });
+    expect(repository.getGame("steam:1")?.title).toBe("Still Owned");
+    expect(repository.getGame("steam:2")).toBeUndefined();
+    expect(repository.getGame("steam:3")?.title).toBe("Other Account");
 
     repository.close();
   });

@@ -51,6 +51,51 @@ import remarkGfm from "remark-gfm";
 import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileStartup } from "./startupProfile";
 
+type SteamSwitchPrompt = {
+  gameId: string;
+  gameTitle: string;
+  fromLabel: string;
+  toLabel: string;
+  targetSteamId: string;
+  resolve: (confirmed: boolean) => void;
+};
+
+const STEAM_SWITCH_CONFIRM_EVENT = "hynite:steam-switch-confirm";
+const TRAILER_AUDIO_STORAGE_KEY = "hynite:trailer-audio:v1";
+
+function readTrailerAudioState(): { volume: number; muted: boolean } {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(TRAILER_AUDIO_STORAGE_KEY) ?? "{}") as { volume?: unknown; muted?: unknown };
+    const volume = typeof parsed.volume === "number" && Number.isFinite(parsed.volume)
+      ? Math.min(1, Math.max(0, parsed.volume))
+      : 1;
+    return { volume, muted: parsed.muted === true };
+  } catch {
+    return { volume: 1, muted: false };
+  }
+}
+
+function writeTrailerAudioState(value: { volume: number; muted: boolean }): void {
+  try {
+    window.localStorage.setItem(TRAILER_AUDIO_STORAGE_KEY, JSON.stringify({
+      volume: Math.min(1, Math.max(0, value.volume)),
+      muted: value.muted
+    }));
+  } catch {
+    // Ignore storage failures; trailer controls still work for the current element.
+  }
+}
+
+function requestSteamSwitchConfirmation(prompt: Omit<SteamSwitchPrompt, "resolve">): Promise<boolean> {
+  return new Promise((resolve) => {
+    const detail = { ...prompt, handled: false, resolve };
+    window.dispatchEvent(new CustomEvent(STEAM_SWITCH_CONFIRM_EVENT, { detail }));
+    if (!detail.handled) {
+      resolve(false);
+    }
+  });
+}
+
 async function launchGame(id: string, preferredSteamId?: string): Promise<void> {
   const result = await window.hynite.games.launch(id, preferredSteamId);
   if (result.kind === "launched") {
@@ -65,9 +110,13 @@ async function launchGame(id: string, preferredSteamId?: string): Promise<void> 
     const toLabel = result.target.personaName
       ? `${result.target.personaName} (${result.target.accountName})`
       : result.target.accountName;
-    const confirmed = window.confirm(
-      `Launching ${result.gameTitle} requires switching from ${fromLabel} to ${toLabel}.\n\nSteam will close and restart silently. Continue?`
-    );
+    const confirmed = await requestSteamSwitchConfirmation({
+      gameId: result.gameId,
+      gameTitle: result.gameTitle,
+      fromLabel,
+      toLabel,
+      targetSteamId: result.target.steamId
+    });
     if (!confirmed) return;
     const switchResult = await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
     if (switchResult.kind === "no-account") {
@@ -951,6 +1000,7 @@ function isHlsUrl(value: string): boolean {
 function TrailerPlayer({ sourceUrl, posterUrl, label }: { sourceUrl: string; posterUrl?: string; label: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
+  const [audioState, setAudioState] = useState(readTrailerAudioState);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -961,6 +1011,8 @@ function TrailerPlayer({ sourceUrl, posterUrl, label }: { sourceUrl: string; pos
     let hls: Hls | undefined;
     setFailed(false);
     video.removeAttribute("src");
+    video.volume = audioState.volume;
+    video.muted = audioState.muted;
 
     if (isHlsUrl(sourceUrl)) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -983,13 +1035,20 @@ function TrailerPlayer({ sourceUrl, posterUrl, label }: { sourceUrl: string; pos
 
     const onCanPlay = () => setFailed(false);
     const onError = () => setFailed(true);
+    const onVolumeChange = () => {
+      const next = { volume: video.volume, muted: video.muted };
+      setAudioState(next);
+      writeTrailerAudioState(next);
+    };
     video.addEventListener("canplay", onCanPlay);
     video.addEventListener("error", onError);
+    video.addEventListener("volumechange", onVolumeChange);
     video.load();
 
     return () => {
       video.removeEventListener("canplay", onCanPlay);
       video.removeEventListener("error", onError);
+      video.removeEventListener("volumechange", onVolumeChange);
       hls?.destroy();
       video.removeAttribute("src");
       video.load();
@@ -3338,7 +3397,7 @@ function NameDialog({ state, onClose }: { state: NameDialogState; onClose: () =>
   const [value, setValue] = useState(state.initialValue);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setValue(state.initialValue);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
@@ -3366,6 +3425,13 @@ function NameDialog({ state, onClose }: { state: NameDialogState; onClose: () =>
           event.preventDefault();
           submit();
         }}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onClose();
+          }
+        }}
       >
         <div className="modal-head">
           <h2>{state.title}</h2>
@@ -3378,6 +3444,8 @@ function NameDialog({ state, onClose }: { state: NameDialogState; onClose: () =>
             ref={inputRef}
             className="plain-input"
             value={value}
+            autoFocus
+            aria-label={state.title}
             onChange={(event) => setValue(event.target.value)}
           />
           <div className="settings-actions">
@@ -3390,6 +3458,61 @@ function NameDialog({ state, onClose }: { state: NameDialogState; onClose: () =>
           </div>
         </div>
       </motion.form>
+    </motion.div>
+  );
+}
+
+function SteamSwitchModal({ prompt }: { prompt: SteamSwitchPrompt }) {
+  const confirm = () => prompt.resolve(true);
+  const cancel = () => prompt.resolve(false);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        cancel();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [prompt]);
+
+  return (
+    <motion.div className="modal-backdrop switch-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <button className="image-viewer-scrim" type="button" aria-label="Cancel account switch" onClick={cancel} />
+      <motion.div
+        className="name-dialog switch-dialog"
+        initial={{ opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 8 }}
+        transition={{ duration: 0.14 }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="steam-switch-title"
+      >
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">Steam account</p>
+            <h2 id="steam-switch-title">Switch before launch?</h2>
+          </div>
+          <button className="close-button inline-close" type="button" onClick={cancel} aria-label="Cancel account switch">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="name-dialog-body switch-dialog-body">
+          <p>
+            <strong>{prompt.gameTitle}</strong> needs Steam to switch from <span>{prompt.fromLabel}</span> to <span>{prompt.toLabel}</span>.
+          </p>
+          <p className="muted">Steam will close and restart silently, then Hynite will launch the game.</p>
+          <div className="settings-actions">
+            <button className="primary-action" type="button" onClick={confirm}>
+              Switch and launch
+            </button>
+            <button className="secondary-action" type="button" onClick={cancel}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </motion.div>
     </motion.div>
   );
 }
@@ -3702,6 +3825,7 @@ export function App() {
   const [activeGroupId, setActiveGroupIdState] = useState<string | undefined>();
   const [contextMenu, setContextMenu] = useState<GameContextMenuRequest | undefined>();
   const [nameDialog, setNameDialog] = useState<NameDialogState | undefined>();
+  const [switchPrompt, setSwitchPrompt] = useState<SteamSwitchPrompt | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
   const [query, setQueryState] = useState("");
   const queryRef = useRef("");
@@ -3737,6 +3861,33 @@ export function App() {
 
   useEffect(() => {
     profileStartup("app:mounted", "App component mounted");
+  }, []);
+
+  useEffect(() => {
+    const onSwitchPrompt = (event: Event) => {
+      const detail = (event as CustomEvent<Omit<SteamSwitchPrompt, "resolve"> & {
+        handled: boolean;
+        resolve: (confirmed: boolean) => void;
+      }>).detail;
+      if (!detail) {
+        return;
+      }
+      detail.handled = true;
+      setSwitchPrompt({
+        gameId: detail.gameId,
+        gameTitle: detail.gameTitle,
+        fromLabel: detail.fromLabel,
+        toLabel: detail.toLabel,
+        targetSteamId: detail.targetSteamId,
+        resolve: (confirmed) => {
+          setSwitchPrompt(undefined);
+          detail.resolve(confirmed);
+        }
+      });
+    };
+
+    window.addEventListener(STEAM_SWITCH_CONFIRM_EVENT, onSwitchPrompt);
+    return () => window.removeEventListener(STEAM_SWITCH_CONFIRM_EVENT, onSwitchPrompt);
   }, []);
 
   useEffect(() => {
@@ -4258,6 +4409,7 @@ export function App() {
           onChanged={() => void refresh()}
         />
         {nameDialog ? <NameDialog state={nameDialog} onClose={() => setNameDialog(undefined)} /> : null}
+        {switchPrompt ? <SteamSwitchModal prompt={switchPrompt} /> : null}
       </div>
       <footer className="statusbar">
         <span className="status-dot" />

@@ -3290,6 +3290,20 @@ dd {
   width: 100%;
 }
 
+.switch-dialog {
+  width: min(500px, 92vw);
+}
+
+.switch-dialog-body p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.switch-dialog-body p span {
+  color: var(--accent, #7eb8f7);
+}
+
 .modal-head {
   display: flex;
   justify-content: space-between;

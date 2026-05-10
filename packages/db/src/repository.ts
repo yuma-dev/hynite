@@ -550,6 +550,48 @@ export class HyniteRepository {
     return Number(result.changes);
   }
 
+  pruneProviderSources(
+    provider: ProviderId,
+    ownerSteamids: string[],
+    retainedSources: Array<{ externalId: string; ownerSteamid?: string }>
+  ): { sourcesRemoved: number; gamesRemoved: number } {
+    const owners = [...new Set(ownerSteamids.map((owner) => owner.trim()).filter((owner) => owner.length > 0 || owner === ""))];
+    if (owners.length === 0) {
+      return { sourcesRemoved: 0, gamesRemoved: 0 };
+    }
+
+    const retained = new Set(retainedSources.map((source) => `${source.externalId}\u0000${source.ownerSteamid ?? ""}`));
+    return this.transaction(() => {
+      const placeholders = owners.map(() => "?").join(", ");
+      const rows = this.db
+        .prepare(`SELECT provider, external_id, owner_steamid FROM game_sources WHERE provider = ? AND owner_steamid IN (${placeholders})`)
+        .all(provider, ...owners) as Array<{ provider: ProviderId; external_id: string; owner_steamid: string | null }>;
+
+      let sourcesRemoved = 0;
+      const deleteSource = this.db.prepare("DELETE FROM game_sources WHERE provider = ? AND external_id = ? AND owner_steamid = ?");
+      for (const row of rows) {
+        const ownerSteamid = row.owner_steamid ?? "";
+        if (retained.has(`${row.external_id}\u0000${ownerSteamid}`)) {
+          continue;
+        }
+        sourcesRemoved += Number(deleteSource.run(row.provider, row.external_id, ownerSteamid).changes);
+      }
+
+      const gamesRemoved = Number(
+        this.db
+          .prepare(
+            `DELETE FROM games
+             WHERE NOT EXISTS (
+               SELECT 1 FROM game_sources WHERE game_sources.game_id = games.id
+             )`
+          )
+          .run().changes
+      );
+
+      return { sourcesRemoved, gamesRemoved };
+    });
+  }
+
   saveDownloadSource(input: {
     id: string;
     name: string;
@@ -707,25 +749,38 @@ export class HyniteRepository {
   exactDownloadTitleMatches(normalizedTitle: string): SourceExactMatch[] {
     const trimmed = normalizedTitle.trim();
     if (!trimmed) return [];
+    const likePattern = `%${trimmed.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
     const rows = this.db
       .prepare(
-        `SELECT s.id as source_id, s.name as source_name, COUNT(e.id) as match_count
+        `SELECT e.normalized_title, s.id as source_id, s.name as source_name
          FROM download_entries e
          INNER JOIN download_sources s ON s.id = e.source_id
-         WHERE e.normalized_title = ?
-         GROUP BY s.id, s.name
-         ORDER BY match_count DESC, s.name ASC`
+         WHERE e.normalized_title LIKE ? ESCAPE '\\'`
       )
-      .all(trimmed) as Array<{
+      .all(likePattern) as Array<{
+      normalized_title: string;
       source_id: string;
       source_name: string;
-      match_count: number;
     }>;
 
-    return rows.map((row) => ({
-      sourceId: row.source_id,
-      sourceName: row.source_name,
-      count: row.match_count
+    const paddedNeedle = ` ${trimmed} `;
+    const counts = new Map<string, { sourceId: string; sourceName: string; count: number }>();
+    for (const row of rows) {
+      if (!` ${row.normalized_title} `.includes(paddedNeedle)) {
+        continue;
+      }
+      const existing = counts.get(row.source_id);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        counts.set(row.source_id, { sourceId: row.source_id, sourceName: row.source_name, count: 1 });
+      }
+    }
+
+    return [...counts.values()].sort((a, b) => b.count - a.count || a.sourceName.localeCompare(b.sourceName)).map((row) => ({
+      sourceId: row.sourceId,
+      sourceName: row.sourceName,
+      count: row.count
     }));
   }
 

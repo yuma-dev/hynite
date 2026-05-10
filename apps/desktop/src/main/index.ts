@@ -1,7 +1,7 @@
-import { app, BrowserWindow, clipboard, ipcMain, net, shell } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, net, protocol, shell } from "electron";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { CURRENT_METADATA_VERSION, HyniteRepository } from "@hynite/db";
+import { HyniteRepository } from "@hynite/db";
 import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider } from "@hynite/importers";
 import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
@@ -14,6 +14,7 @@ import { SourceService } from "./sourceService";
 import { searchSteamStore } from "./steamSearchService";
 import { StartupProfileService } from "./startupProfileService";
 import { SyncStatusService } from "./syncStatusService";
+import { AssetCacheService } from "./assetCacheService";
 import {
   authenticateSteamSession,
   disconnectSteamFamilySession,
@@ -28,6 +29,7 @@ let homeService: HomeService;
 let sourceService: SourceService;
 let nativeBridge: NativeBridge;
 let syncStatusService: SyncStatusService;
+let assetCacheService: AssetCacheService;
 let diagnosticLogService: DiagnosticLogService;
 let startupProfileService: StartupProfileService | undefined;
 let startupHeartbeatTimer: NodeJS.Timeout | undefined;
@@ -38,6 +40,9 @@ const RICH_METADATA_CONCURRENCY = 1;
 const RICH_METADATA_STARTUP_LIMIT = Number.POSITIVE_INFINITY;
 const STARTUP_BACKGROUND_DELAY_MS = 1_000;
 const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
+protocol.registerSchemesAsPrivileged([
+  { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true } }
+]);
 const richMetadataQueued = new Set<string>();
 const richMetadataQueue: string[] = [];
 const richMetadataInFlight = new Set<string>();
@@ -209,8 +214,8 @@ async function resolveFamilyAccessTokenForAccount(account: SteamAccountSettings)
   }
 }
 
-function hasReusableMetadata(game: { metadataStatus: string; metadataVersion?: number; id?: string }): boolean {
-  return game.metadataStatus !== "none" && (game.metadataVersion ?? (game.id ? repository.getMetadataVersion(game.id) : 0)) >= CURRENT_METADATA_VERSION;
+function hasAnyCachedMetadata(game: { metadataStatus: string }): boolean {
+  return game.metadataStatus !== "none";
 }
 
 function saveSteamRawMetadata(gameId: string, externalId: string, source: string, raw: unknown): void {
@@ -230,6 +235,10 @@ function saveSteamRawMetadata(gameId: string, externalId: string, source: string
       details: { source, error: error instanceof Error ? error.message : String(error) }
     });
   }
+}
+
+async function cacheMetadataAssets(patch: GameMetadataPatch, refresh = false): Promise<GameMetadataPatch> {
+  return assetCacheService ? assetCacheService.cacheMetadataPatch(patch, { refresh }) : patch;
 }
 
 async function fetchNativeSteamAppInfoMetadata(game: ImportedGame) {
@@ -320,7 +329,7 @@ async function hydrateRichDetailMetadata(game: Game): Promise<Game> {
       return game;
     }
 
-    repository.applyMetadata(game.id, metadata);
+    repository.applyMetadata(game.id, await cacheMetadataAssets(metadata));
     return repository.getGame(game.id) ?? game;
   } catch (error) {
     diagnosticLogService.log({
@@ -378,7 +387,7 @@ async function hydrateDiscoveryDetailMetadata(game: Game): Promise<Game> {
       return game;
     }
 
-    return mergeDetailMetadata(game, metadata);
+    return mergeDetailMetadata(game, await cacheMetadataAssets(metadata));
   } catch (error) {
     diagnosticLogService.log({
       level: "warning",
@@ -762,12 +771,12 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
           };
           const persisted = repository.upsertImportedGameSummary(gameWithInstallState);
           upserted += 1;
-          if (hasReusableMetadata(persisted)) {
+          if (hasAnyCachedMetadata(persisted) && !refreshStaleMetadata) {
             metadataCacheHits += 1;
             continue;
           }
 
-          if (!refreshStaleMetadata && persisted.metadataStatus !== "none") {
+          if (refreshStaleMetadata && persisted.metadataStatus !== "none") {
             staleMetadataCount += 1;
           }
 
@@ -797,7 +806,21 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       syncStatusService.log("info", "metadata:cache", `Metadata cache hits: ${metadataCacheHits}/${upserted}`);
     }
     if (staleMetadataCount > 0) {
-      syncStatusService.log("info", "metadata:cache", `Stale metadata targets queued: ${staleMetadataCount}`);
+      syncStatusService.log("info", "metadata:cache", `Manual metadata refresh targets queued: ${staleMetadataCount}`);
+    }
+
+    const pruneResult = repository.pruneProviderSources(
+      "steam",
+      ["", ...eligibleAccounts.map((account) => account.steamId)],
+      imported.map((game) => ({ externalId: game.externalId, ownerSteamid: game.ownerSteamid ?? "" }))
+    );
+    if (pruneResult.sourcesRemoved > 0 || pruneResult.gamesRemoved > 0) {
+      syncStatusService.log(
+        "info",
+        "steam:prune",
+        `Removed ${pruneResult.gamesRemoved} Steam games no longer listed by synced accounts`,
+        { sourcesRemoved: pruneResult.sourcesRemoved, gamesRemoved: pruneResult.gamesRemoved }
+      );
     }
 
     await mapWithConcurrency(metadataTargets, METADATA_REFRESH_CONCURRENCY, async (target, index) => {
@@ -805,7 +828,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       syncStatusService.progress("metadata:refresh", `Fetching fast metadata for ${target.game.title}`, index + 1, metadataTargets.length, {
         appid: target.game.externalId
       });
-      const metadata = await provider.refreshMetadata(target.game);
+      const metadata = await cacheMetadataAssets(await provider.refreshMetadata(target.game), refreshStaleMetadata);
       throwIfSteamSyncCancelled(options.signal);
       repository.applyMetadata(target.id, metadata);
       const enriched = repository.getGame(target.id);
@@ -1186,6 +1209,8 @@ app.whenReady().then(() => {
   diagnosticLogService = new DiagnosticLogService(join(userData, "metadata-diagnostics.ndjson"));
   homeService = new HomeService(join(userData, "home-cache.json"), diagnosticLogService);
   sourceService = new SourceService(repository);
+  assetCacheService = new AssetCacheService(join(userData, "asset-cache"));
+  assetCacheService.registerProtocol(protocol);
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, join(userData, "sync-status.json"));
   profile("services:ready", "Main services initialized");
