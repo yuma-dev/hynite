@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings } from "@hynite/core";
+import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings } from "@hynite/core";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
   "^_redist$",
@@ -20,6 +20,25 @@ const DEFAULT_SOUND_SETTINGS: SoundSettings = {
   effects: {}
 };
 
+const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
+  enabled: true,
+  volume: 0.4,
+  tracks: [],
+  startupDelayEnabled: true,
+  startupDelayMs: 5_000,
+  fadesEnabled: true,
+  trackFadeInMs: 5_000,
+  pauseFadeOutMs: 2_000,
+  resumeFadeInMs: 1_500,
+  gameLaunchFadeOutMs: 600,
+  pauseOnGameLaunch: true,
+  pauseOnFocusLoss: true,
+  pauseOnSystemAudio: true,
+  continuousPlay: false,
+  gapMinMs: 30_000,
+  gapMaxMs: 120_000
+};
+
 const defaultSettings: AppSettings = {
   steamAccounts: [],
   steamWebApiKey: undefined,
@@ -32,7 +51,8 @@ const defaultSettings: AppSettings = {
   gameGroups: [],
   localRoots: [],
   localExcludePatterns: DEFAULT_LOCAL_EXCLUDE_PATTERNS,
-  sound: DEFAULT_SOUND_SETTINGS
+  sound: DEFAULT_SOUND_SETTINGS,
+  music: DEFAULT_MUSIC_SETTINGS
 };
 
 type LegacyAccount = SteamAccountSettings & { webApiKey?: EncryptedSecret };
@@ -132,6 +152,43 @@ function sanitizeSoundSettings(value: unknown): SoundSettings {
   };
 }
 
+function clampMs(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.round(value)))
+    : fallback;
+}
+
+function sanitizeMusicSettings(value: unknown): MusicSettings {
+  const candidate = value && typeof value === "object" ? value as Partial<MusicSettings> : {};
+  const tracks = Array.isArray(candidate.tracks)
+    ? candidate.tracks.flatMap((track) => {
+      const filePath = typeof track?.filePath === "string" ? track.filePath.trim() : "";
+      return filePath ? [{ filePath }] : [];
+    })
+    : [];
+  const gapMinMs = clampMs(candidate.gapMinMs, DEFAULT_MUSIC_SETTINGS.gapMinMs!, 0, 600_000);
+  const gapMaxMs = clampMs(candidate.gapMaxMs, DEFAULT_MUSIC_SETTINGS.gapMaxMs!, 0, 600_000);
+
+  return {
+    enabled: candidate.enabled !== false,
+    volume: clampVolume(candidate.volume, DEFAULT_MUSIC_SETTINGS.volume!),
+    tracks,
+    startupDelayEnabled: candidate.startupDelayEnabled !== false,
+    startupDelayMs: clampMs(candidate.startupDelayMs, DEFAULT_MUSIC_SETTINGS.startupDelayMs!, 0, 60_000),
+    fadesEnabled: candidate.fadesEnabled !== false,
+    trackFadeInMs: clampMs(candidate.trackFadeInMs, DEFAULT_MUSIC_SETTINGS.trackFadeInMs!, 0, 30_000),
+    pauseFadeOutMs: clampMs(candidate.pauseFadeOutMs, DEFAULT_MUSIC_SETTINGS.pauseFadeOutMs!, 0, 30_000),
+    resumeFadeInMs: clampMs(candidate.resumeFadeInMs, DEFAULT_MUSIC_SETTINGS.resumeFadeInMs!, 0, 30_000),
+    gameLaunchFadeOutMs: clampMs(candidate.gameLaunchFadeOutMs, DEFAULT_MUSIC_SETTINGS.gameLaunchFadeOutMs!, 0, 10_000),
+    pauseOnGameLaunch: candidate.pauseOnGameLaunch !== false,
+    pauseOnFocusLoss: candidate.pauseOnFocusLoss !== false,
+    pauseOnSystemAudio: candidate.pauseOnSystemAudio !== false,
+    continuousPlay: candidate.continuousPlay === true,
+    gapMinMs: Math.min(gapMinMs, gapMaxMs),
+    gapMaxMs: Math.max(gapMinMs, gapMaxMs)
+  };
+}
+
 function migrate(raw: LegacySettings): AppSettings {
   const rawAccounts: LegacyAccount[] = Array.isArray(raw.steamAccounts)
     ? raw.steamAccounts
@@ -156,7 +213,8 @@ function migrate(raw: LegacySettings): AppSettings {
     steamAccounts: cleanedAccounts,
     steamWebApiKey: liftedKey,
     gameGroups: sanitizeGameGroups(raw.gameGroups),
-    sound: sanitizeSoundSettings(raw.sound)
+    sound: sanitizeSoundSettings(raw.sound),
+    music: sanitizeMusicSettings(raw.music)
   };
 }
 
@@ -179,6 +237,7 @@ export class SettingsService {
     }
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
     next.sound = sanitizeSoundSettings(next.sound);
+    next.music = sanitizeMusicSettings(next.music);
     await mkdir(dirname(this.filePath), { recursive: true });
     await writeFile(this.filePath, JSON.stringify(next, null, 2));
     return next;

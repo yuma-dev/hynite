@@ -521,6 +521,19 @@ export type MusicSettings = {
   enabled?: boolean;
   volume?: number;
   tracks?: MusicTrack[];
+  startupDelayEnabled?: boolean;
+  startupDelayMs?: number;
+  fadesEnabled?: boolean;
+  trackFadeInMs?: number;
+  pauseFadeOutMs?: number;
+  resumeFadeInMs?: number;
+  gameLaunchFadeOutMs?: number;
+  pauseOnGameLaunch?: boolean;
+  pauseOnFocusLoss?: boolean;
+  pauseOnSystemAudio?: boolean;
+  continuousPlay?: boolean;
+  gapMinMs?: number;
+  gapMaxMs?: number;
 };
 
 export type AppSettings = {

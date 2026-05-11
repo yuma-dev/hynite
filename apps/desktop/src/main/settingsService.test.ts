@@ -81,6 +81,51 @@ describe("SettingsService", () => {
     });
   });
 
+  it("persists and sanitizes music settings", async () => {
+    const service = createService();
+    await service.update({
+      music: {
+        enabled: true,
+        volume: 2,
+        tracks: [{ filePath: " C:\\Music\\one.mp3 " }, { filePath: "" }],
+        startupDelayEnabled: false,
+        startupDelayMs: -1,
+        fadesEnabled: true,
+        trackFadeInMs: 45_000,
+        pauseFadeOutMs: 750,
+        resumeFadeInMs: 1_250,
+        gameLaunchFadeOutMs: 12_000,
+        pauseOnGameLaunch: false,
+        pauseOnFocusLoss: false,
+        pauseOnSystemAudio: false,
+        continuousPlay: true,
+        gapMinMs: 90_000,
+        gapMaxMs: 10_000
+      }
+    });
+
+    await expect(service.get()).resolves.toMatchObject({
+      music: {
+        enabled: true,
+        volume: 1,
+        tracks: [{ filePath: "C:\\Music\\one.mp3" }],
+        startupDelayEnabled: false,
+        startupDelayMs: 0,
+        fadesEnabled: true,
+        trackFadeInMs: 30_000,
+        pauseFadeOutMs: 750,
+        resumeFadeInMs: 1_250,
+        gameLaunchFadeOutMs: 10_000,
+        pauseOnGameLaunch: false,
+        pauseOnFocusLoss: false,
+        pauseOnSystemAudio: false,
+        continuousPlay: true,
+        gapMinMs: 10_000,
+        gapMaxMs: 90_000
+      }
+    });
+  });
+
   it("writes and clears per-game launch account preferences without dropping settings", async () => {
     const service = createService();
     await service.update({

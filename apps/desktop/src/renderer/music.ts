@@ -1,12 +1,23 @@
 import type { AppSettings, MusicSettings } from "@hynite/core";
 
-const TRACK_FADE_IN_MS = 5_000;
-const FOCUS_FADE_OUT_MS = 2_000;
-const FOCUS_FADE_IN_MS = 1_500;
-const GAME_LAUNCH_FADE_MS = 600;
-const GAP_MIN_MS = 30_000;
-const GAP_MAX_MS = 120_000;
-const STARTUP_DELAY_MS = 5_000;
+const DEFAULT_MUSIC_SETTINGS: Required<Omit<MusicSettings, "tracks">> & { tracks: NonNullable<MusicSettings["tracks"]> } = {
+  enabled: true,
+  volume: 0.4,
+  tracks: [],
+  startupDelayEnabled: true,
+  startupDelayMs: 5_000,
+  fadesEnabled: true,
+  trackFadeInMs: 5_000,
+  pauseFadeOutMs: 2_000,
+  resumeFadeInMs: 1_500,
+  gameLaunchFadeOutMs: 600,
+  pauseOnGameLaunch: true,
+  pauseOnFocusLoss: true,
+  pauseOnSystemAudio: true,
+  continuousPlay: false,
+  gapMinMs: 30_000,
+  gapMaxMs: 120_000
+};
 
 export type MusicStatus = {
   active: boolean;
@@ -38,13 +49,34 @@ function clampVol(value: unknown, fallback: number): number {
     : fallback;
 }
 
+function clampMs(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.round(value)))
+    : fallback;
+}
+
 function normalizeMusicSettings(settings?: MusicSettings): MusicSettings {
+  const gapMinMs = clampMs(settings?.gapMinMs, DEFAULT_MUSIC_SETTINGS.gapMinMs, 0, 600_000);
+  const gapMaxMs = clampMs(settings?.gapMaxMs, DEFAULT_MUSIC_SETTINGS.gapMaxMs, 0, 600_000);
   return {
     enabled: settings?.enabled !== false,
-    volume: clampVol(settings?.volume, 0.4),
+    volume: clampVol(settings?.volume, DEFAULT_MUSIC_SETTINGS.volume),
     tracks: Array.isArray(settings?.tracks)
       ? settings.tracks.filter((t) => typeof t?.filePath === "string" && t.filePath.trim())
-      : []
+      : [],
+    startupDelayEnabled: settings?.startupDelayEnabled !== false,
+    startupDelayMs: clampMs(settings?.startupDelayMs, DEFAULT_MUSIC_SETTINGS.startupDelayMs, 0, 60_000),
+    fadesEnabled: settings?.fadesEnabled !== false,
+    trackFadeInMs: clampMs(settings?.trackFadeInMs, DEFAULT_MUSIC_SETTINGS.trackFadeInMs, 0, 30_000),
+    pauseFadeOutMs: clampMs(settings?.pauseFadeOutMs, DEFAULT_MUSIC_SETTINGS.pauseFadeOutMs, 0, 30_000),
+    resumeFadeInMs: clampMs(settings?.resumeFadeInMs, DEFAULT_MUSIC_SETTINGS.resumeFadeInMs, 0, 30_000),
+    gameLaunchFadeOutMs: clampMs(settings?.gameLaunchFadeOutMs, DEFAULT_MUSIC_SETTINGS.gameLaunchFadeOutMs, 0, 10_000),
+    pauseOnGameLaunch: settings?.pauseOnGameLaunch !== false,
+    pauseOnFocusLoss: settings?.pauseOnFocusLoss !== false,
+    pauseOnSystemAudio: settings?.pauseOnSystemAudio !== false,
+    continuousPlay: settings?.continuousPlay === true,
+    gapMinMs: Math.min(gapMinMs, gapMaxMs),
+    gapMaxMs: Math.max(gapMinMs, gapMaxMs)
   };
 }
 
@@ -59,7 +91,7 @@ export class MusicEngine {
 
   // Audio graph: source → trackGain → masterGain → destination
   // masterGain: overall volume + audibility fades
-  // trackGain: per-track fade-in envelope (0→1 over TRACK_FADE_IN_MS for new tracks, 1 when resuming mid-track)
+  // trackGain: per-track fade-in envelope for new tracks, 1 when resuming mid-track
   private context: AudioContext | undefined;
   private masterGain: GainNode | undefined;
   private trackGain: GainNode | undefined;
@@ -81,6 +113,8 @@ export class MusicEngine {
   private audible = false; // whether we're currently outputting sound (not paused)
   private playing = false; // whether a source node is alive
   private inGap = false;
+  private launchPauseActive = false;
+  private launchPauseSawBlur = false;
 
   // Shuffle queue: every track plays exactly once per pass before any repeat.
   // When a queue ends, the next one is generated avoiding the previous queue's
@@ -107,8 +141,9 @@ export class MusicEngine {
     let pauseReason: string | null = null;
     if (this.active && settingsEnabled && hasTracks && !this.audible) {
       if (this.startupTimer) pauseReason = "waiting for startup";
-      else if (!this.focused) pauseReason = "not focused";
-      else if (this.systemAudioActive) pauseReason = "system audio detected";
+      else if (this.launchPauseActive) pauseReason = "game launched";
+      else if (this.settings.pauseOnFocusLoss !== false && !this.focused) pauseReason = "not focused";
+      else if (this.settings.pauseOnSystemAudio !== false && this.systemAudioActive) pauseReason = "system audio detected";
       else pauseReason = "paused";
     }
     return {
@@ -143,7 +178,7 @@ export class MusicEngine {
     if (trackListChanged) {
       // Indices in the queue refer to the old track list; drop it.
       console.log(
-        `[MusicEngine] track list changed (${oldTracks.length} → ${newTracks.length}); resetting queue`
+        `[MusicEngine] track list changed (${oldTracks.length} -> ${newTracks.length}); resetting queue`
       );
       this.queue = [];
       this.queueIndex = 0;
@@ -155,8 +190,35 @@ export class MusicEngine {
     this.settings = next;
 
     this.applyMasterVolume();
+    if (this.settings.pauseOnGameLaunch === false && this.launchPauseActive) {
+      this.releaseLaunchPause();
+    }
 
-    if (wasEnabled && !nowEnabled) {
+    if (!this.canPlay()) {
+      this.launchPauseActive = false;
+      this.launchPauseSawBlur = false;
+      if (this.startupTimer) {
+        clearTimeout(this.startupTimer);
+        this.startupTimer = undefined;
+      }
+      this.cancelGapTimer();
+      if (this.playing || this.audible) {
+        this.audible = false;
+        const fadeMs = this.fadeMs("pauseFadeOutMs");
+        this.fadeGainTo(0, fadeMs);
+        this.killSource(fadeMs);
+      }
+    } else if (this.startupTimer && (!this.settings.startupDelayEnabled || !this.settings.startupDelayMs)) {
+      clearTimeout(this.startupTimer);
+      this.startupTimer = undefined;
+      if (this.shouldBeAudible()) {
+        this.audible = true;
+        this.doResume();
+      }
+    } else if (this.inGap && this.settings.continuousPlay === true && this.audible) {
+      this.cancelGapTimer();
+      this.beginPlayback();
+    } else if (wasEnabled && !nowEnabled) {
       if (this.audible) {
         this.audible = false;
         this.doPause();
@@ -166,6 +228,8 @@ export class MusicEngine {
         this.audible = true;
         this.doResume();
       }
+    } else {
+      this.onAudibilityChanged();
     }
     this.emit();
   }
@@ -175,6 +239,14 @@ export class MusicEngine {
     this.active = true;
     this.startSystemPoll();
     if (!this.canPlay()) { this.emit(); return; }
+    if (!this.settings.startupDelayEnabled || !this.settings.startupDelayMs) {
+      if (this.shouldBeAudible()) {
+        this.audible = true;
+        this.doResume();
+      }
+      this.emit();
+      return;
+    }
     this.startupTimer = setTimeout(() => {
       this.startupTimer = undefined;
       if (this.shouldBeAudible()) {
@@ -182,13 +254,19 @@ export class MusicEngine {
         this.doResume();
       }
       this.emit();
-    }, STARTUP_DELAY_MS);
+    }, this.settings.startupDelayMs);
     this.emit();
   }
 
   setFocused(focused: boolean): void {
     if (this.focused === focused) return;
     this.focused = focused;
+    if (this.launchPauseActive && !focused) {
+      this.launchPauseSawBlur = true;
+    }
+    if (this.launchPauseActive && focused && this.launchPauseSawBlur) {
+      this.releaseLaunchPause();
+    }
     this.onAudibilityChanged();
   }
 
@@ -211,17 +289,18 @@ export class MusicEngine {
   }
 
   onGameLaunch(): void {
+    if (this.settings.pauseOnGameLaunch === false) {
+      return;
+    }
+    this.launchPauseActive = true;
+    this.launchPauseSawBlur = !this.focused;
     if (this.startupTimer) {
       clearTimeout(this.startupTimer);
       this.startupTimer = undefined;
     }
-    this.cancelGapTimer();
-    this.pausedState = undefined;
-    this.pausedAt = undefined;
     if (this.playing || this.audible) {
       this.audible = false;
-      this.fadeGainTo(0, GAME_LAUNCH_FADE_MS);
-      this.killSource(GAME_LAUNCH_FADE_MS);
+      this.doPause(this.fadeMs("gameLaunchFadeOutMs"));
     }
     this.emit();
   }
@@ -239,7 +318,15 @@ export class MusicEngine {
   }
 
   private shouldBeAudible(): boolean {
-    return this.canPlay() && this.focused && !this.systemAudioActive;
+    return this.canPlay()
+      && !this.launchPauseActive
+      && (this.settings.pauseOnFocusLoss === false || this.focused)
+      && (this.settings.pauseOnSystemAudio === false || !this.systemAudioActive);
+  }
+
+  private releaseLaunchPause(): void {
+    this.launchPauseActive = false;
+    this.launchPauseSawBlur = false;
   }
 
   private onAudibilityChanged(): void {
@@ -256,14 +343,14 @@ export class MusicEngine {
   }
 
   // Record virtual state, fade out, stop source.
-  private doPause(): void {
+  private doPause(fadeMs = this.fadeMs("pauseFadeOutMs")): void {
     if (this.playing && this.context && this.currentBuffer) {
       const ctx = this.context;
       const elapsed = ctx.currentTime - this.sourceStartedAtCtxTime;
       const positionS = Math.min(this.sourceStartOffset + elapsed, this.currentBuffer.duration - 0.01);
       this.pausedState = { kind: "playing", buffer: this.currentBuffer, positionS };
-      this.fadeGainTo(0, FOCUS_FADE_OUT_MS);
-      this.killSource(FOCUS_FADE_OUT_MS);
+      this.fadeGainTo(0, fadeMs);
+      this.killSource(fadeMs);
     } else if (this.inGap && this.gapEndsAt !== undefined) {
       this.pausedState = { kind: "gap", gapEndsAt: this.gapEndsAt };
       this.cancelGapTimer();
@@ -287,17 +374,17 @@ export class MusicEngine {
 
       if (virtualPosS < state.buffer.duration) {
         // Still within the same track — resume from virtual position with a short fade-in.
-        this.setMasterToVolume(FOCUS_FADE_IN_MS);
+        this.setMasterToVolume(this.fadeMs("resumeFadeInMs"));
         this.playBuffer(state.buffer, virtualPosS, /* newTrack */ false);
         return;
       }
 
       // Track finished while away. Calculate when, then decide on gap.
       const trackEndedMsAgo = (elapsedS - (state.buffer.duration - state.positionS)) * 1000;
-      const gapMs = GAP_MIN_MS + Math.random() * (GAP_MAX_MS - GAP_MIN_MS);
+      const gapMs = this.nextGapMs();
       if (trackEndedMsAgo >= gapMs) {
         // Gap also elapsed — start next track immediately.
-        this.setMasterToVolume(FOCUS_FADE_IN_MS);
+        this.setMasterToVolume(this.fadeMs("resumeFadeInMs"));
         this.beginPlayback();
       } else {
         // Still in the gap — wait for the remainder.
@@ -309,7 +396,7 @@ export class MusicEngine {
           this.gapEndsAt = undefined;
           this.inGap = false;
           if (this.audible) {
-            this.setMasterToVolume(FOCUS_FADE_IN_MS);
+            this.setMasterToVolume(this.fadeMs("resumeFadeInMs"));
             this.beginPlayback();
           }
         }, remainingMs);
@@ -320,7 +407,7 @@ export class MusicEngine {
     if (state.kind === "gap" && state.gapEndsAt !== undefined) {
       const remainingMs = state.gapEndsAt - Date.now();
       if (remainingMs <= 0) {
-        this.setMasterToVolume(FOCUS_FADE_IN_MS);
+        this.setMasterToVolume(this.fadeMs("resumeFadeInMs"));
         this.beginPlayback();
       } else {
         this.gapEndsAt = state.gapEndsAt;
@@ -330,7 +417,7 @@ export class MusicEngine {
           this.gapEndsAt = undefined;
           this.inGap = false;
           if (this.audible) {
-            this.setMasterToVolume(FOCUS_FADE_IN_MS);
+            this.setMasterToVolume(this.fadeMs("resumeFadeInMs"));
             this.beginPlayback();
           }
         }, remainingMs);
@@ -411,8 +498,7 @@ export class MusicEngine {
     this.playBuffer(buffer, 0, /* newTrack */ true);
   }
 
-  // newTrack=true  → trackGain fades 0→1 over TRACK_FADE_IN_MS (masterGain already at volume)
-  // newTrack=false → trackGain set to 1 immediately (masterGain does the fade-in separately)
+  // newTrack=true fades trackGain up using settings; resumed tracks use masterGain fade only.
   private playBuffer(buffer: AudioBuffer, offsetS: number, newTrack: boolean): void {
     const ctx = this.getContext();
     const master = this.masterGain;
@@ -433,8 +519,13 @@ export class MusicEngine {
     const tg = this.trackGain;
     tg.gain.cancelScheduledValues(ctx.currentTime);
     if (newTrack) {
-      tg.gain.setValueAtTime(0, ctx.currentTime);
-      tg.gain.linearRampToValueAtTime(1, ctx.currentTime + TRACK_FADE_IN_MS / 1000);
+      const fadeMs = this.fadeMs("trackFadeInMs");
+      if (fadeMs > 0) {
+        tg.gain.setValueAtTime(0, ctx.currentTime);
+        tg.gain.linearRampToValueAtTime(1, ctx.currentTime + fadeMs / 1000);
+      } else {
+        tg.gain.setValueAtTime(1, ctx.currentTime);
+      }
     } else {
       tg.gain.setValueAtTime(1, ctx.currentTime);
     }
@@ -463,7 +554,11 @@ export class MusicEngine {
   private onTrackEnded(): void {
     this.currentTrackIndex = null;
     if (!this.audible) return;
-    const gapMs = GAP_MIN_MS + Math.random() * (GAP_MAX_MS - GAP_MIN_MS);
+    if (this.settings.continuousPlay === true) {
+      this.beginPlayback();
+      return;
+    }
+    const gapMs = this.nextGapMs();
     console.log(`[MusicEngine] track ended; gap=${Math.round(gapMs / 1000)}s before next`);
     this.gapEndsAt = Date.now() + gapMs;
     this.inGap = true;
@@ -482,6 +577,17 @@ export class MusicEngine {
     }
     this.gapEndsAt = undefined;
     this.inGap = false;
+  }
+
+  private fadeMs(key: "trackFadeInMs" | "pauseFadeOutMs" | "resumeFadeInMs" | "gameLaunchFadeOutMs"): number {
+    return this.settings.fadesEnabled === false ? 0 : Math.max(0, this.settings[key] ?? DEFAULT_MUSIC_SETTINGS[key]);
+  }
+
+  private nextGapMs(): number {
+    if (this.settings.continuousPlay === true) return 0;
+    const min = Math.max(0, this.settings.gapMinMs ?? DEFAULT_MUSIC_SETTINGS.gapMinMs);
+    const max = Math.max(min, this.settings.gapMaxMs ?? DEFAULT_MUSIC_SETTINGS.gapMaxMs);
+    return min + Math.random() * (max - min);
   }
 
   private killSource(fadeMs: number): void {

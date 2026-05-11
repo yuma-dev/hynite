@@ -2785,6 +2785,35 @@ function soundEffectUpdate(
   });
 }
 
+function musicSettingsPatch(settings: MusicSettings | undefined, patch: Partial<MusicSettings>): MusicSettings {
+  return normalizeMusicSettings({
+    ...normalizeMusicSettings(settings),
+    ...patch
+  });
+}
+
+function msToSeconds(value: number | undefined): number {
+  return Math.round(((value ?? 0) / 1000) * 10) / 10;
+}
+
+function secondsToMs(value: string): number {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? Math.max(0, Math.round(seconds * 1000)) : 0;
+}
+
+type MusicTimingKey = "trackFadeInMs" | "pauseFadeOutMs" | "resumeFadeInMs" | "gameLaunchFadeOutMs";
+
+const MUSIC_FADE_CONTROLS: Array<{ label: string; key: MusicTimingKey; max: number }> = [
+  { label: "Track", key: "trackFadeInMs", max: 30 },
+  { label: "Pause", key: "pauseFadeOutMs", max: 30 },
+  { label: "Resume", key: "resumeFadeInMs", max: 30 },
+  { label: "Launch", key: "gameLaunchFadeOutMs", max: 10 }
+];
+
+function musicTimingPatch(key: MusicTimingKey, value: string): Partial<MusicSettings> {
+  return { [key]: secondsToMs(value) };
+}
+
 function SettingsScreen({
   settings,
   setSettings,
@@ -3039,6 +3068,7 @@ function SettingsScreen({
   }
 
   const soundSettings = soundDraft;
+  const musicSettings = musicDraft;
 
   return (
     <main className="page settings-page">
@@ -3385,15 +3415,15 @@ function SettingsScreen({
                 <div>
                   <h2>Background music</h2>
                   <p className="settings-hint">
-                    Plays ambient tracks while you browse. Fades in 5 s after startup, pauses when you switch away or other media is detected, and fades out quickly on game launch.
+                    Plays local tracks while you browse. Dynamic behavior is controlled here and saved with the launcher settings.
                   </p>
                 </div>
                 <button
                   className="secondary-action"
-                  onClick={() => void updateMusic(normalizeMusicSettings({ ...musicDraft, enabled: musicDraft.enabled === false }))}
+                  onClick={() => void updateMusic(musicSettingsPatch(musicSettings, { enabled: musicSettings.enabled === false }))}
                 >
-                  {musicDraft.enabled === false ? <VolumeX size={16} /> : <Music2 size={16} />}
-                  {musicDraft.enabled === false ? "Disabled" : "Enabled"}
+                  {musicSettings.enabled === false ? <VolumeX size={16} /> : <Music2 size={16} />}
+                  {musicSettings.enabled === false ? "Disabled" : "Enabled"}
                 </button>
               </div>
 
@@ -3404,19 +3434,163 @@ function SettingsScreen({
                   min="0"
                   max="1"
                   step="0.01"
-                  value={musicDraft.volume ?? 0.4}
-                  onChange={(e) => scheduleMusicUpdate(normalizeMusicSettings({ ...musicDraft, volume: Number(e.currentTarget.value) }))}
-                  onPointerUp={(e) => void updateMusic(normalizeMusicSettings({ ...musicDraft, volume: Number(e.currentTarget.value) }))}
-                  onKeyUp={(e) => void updateMusic(normalizeMusicSettings({ ...musicDraft, volume: Number(e.currentTarget.value) }))}
+                  value={musicSettings.volume ?? 0.4}
+                  onChange={(e) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
+                  onPointerUp={(e) => void updateMusic(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
+                  onKeyUp={(e) => void updateMusic(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
                 />
-                <strong>{Math.round((musicDraft.volume ?? 0.4) * 100)}%</strong>
+                <strong>{Math.round((musicSettings.volume ?? 0.4) * 100)}%</strong>
               </label>
 
+              <div className="music-control-grid">
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={musicSettings.startupDelayEnabled !== false}
+                    onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { startupDelayEnabled: event.currentTarget.checked }))}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Startup delay</strong>
+                    <em>Wait before music starts after Hynite opens.</em>
+                  </span>
+                </label>
+                <label className="music-number-row">
+                  <span>Delay</span>
+                  <input
+                    className="plain-input"
+                    type="number"
+                    min="0"
+                    max="60"
+                    step="0.5"
+                    disabled={musicSettings.startupDelayEnabled === false}
+                    value={msToSeconds(musicSettings.startupDelayMs)}
+                    onChange={(event) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { startupDelayMs: secondsToMs(event.currentTarget.value) }))}
+                    onBlur={(event) => void updateMusic(musicSettingsPatch(musicSettings, { startupDelayMs: secondsToMs(event.currentTarget.value) }))}
+                  />
+                  <strong>s</strong>
+                </label>
+
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={musicSettings.fadesEnabled !== false}
+                    onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { fadesEnabled: event.currentTarget.checked }))}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Fades</strong>
+                    <em>Use fades for track starts, pauses, resumes, and game launches.</em>
+                  </span>
+                </label>
+                <div className="music-number-grid">
+                  {MUSIC_FADE_CONTROLS.map(({ label, key, max }) => (
+                    <label key={key} className="music-number-row compact-number-row">
+                      <span>{label}</span>
+                      <input
+                        className="plain-input"
+                        type="number"
+                        min="0"
+                        max={max}
+                        step="0.1"
+                        disabled={musicSettings.fadesEnabled === false}
+                        value={msToSeconds(musicSettings[key as keyof MusicSettings] as number | undefined)}
+                        onChange={(event) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, musicTimingPatch(key, event.currentTarget.value)))}
+                        onBlur={(event) => void updateMusic(musicSettingsPatch(musicSettings, musicTimingPatch(key, event.currentTarget.value)))}
+                      />
+                      <strong>s</strong>
+                    </label>
+                  ))}
+                </div>
+
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={musicSettings.pauseOnGameLaunch !== false}
+                    onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { pauseOnGameLaunch: event.currentTarget.checked }))}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Pause after launch</strong>
+                    <em>Hold music after starting a game until Hynite is focused again.</em>
+                  </span>
+                </label>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={musicSettings.pauseOnFocusLoss !== false}
+                    onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { pauseOnFocusLoss: event.currentTarget.checked }))}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Pause without focus</strong>
+                    <em>Pause when Hynite is not the active window.</em>
+                  </span>
+                </label>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={musicSettings.pauseOnSystemAudio !== false}
+                    onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { pauseOnSystemAudio: event.currentTarget.checked }))}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Pause on media</strong>
+                    <em>Pause while another system media session is playing.</em>
+                  </span>
+                </label>
+
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={musicSettings.continuousPlay === true}
+                    onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { continuousPlay: event.currentTarget.checked }))}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Continuous play</strong>
+                    <em>Start the next track immediately instead of waiting a random interval.</em>
+                  </span>
+                </label>
+                <div className="music-number-grid">
+                  <label className="music-number-row compact-number-row">
+                    <span>Min gap</span>
+                    <input
+                      className="plain-input"
+                      type="number"
+                      min="0"
+                      max="600"
+                      step="1"
+                      disabled={musicSettings.continuousPlay === true}
+                      value={msToSeconds(musicSettings.gapMinMs)}
+                      onChange={(event) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { gapMinMs: secondsToMs(event.currentTarget.value) }))}
+                      onBlur={(event) => void updateMusic(musicSettingsPatch(musicSettings, { gapMinMs: secondsToMs(event.currentTarget.value) }))}
+                    />
+                    <strong>s</strong>
+                  </label>
+                  <label className="music-number-row compact-number-row">
+                    <span>Max gap</span>
+                    <input
+                      className="plain-input"
+                      type="number"
+                      min="0"
+                      max="600"
+                      step="1"
+                      disabled={musicSettings.continuousPlay === true}
+                      value={msToSeconds(musicSettings.gapMaxMs)}
+                      onChange={(event) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { gapMaxMs: secondsToMs(event.currentTarget.value) }))}
+                      onBlur={(event) => void updateMusic(musicSettingsPatch(musicSettings, { gapMaxMs: secondsToMs(event.currentTarget.value) }))}
+                    />
+                    <strong>s</strong>
+                  </label>
+                </div>
+              </div>
+
               <div className="music-track-list">
-                {(musicDraft.tracks ?? []).length === 0 ? (
+                {(musicSettings.tracks ?? []).length === 0 ? (
                   <p className="settings-hint music-no-tracks">No tracks added yet. Add audio files below.</p>
                 ) : (
-                  (musicDraft.tracks ?? []).map((track, i) => (
+                  (musicSettings.tracks ?? []).map((track, i) => (
                     <div key={i} className="music-track-row">
                       <code className="music-track-name" title={track.filePath}>
                         {soundFileName(track.filePath)}
