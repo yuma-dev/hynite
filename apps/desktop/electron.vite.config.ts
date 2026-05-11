@@ -47,7 +47,10 @@ export default defineConfig({
     resolve: { alias },
     build: {
       rollupOptions: {
-        input: fileURLToPath(new URL("index.html", import.meta.url))
+        input: {
+          main: fileURLToPath(new URL("index.html", import.meta.url)),
+          splash: fileURLToPath(new URL("splash.html", import.meta.url))
+        }
       }
     }
   }

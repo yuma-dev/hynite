@@ -150,87 +150,9 @@ button {
 }
 
 .startup-screen {
-  position: relative;
   width: 100vw;
   height: 100vh;
-  overflow: hidden;
-  display: grid;
-  place-items: center;
-  background:
-    radial-gradient(circle at 50% 48%, rgba(52, 44, 70, 0.28), transparent 45%),
-    linear-gradient(135deg, #0e0d14, #09080d 72%);
-}
-
-.startup-screen::after {
-  content: "";
-  position: absolute;
-  inset: -20%;
-  background: linear-gradient(115deg, transparent 42%, rgba(255, 255, 255, 0.11) 50%, transparent 58%);
-  transform: translateX(-64%);
-  animation: startupSweep 1.2s cubic-bezier(0.22, 1, 0.36, 1) 0.1s forwards;
-  pointer-events: none;
-}
-
-.startup-bg-pattern {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.startup-tint {
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 50% 46%, rgba(255, 255, 255, 0.018), transparent 20%),
-    linear-gradient(180deg, rgba(9, 8, 13, 0.28), rgba(9, 8, 13, 0.62) 72%, rgba(9, 8, 13, 0.82)),
-    linear-gradient(90deg, rgba(9, 8, 13, 0.58), rgba(9, 8, 13, 0.1) 50%, rgba(9, 8, 13, 0.58));
-  pointer-events: none;
-}
-
-.startup-identity {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  justify-items: center;
-  gap: 24px;
-}
-
-.startup-logo {
-  width: 96px;
-  height: 96px;
-  display: block;
-  object-fit: contain;
-  filter:
-    drop-shadow(0 8px 24px rgba(0, 0, 0, 0.8))
-    drop-shadow(0 0 36px rgba(160, 80, 255, 0.22));
-  user-select: none;
-}
-
-.startup-line {
-  width: 240px;
-  height: 2px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.startup-line span {
-  display: block;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
-  transform: translateX(-115%);
-  animation: startupLine 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
-}
-
-.startup-status {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.42);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  background: #09080d;
 }
 
 .launch-handoff {
@@ -1081,34 +1003,10 @@ button {
   }
 }
 
-@keyframes startupLine {
-  0% {
-    transform: translateX(-115%);
-  }
-
-  72%,
-  to {
-    transform: translateX(115%);
-  }
-}
-
-@keyframes startupSweep {
-  to {
-    transform: translateX(64%);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .startup-line span,
-  .startup-screen::after,
   .launch-handoff-line span,
   .launch-handoff::after {
     animation: none;
-  }
-
-  .startup-line span {
-    transform: translateX(0);
-    opacity: 0.5;
   }
 
   .launch-handoff-bg {
@@ -3328,6 +3226,15 @@ dd {
   font-size: 11px;
 }
 
+.music-pause-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--text-3);
+  opacity: 0.6;
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -3579,6 +3486,50 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.music-settings {
+  display: grid;
+  gap: 18px;
+}
+
+.music-track-list {
+  display: grid;
+  gap: 8px;
+}
+
+.music-no-tracks {
+  padding: 12px;
+  border: 0.5px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.music-track-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.music-track-name {
+  flex: 1;
+  overflow: hidden;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-3);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-track-add {
+  display: flex;
 }
 
 .settings-source-tab .screen-title h1 {

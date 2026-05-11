@@ -4,6 +4,7 @@ import type { Protocol } from "electron";
 import { soundEffectIds, type AppSettings, type SoundEffectId } from "@hynite/core";
 
 const MAX_SOUND_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_MUSIC_FILE_BYTES = 50 * 1024 * 1024;
 const SOUND_EFFECT_ID_SET = new Set<string>(soundEffectIds);
 const AUDIO_MIME_BY_EXTENSION = new Map<string, string>([
   [".aac", "audio/aac"],
@@ -51,6 +52,55 @@ function soundEffectIdFromUrl(rawUrl: string): SoundEffectId | undefined {
 
 export class SoundFileService {
   constructor(private readonly getSettings: () => Promise<AppSettings>) {}
+
+  registerMusicProtocol(protocol: Protocol): void {
+    protocol.handle("hynite-music", async (request) => {
+      // URL shape: hynite-music://track/<index>. The literal "track" host
+      // prevents Electron's standard-scheme parser from interpreting a bare
+      // numeric path as an IPv4 address (e.g. ".../8" → host "0.0.0.8").
+      const url = new URL(request.url);
+      const pathStr = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+      const index = parseInt(pathStr, 10);
+      if (!Number.isFinite(index) || index < 0) {
+        return response(400);
+      }
+
+      const settings = await this.getSettings();
+      // Filter to match the renderer's normalizeMusicSettings — otherwise
+      // blank/invalid entries shift indices and the wrong file plays.
+      const tracks = (settings.music?.tracks ?? []).filter(
+        (t) => typeof t?.filePath === "string" && t.filePath.trim()
+      );
+      if (index >= tracks.length) {
+        return response(404);
+      }
+
+      const track = tracks[index];
+      if (!track?.filePath) {
+        return response(404);
+      }
+
+      const extension = extname(track.filePath).toLowerCase();
+      const contentType = AUDIO_MIME_BY_EXTENSION.get(extension);
+      if (!contentType) {
+        return response(415, "Unsupported music file type.");
+      }
+
+      try {
+        const fileStat = await stat(track.filePath);
+        if (!fileStat.isFile()) {
+          return response(404);
+        }
+        if (fileStat.size > MAX_MUSIC_FILE_BYTES) {
+          return response(413, "Music file is too large (max 50 MB).");
+        }
+        const bytes = await readFile(track.filePath);
+        return new Response(bytes, { headers: soundHeaders(contentType) });
+      } catch {
+        return response(404);
+      }
+    });
+  }
 
   registerProtocol(protocol: Protocol): void {
     protocol.handle("hynite-sound", async (request) => {

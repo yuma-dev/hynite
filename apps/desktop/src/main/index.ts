@@ -1,7 +1,9 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, screen, shell } from "electron";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { promisify } from "node:util";
 import { HyniteRepository } from "@hynite/db";
 import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider, type SteamFamilyScanStatus } from "@hynite/importers";
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
@@ -28,6 +30,8 @@ import {
 } from "./steamAuthService";
 
 let mainWindow: Electron.BrowserWindow | undefined;
+let splashWindow: Electron.BrowserWindow | undefined;
+let startupReadyTimeout: ReturnType<typeof setTimeout> | undefined;
 let repository: HyniteRepository;
 let settingsService: SettingsService;
 let homeService: HomeService;
@@ -54,7 +58,8 @@ const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
 const STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL = 5;
 protocol.registerSchemesAsPrivileged([
   { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true } },
-  { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
+  { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
+  { scheme: "hynite-music", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
 ]);
 const richMetadataQueued = new Set<string>();
 const richMetadataQueue: string[] = [];
@@ -62,6 +67,135 @@ const richMetadataInFlight = new Set<string>();
 let richMetadataRunning = 0;
 let richMetadataBackfillTotal = 0;
 let richMetadataBackfillDone = 0;
+
+const execFileAsync = promisify(execFile);
+let systemAudioState = false;
+let systemAudioMonitor: ChildProcessWithoutNullStreams | undefined;
+let systemAudioMonitorRestartTimer: NodeJS.Timeout | undefined;
+let systemAudioMonitorStopped = false;
+
+// SMTC (System Media Transport Controls) — same API Windows uses for the
+// volume HUD. Tracks "what media is playing on this system" regardless of
+// which audio device routes it. Avoids WASAPI false positives from
+// always-on services (nvcontainer, Elgato Wave Link, etc.).
+const SMTC_PS_PRELUDE = `
+Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction SilentlyContinue
+$null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows.Media.Control,ContentType=WindowsRuntime]
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() |
+  Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' } |
+  Select-Object -First 1)
+function Await($op, $t) { $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); [void]$task.Wait(5000); $task.Result }
+$mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+`.trim();
+
+function buildSystemAudioScript(): string {
+  // Returns 'true' if any SMTC session reports PlaybackStatus=Playing(4).
+  return `
+${SMTC_PS_PRELUDE}
+$result = 'false'
+if ($mgr -ne $null) {
+  foreach ($s in $mgr.GetSessions()) {
+    if ([int]$s.GetPlaybackInfo().PlaybackStatus -eq 4) { $result = 'true'; break }
+  }
+}
+Write-Output $result
+`.trim();
+}
+
+function buildSystemAudioDebugScript(): string {
+  return `
+${SMTC_PS_PRELUDE}
+if ($mgr -eq $null) { Write-Host 'SMTC manager unavailable'; return }
+$sessions = @($mgr.GetSessions())
+Write-Host ('Total media sessions: ' + $sessions.Count)
+$anyPlaying = $false
+foreach ($s in $sessions) {
+  $info = $s.GetPlaybackInfo()
+  $status = [int]$info.PlaybackStatus
+  $name = switch ($status) { 0 {'Closed'} 1 {'Opened'} 2 {'Changing'} 3 {'Stopped'} 4 {'PLAYING'} 5 {'Paused'} default {"st$status"} }
+  $tag = if ($status -eq 4) { 'COUNT' } else { 'skip' }
+  Write-Host ("  [$tag] [$name] " + $s.SourceAppUserModelId)
+  if ($status -eq 4) { $anyPlaying = $true }
+}
+$verdict = if ($anyPlaying) { 'true  -> music paused (external media playing)' } else { 'false -> music plays normally' }
+Write-Host ('RESULT: ' + $verdict)
+`.trim();
+}
+
+// Long-running PowerShell monitor: polls SMTC every 500ms and prints
+// "true"/"false" to stdout ONLY when the value changes. Avoids per-check
+// process spawn overhead (~500ms per startup) so the launcher reacts to
+// play/pause events with ~500ms latency instead of 12s.
+function buildSystemAudioMonitorScript(): string {
+  return `
+${SMTC_PS_PRELUDE}
+$last = 'init'
+while ($true) {
+  $any = $false
+  if ($mgr -ne $null) {
+    foreach ($s in $mgr.GetSessions()) {
+      if ([int]$s.GetPlaybackInfo().PlaybackStatus -eq 4) { $any = $true; break }
+    }
+  }
+  $cur = if ($any) { 'true' } else { 'false' }
+  if ($cur -ne $last) { Write-Output $cur; [Console]::Out.Flush(); $last = $cur }
+  Start-Sleep -Milliseconds 500
+}
+`.trim();
+}
+
+function setSystemAudioState(value: boolean): void {
+  if (systemAudioState === value) return;
+  systemAudioState = value;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send("music:systemAudioChanged", value);
+  }
+}
+
+function startSystemAudioMonitor(): void {
+  if (process.platform !== "win32" || systemAudioMonitor || systemAudioMonitorStopped) return;
+  try {
+    const script = buildSystemAudioMonitorScript();
+    const encoded = Buffer.from(script, "utf16le").toString("base64");
+    const child = spawn("powershell.exe", ["-NonInteractive", "-NoProfile", "-EncodedCommand", encoded], { windowsHide: true });
+    systemAudioMonitor = child;
+    let buf = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      buf += chunk.toString("utf8");
+      let idx: number;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (line === "true") setSystemAudioState(true);
+        else if (line === "false") setSystemAudioState(false);
+      }
+    });
+    child.on("exit", () => {
+      systemAudioMonitor = undefined;
+      if (systemAudioMonitorStopped) return;
+      systemAudioMonitorRestartTimer = setTimeout(startSystemAudioMonitor, 5_000);
+    });
+    child.on("error", () => undefined);
+  } catch {
+    systemAudioMonitorRestartTimer = setTimeout(startSystemAudioMonitor, 5_000);
+  }
+}
+
+function stopSystemAudioMonitor(): void {
+  systemAudioMonitorStopped = true;
+  if (systemAudioMonitorRestartTimer) {
+    clearTimeout(systemAudioMonitorRestartTimer);
+    systemAudioMonitorRestartTimer = undefined;
+  }
+  if (systemAudioMonitor) {
+    try { systemAudioMonitor.kill(); } catch { /* ignore */ }
+    systemAudioMonitor = undefined;
+  }
+}
+
+function getSystemAudioActive(): boolean {
+  return systemAudioState;
+}
 let activeSteamSync:
   | {
       controller: AbortController;
@@ -1043,7 +1177,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 980,
     minHeight: 680,
-    show: true,
+    show: false,
     frame: false,
     autoHideMenuBar: true,
     backgroundColor: "#09080d",
@@ -1108,6 +1242,68 @@ function createWindow(): void {
     profile("window:load:failed", "Renderer failed to load", { errorCode, errorDescription });
     console.error(`Renderer failed to load (${errorCode}): ${errorDescription}`);
   });
+}
+
+function createSplashWindow(): void {
+  const { bounds: displayBounds } = screen.getPrimaryDisplay();
+  const width = 400;
+  const height = 300;
+  const x = Math.round(displayBounds.x + (displayBounds.width - width) / 2);
+  const y = Math.round(displayBounds.y + (displayBounds.height - height) / 2);
+
+  splashWindow = new BrowserWindow({
+    width,
+    height,
+    x,
+    y,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  splashWindow.setIgnoreMouseEvents(true);
+
+  if (process.env.ELECTRON_RENDERER_URL) {
+    void splashWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}/splash.html`);
+  } else {
+    void splashWindow.loadFile(join(__dirname, "../renderer/splash.html"));
+  }
+
+  splashWindow.once("ready-to-show", () => {
+    splashWindow?.show();
+  });
+
+  splashWindow.on("closed", () => {
+    splashWindow = undefined;
+  });
+}
+
+function dismissSplash(): void {
+  if (startupReadyTimeout) {
+    clearTimeout(startupReadyTimeout);
+    startupReadyTimeout = undefined;
+  }
+  if (!splashWindow || splashWindow.isDestroyed()) {
+    mainWindow?.show();
+    mainWindow?.focus();
+    return;
+  }
+  void splashWindow.webContents.executeJavaScript("document.body.classList.add('dismiss')").catch(() => undefined);
+  setTimeout(() => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+    mainWindow?.show();
+    mainWindow?.focus();
+  }, 300);
 }
 
 function runAfterInitialRendererPaint(task: () => void): void {
@@ -1777,6 +1973,11 @@ async function runLocalScan(): Promise<{ scanned: number; matched: number; ambig
 }
 
 function registerIpc(): void {
+  ipcMain.once("startup:ready", () => {
+    profile("startup:ready", "Renderer signaled startup ready");
+    dismissSplash();
+  });
+
   ipcMain.on("debug:profile", (_event, entry: { phase?: unknown; message?: unknown; details?: unknown; rendererElapsedMs?: unknown }) => {
     startupProfileService?.log({
       scope: "renderer",
@@ -2045,6 +2246,19 @@ function registerIpc(): void {
     if (result.canceled) return undefined;
     return result.filePaths[0];
   });
+  handleIpc("dialog:pick-files", async (
+    _event,
+    args: { title?: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> } = {}
+  ) => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: args.title ?? "Select files",
+      defaultPath: args.defaultPath,
+      properties: ["openFile", "multiSelections"],
+      filters: args.filters
+    });
+    if (result.canceled) return [];
+    return result.filePaths;
+  });
   handleIpc("local:set-roots", async (_event, roots: Array<{ path: string; depth: number }>) => {
     return settingsService.update({ localRoots: roots });
   });
@@ -2272,6 +2486,18 @@ function registerIpc(): void {
   });
   handleIpc("window:close", () => mainWindow?.close());
   handleIpc("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
+  handleIpc("music:system-audio-active", () => getSystemAudioActive());
+  handleIpc("music:system-audio-debug", async () => {
+    if (process.platform !== "win32") return "not win32";
+    try {
+      const script = buildSystemAudioDebugScript();
+      const encoded = Buffer.from(script, "utf16le").toString("base64");
+      const { stdout } = await execFileAsync("powershell.exe", ["-NonInteractive", "-NoProfile", "-EncodedCommand", encoded], { timeout: 15_000 });
+      return stdout.trim();
+    } catch (err) {
+      return `error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  });
   handleIpc("debug:seed", () => {
     const seeded = repository.upsertImportedGame({
       provider: "steam",
@@ -2315,6 +2541,7 @@ app.whenReady().then(() => {
   assetCacheService.registerProtocol(protocol);
   soundFileService = new SoundFileService(() => settingsService.get());
   soundFileService.registerProtocol(protocol);
+  soundFileService.registerMusicProtocol(protocol);
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, join(userData, "sync-status.json"));
   launchTracker = new LaunchTracker(repository);
@@ -2322,7 +2549,14 @@ app.whenReady().then(() => {
   profile("services:ready", "Main services initialized");
   registerIpc();
   profile("ipc:registered", "IPC handlers registered");
+  startSystemAudioMonitor();
   createWindow();
+  createSplashWindow();
+  startupReadyTimeout = setTimeout(() => {
+    profile("startup:ready-timeout", "Startup ready timeout — showing main window");
+    dismissSplash();
+  }, 30_000);
+  startupReadyTimeout.unref?.();
   void settingsService.get().then((settings) => {
     const canSync = Boolean(settings.steamWebApiKey) && settings.steamAccounts.length > 0;
     profile("startup:settings-loaded", "Startup settings loaded", {
@@ -2371,6 +2605,7 @@ app.on("window-all-closed", () => {
     clearInterval(startupHeartbeatTimer);
     startupHeartbeatTimer = undefined;
   }
+  stopSystemAudioMonitor();
   syncStatusService?.flush();
   void startupProfileService?.finish();
   repository?.close();

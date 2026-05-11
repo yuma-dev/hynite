@@ -31,6 +31,7 @@ import {
   Minimize2,
   Minus,
   Monitor,
+  Music2,
   Pencil,
   Play,
   Plus,
@@ -53,10 +54,11 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
+import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
 
 type SteamSwitchPrompt = {
   gameId: string;
@@ -130,6 +132,7 @@ async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boo
   const result = await window.hynite.games.launch(id, preferredSteamId);
   if (result.kind === "launched") {
     soundEngine.play("gameLaunch");
+    musicEngine.onGameLaunch();
     return true;
   }
   if (result.kind === "no-account") {
@@ -152,6 +155,7 @@ async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boo
     const switchResult = await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
     if (switchResult.kind === "launched") {
       soundEngine.play("gameLaunch");
+      musicEngine.onGameLaunch();
       return true;
     }
     if (switchResult.kind === "no-account") {
@@ -266,77 +270,8 @@ function TitleBar() {
   );
 }
 
-function StartupBgPattern() {
-  const af = { dur: "1.4s", begin: "0s", fill: "freeze", calcMode: "spline", keySplines: "0.22 1 0.36 1", keyTimes: "0;1" };
-
-  function O(cx: number, cy: number, r: number, op: number, tx: number, ty: number) {
-    return (
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#ffffff" strokeWidth="1.5" opacity="0">
-        <animateTransform attributeName="transform" type="translate" from={`${tx} ${ty}`} to="0 0" {...af} />
-        <animate attributeName="opacity" from="0.35" to={String(op)} {...af} />
-      </circle>
-    );
-  }
-
-  function X(cx: number, cy: number, s: number, op: number, tx: number, ty: number, rot: number) {
-    const d = `M${cx - s} ${cy - s} L${cx + s} ${cy + s} M${cx + s} ${cy - s} L${cx - s} ${cy + s}`;
-    return (
-      <g opacity="0">
-        <animateTransform attributeName="transform" type="translate" from={`${tx} ${ty}`} to="0 0" {...af} />
-        <animateTransform attributeName="transform" type="rotate" from={`${rot} ${cx} ${cy}`} to={`0 ${cx} ${cy}`} additive="sum" {...af} />
-        <animate attributeName="opacity" from="0.35" to={String(op)} {...af} />
-        <path d={d} stroke="#ffffff" strokeWidth="1.8" strokeLinecap="round" fill="none" />
-      </g>
-    );
-  }
-
-  return (
-    <svg className="startup-bg-pattern" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" aria-hidden="true" preserveAspectRatio="xMidYMid slice">
-      {O(85,   92,  20, 0.07,  635,  358)}
-      {O(245,  310, 26, 0.05,  475,  140)}
-      {O(540,  82,  18, 0.06,  180,  368)}
-      {O(1095, 68,  22, 0.05, -375,  382)}
-      {O(1285, 305, 17, 0.06, -565,  145)}
-      {O(155,  580, 24, 0.06,  565, -130)}
-      {O(695,  568, 19, 0.05,   25, -118)}
-      {O(1210, 622, 21, 0.05, -490, -172)}
-      {O(345,  840, 23, 0.06,  375, -390)}
-      {O(640,  798, 16, 0.05,   80, -348)}
-      {O(1118, 808, 20, 0.05, -398, -358)}
-      {O(32,   462, 28, 0.04,  688,  -12)}
-      {O(1405, 440, 22, 0.04, -685,   10)}
-      {X(345,  140, 12, 0.07,  375,  310,  60)}
-      {X(680,  262, 16, 0.06,   40,  188, -40)}
-      {X(1340, 150, 10, 0.06, -620,  300,  35)}
-      {X(428,  245, 14, 0.07,  292,  205,  55)}
-      {X(1062, 285, 15, 0.06, -342,  165, -45)}
-      {X(65,   788, 13, 0.06,  655, -338,  35)}
-      {X(445,  638, 17, 0.06,  275, -188, -70)}
-      {X(978,  618, 14, 0.06, -258, -168,  50)}
-      {X(1390, 605,  9, 0.04, -670, -155, -25)}
-      {X(875,  840, 11, 0.04, -155, -390,  45)}
-      {X(1310, 852, 12, 0.06, -590, -402, -55)}
-      {X(178,  234, 11, 0.05,  542,  216,  30)}
-      {X(1180, 480, 14, 0.05, -460,  -30, -40)}
-      {X(300,  470, 11, 0.04,  420,  -20,  65)}
-    </svg>
-  );
-}
-
-function StartupLoading({ syncStatus }: { syncStatus?: SyncStatus }) {
-  return (
-    <main className="startup-screen">
-      <StartupBgPattern />
-      <div className="startup-tint" />
-      <div className="startup-identity">
-        <BrandLogo className="startup-logo" sizes="96px" />
-        <div className="startup-line">
-          <span />
-        </div>
-        <p className="startup-status">{syncStatus?.active ? syncStatus.message : "Loading"}</p>
-      </div>
-    </main>
-  );
+function StartupLoading() {
+  return <main className="startup-screen" />;
 }
 
 function fallbackArt(game: Game): CSSProperties {
@@ -2815,7 +2750,7 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
   );
 }
 
-type SettingsTab = "steam" | "metadata" | "sources" | "sound" | "advanced";
+type SettingsTab = "steam" | "metadata" | "sources" | "sound" | "music" | "advanced";
 
 function soundFileName(filePath?: string): string {
   if (!filePath) {
@@ -2879,6 +2814,8 @@ function SettingsScreen({
   const [expandedExtras, setExpandedExtras] = useState<Record<string, boolean>>({});
   const [soundDraft, setSoundDraft] = useState<SoundSettings>(() => normalizeSoundSettings(settings?.sound));
   const soundSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const [musicDraft, setMusicDraft] = useState<MusicSettings>(() => normalizeMusicSettings(settings?.music));
+  const musicSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
 
   useEffect(() => {
     void window.hynite.steam.listLocalAccounts().then(setLocalAccounts).catch(() => undefined);
@@ -2890,9 +2827,16 @@ function SettingsScreen({
   }, [settings?.sound]);
 
   useEffect(() => {
+    setMusicDraft(normalizeMusicSettings(settings?.music));
+  }, [settings?.music]);
+
+  useEffect(() => {
     return () => {
       if (soundSaveTimerRef.current) {
         clearTimeout(soundSaveTimerRef.current);
+      }
+      if (musicSaveTimerRef.current) {
+        clearTimeout(musicSaveTimerRef.current);
       }
     };
   }, []);
@@ -3042,6 +2986,58 @@ function SettingsScreen({
     await setEffectSound(effectId, { filePath, enabled: true });
   }
 
+  async function updateMusic(music: MusicSettings) {
+    if (musicSaveTimerRef.current) {
+      clearTimeout(musicSaveTimerRef.current);
+      musicSaveTimerRef.current = undefined;
+    }
+    setMusicDraft(music);
+    musicEngine.applySettings(music);
+    const next = await window.hynite.settings.update({ music });
+    musicEngine.applySettings(next);
+    setMusicDraft(normalizeMusicSettings(next.music));
+    setSettings(next);
+  }
+
+  function previewMusic(music: MusicSettings) {
+    setMusicDraft(music);
+    musicEngine.applySettings(music);
+  }
+
+  function scheduleMusicUpdate(music: MusicSettings) {
+    previewMusic(music);
+    if (musicSaveTimerRef.current) {
+      clearTimeout(musicSaveTimerRef.current);
+    }
+    musicSaveTimerRef.current = setTimeout(() => {
+      musicSaveTimerRef.current = undefined;
+      void updateMusic(music).catch(console.error);
+    }, 250);
+  }
+
+  async function addMusicTrack() {
+    const filePaths = await window.hynite.dialog.pickFiles({
+      title: "Add music tracks",
+      filters: [
+        { name: "Audio", extensions: ["mp3", "ogg", "wav", "flac", "m4a", "aac", "webm", "opus"] },
+        { name: "All files", extensions: ["*"] }
+      ]
+    });
+    if (!filePaths.length) return;
+    const current = normalizeMusicSettings(musicDraft);
+    const existing = new Set((current.tracks ?? []).map((t) => t.filePath));
+    const newTracks = filePaths.filter((p) => !existing.has(p)).map((filePath) => ({ filePath }));
+    if (!newTracks.length) return;
+    await updateMusic({ ...current, tracks: [...(current.tracks ?? []), ...newTracks] });
+  }
+
+  async function removeMusicTrack(index: number) {
+    const current = normalizeMusicSettings(musicDraft);
+    const tracks = [...(current.tracks ?? [])];
+    tracks.splice(index, 1);
+    await updateMusic({ ...current, tracks });
+  }
+
   const soundSettings = soundDraft;
 
   return (
@@ -3063,6 +3059,7 @@ function SettingsScreen({
             ["metadata", "Metadata"],
             ["sources", "Sources"],
             ["sound", "Sound"],
+            ["music", "Music"],
             ["advanced", "Advanced"]
           ].map(([id, label]) => (
             <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id as SettingsTab)}>
@@ -3378,6 +3375,70 @@ function SettingsScreen({
                     </div>
                   );
                 })}
+              </div>
+            </section>
+          ) : null}
+
+          {tab === "music" ? (
+            <section className="settings-section music-settings">
+              <div className="settings-section-head">
+                <div>
+                  <h2>Background music</h2>
+                  <p className="settings-hint">
+                    Plays ambient tracks while you browse. Fades in 5 s after startup, pauses when you switch away or other media is detected, and fades out quickly on game launch.
+                  </p>
+                </div>
+                <button
+                  className="secondary-action"
+                  onClick={() => void updateMusic(normalizeMusicSettings({ ...musicDraft, enabled: musicDraft.enabled === false }))}
+                >
+                  {musicDraft.enabled === false ? <VolumeX size={16} /> : <Music2 size={16} />}
+                  {musicDraft.enabled === false ? "Disabled" : "Enabled"}
+                </button>
+              </div>
+
+              <label className="sound-volume-row">
+                <span>Volume</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={musicDraft.volume ?? 0.4}
+                  onChange={(e) => scheduleMusicUpdate(normalizeMusicSettings({ ...musicDraft, volume: Number(e.currentTarget.value) }))}
+                  onPointerUp={(e) => void updateMusic(normalizeMusicSettings({ ...musicDraft, volume: Number(e.currentTarget.value) }))}
+                  onKeyUp={(e) => void updateMusic(normalizeMusicSettings({ ...musicDraft, volume: Number(e.currentTarget.value) }))}
+                />
+                <strong>{Math.round((musicDraft.volume ?? 0.4) * 100)}%</strong>
+              </label>
+
+              <div className="music-track-list">
+                {(musicDraft.tracks ?? []).length === 0 ? (
+                  <p className="settings-hint music-no-tracks">No tracks added yet. Add audio files below.</p>
+                ) : (
+                  (musicDraft.tracks ?? []).map((track, i) => (
+                    <div key={i} className="music-track-row">
+                      <code className="music-track-name" title={track.filePath}>
+                        {soundFileName(track.filePath)}
+                      </code>
+                      <button
+                        className="secondary-action"
+                        type="button"
+                        onClick={() => void removeMusicTrack(i)}
+                      >
+                        <Trash2 size={13} />
+                        Remove
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="music-track-add">
+                <button className="secondary-action" type="button" onClick={() => void addMusicTrack()}>
+                  <Plus size={14} />
+                  Add track
+                </button>
               </div>
             </section>
           ) : null}
@@ -4822,8 +4883,8 @@ export function App() {
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [homeFirstLoaded, setHomeFirstLoaded] = useState(false);
   const homeFirstLoadedRef = useRef(false);
-  const debugStartupLockRef = useRef(false);
   const [startupDone, setStartupDone] = useState(false);
+  const [musicStatus, setMusicStatus] = useState<MusicStatus>(() => musicEngine.getStatus());
   const contentRef = useRef<HTMLElement | null>(null);
   const handledSyncSuccessAtRef = useRef<string | undefined>();
   const initialLoadStartedRef = useRef(false);
@@ -4849,9 +4910,62 @@ export function App() {
   useEffect(() => {
     void window.hynite.settings.get().then((nextSettings) => {
       soundEngine.applySettings(nextSettings);
+      musicEngine.applySettings(nextSettings);
     }).catch((error: unknown) => {
       console.error("Failed to initialize sound settings", error);
     });
+  }, []);
+
+  useEffect(() => {
+    const onFocus = () => musicEngine.setFocused(true);
+    const onBlur = () => musicEngine.setFocused(false);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  useEffect(() => musicEngine.subscribe(setMusicStatus), []);
+
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__hyniteMusic = {
+      status() {
+        const s = musicEngine.getStatus();
+        console.group("[hynite music] current status");
+        console.log("audible        :", s.audible, "(actually outputting sound)");
+        console.log("playing        :", s.playing, "(source node alive)");
+        console.log("inGap          :", s.inGap, "(between tracks)");
+        console.log("focused        :", s.focused, "(window has focus)");
+        console.log("systemAudio    :", s.systemAudioActive, "(external media detected by SMTC)");
+        console.log("settingsEnabled:", s.settingsEnabled);
+        console.log("hasTracks      :", s.hasTracks);
+        console.log("pauseReason    :", s.pauseReason ?? "none (music is playing or not active)");
+        console.log("currentTrack   :", s.currentTrackIndex);
+        console.log("queue          :", s.queue, "pos:", s.queueIndex);
+        console.log("prevQueueTail  :", s.prevQueueTail);
+        console.groupEnd();
+        return s;
+      },
+      async testSystemAudio() {
+        console.log("[hynite music] Running SMTC scan via main process...");
+        const result = await window.hynite.music.systemAudioDebug();
+        console.log("[hynite music] Scan result:\n" + result);
+        return result;
+      },
+      skip() {
+        musicEngine.skipToNext();
+        console.log("[hynite music] skipped");
+      }
+    };
+    console.log(
+      "%c[hynite music] Debug commands available:%c\n" +
+      "  window.__hyniteMusic.status()          — log current engine state + queue\n" +
+      "  window.__hyniteMusic.testSystemAudio() — run SMTC scan and list all media sessions\n" +
+      "  window.__hyniteMusic.skip()            — skip to the next track in the queue",
+      "color:#8fbfff;font-weight:bold", "color:inherit"
+    );
   }, []);
 
   useEffect(() => {
@@ -5006,17 +5120,6 @@ export function App() {
       delete window.hyniteDebugSplash;
     };
   }, [startLaunchHandoff]);
-
-  useEffect(() => {
-    window.hyniteDebugStartup = (enable?: boolean) => {
-      const show = enable !== false;
-      debugStartupLockRef.current = show;
-      setStartupDone(!show);
-    };
-    return () => {
-      delete window.hyniteDebugStartup;
-    };
-  }, []);
 
   useEffect(() => {
     const onLaunchGame = (event: Event) => {
@@ -5211,12 +5314,12 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!initialLoadComplete || !homeFirstLoaded || debugStartupLockRef.current) return;
+    if (!initialLoadComplete || !homeFirstLoaded) return;
     profileStartup("startup-overlay:paint-wait", "Initial load complete; waiting for paint");
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (debugStartupLockRef.current) return;
       profileStartup("startup-overlay:hidden", "Startup overlay hidden");
       setStartupDone(true);
+      window.hynite.startup.signalReady();
     }));
   }, [initialLoadComplete, homeFirstLoaded]);
 
@@ -5225,12 +5328,16 @@ export function App() {
       return;
     }
     startupSoundPlayedRef.current = true;
-    soundEngine.play("startup");
+    // Delay matches the splash dismiss animation (300ms) so sound plays when the window appears
+    const t = setTimeout(() => {
+      soundEngine.play("startup");
+      musicEngine.onStartupComplete();
+    }, 310);
+    return () => clearTimeout(t);
   }, [startupDone]);
 
   useEffect(() => {
     if (!initialLoadStartedRef.current) {
-      document.getElementById("startup-static")?.remove();
       initialLoadStartedRef.current = true;
       profileStartup("initial-load:start", "Initial renderer load started");
       const span = profileSpan("startup", "initial-load");
@@ -5695,11 +5802,17 @@ export function App() {
         <span>{games.length} games</span>
         <span>{home?.stale ? "cached discovery" : "online discovery"}</span>
         <span>v0.1.0</span>
+        {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.active && musicStatus.pauseReason && (
+          <span className="music-pause-chip">
+            <Music2 size={10} />
+            {musicStatus.pauseReason}
+          </span>
+        )}
       </footer>
     </div>
     {!startupDone && (
       <div className="startup-overlay">
-        <StartupLoading syncStatus={syncStatus} />
+        <StartupLoading />
       </div>
     )}
     <AnimatePresence>

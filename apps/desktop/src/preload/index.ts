@@ -149,6 +149,16 @@ const api = {
   sound: {
     url: (effectId: SoundEffectId): string => `hynite-sound:///${encodeURIComponent(effectId)}`
   },
+  music: {
+    url: (trackIndex: number): string => `hynite-music://track/${trackIndex}`,
+    isSystemAudioActive: (): Promise<boolean> => ipcRenderer.invoke("music:system-audio-active"),
+    systemAudioDebug: (): Promise<string> => ipcRenderer.invoke("music:system-audio-debug"),
+    onSystemAudioChanged: (callback: (active: boolean) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: boolean) => callback(value);
+      ipcRenderer.on("music:systemAudioChanged", listener);
+      return () => ipcRenderer.removeListener("music:systemAudioChanged", listener);
+    }
+  },
   steam: {
     pair: (): Promise<SteamPairingResult> => ipcRenderer.invoke("steam:pair"),
     saveApiKey: (apiKey: string): Promise<AppSettings> => ipcRenderer.invoke("steam:saveApiKey", apiKey),
@@ -182,13 +192,21 @@ const api = {
       title?: string;
       defaultPath?: string;
       filters?: Array<{ name: string; extensions: string[] }>;
-    }): Promise<string | undefined> => ipcRenderer.invoke("dialog:pick-file", args ?? {})
+    }): Promise<string | undefined> => ipcRenderer.invoke("dialog:pick-file", args ?? {}),
+    pickFiles: (args?: {
+      title?: string;
+      defaultPath?: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+    }): Promise<string[]> => ipcRenderer.invoke("dialog:pick-files", args ?? {})
   },
   localExt: {
     setRoots: (roots: Array<{ path: string; depth: number }>): Promise<AppSettings> =>
       ipcRenderer.invoke("local:set-roots", roots),
     setExcludePatterns: (patterns: string[]): Promise<AppSettings> =>
       ipcRenderer.invoke("local:set-exclude-patterns", patterns)
+  },
+  startup: {
+    signalReady: (): void => ipcRenderer.send("startup:ready")
   },
   debug: {
     seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed"),

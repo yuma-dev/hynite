@@ -513,6 +513,16 @@ export type SoundSettings = {
   effects?: Partial<Record<SoundEffectId, SoundEffectSettings>>;
 };
 
+export type MusicTrack = {
+  filePath: string;
+};
+
+export type MusicSettings = {
+  enabled?: boolean;
+  volume?: number;
+  tracks?: MusicTrack[];
+};
+
 export type AppSettings = {
   steamAccounts: SteamAccountSettings[];
   /** Single Steam Web API key shared by every paired account (one key fetches any public profile). */
@@ -537,6 +547,8 @@ export type AppSettings = {
   igdb?: IgdbCredentials;
   /** Local UI sound effects decoded by the renderer and served through main's sound protocol. */
   sound?: SoundSettings;
+  /** Background music tracks played during launcher use. */
+  music?: MusicSettings;
 };
 
 export type ExecutableInfo = {
