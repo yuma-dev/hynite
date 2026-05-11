@@ -1,4 +1,4 @@
-import type { GameMetadataPatch, ImportedGame, ImporterProvider } from "@hynite/core";
+import type { GameMetadataPatch, ImportedGame, ImporterProvider, ProfileSink } from "@hynite/core";
 import { refreshFusedMetadata, type MetadataFusionOptions, type MetadataLogger } from "@hynite/metadata";
 import { fetchOwnedSteamGames } from "./webApi";
 import { fetchFamilyGroupId, fetchFamilySharedGames, SteamFamilyAuthError } from "./familyApi";
@@ -26,6 +26,7 @@ export type SteamProviderOptions = {
   metadataMode?: MetadataFusionOptions["mode"];
   signal?: AbortSignal;
   familyScanResult?: (result: { status: SteamFamilyScanStatus; error?: string }) => void;
+  profiler?: ProfileSink;
 };
 
 export class SteamImporterProvider implements ImporterProvider {
@@ -39,12 +40,22 @@ export class SteamImporterProvider implements ImporterProvider {
       throw new Error("Steam sync requires a paired Steam account and Steam Web API key.");
     }
 
-    const ownedGames = await fetchOwnedSteamGames({
-      steamId: this.options.account.steamId,
-      webApiKey: this.options.account.webApiKey,
-      includePlayedFreeGames: this.options.includePlayedFreeGames,
-      signal: this.options.signal
+    const ownedSpan = this.options.profiler?.startSpan("steam-sync", "steam-sync:owned-games-api", {
+      account: this.options.account.steamId
     });
+    let ownedGames: ImportedGame[];
+    try {
+      ownedGames = await fetchOwnedSteamGames({
+        steamId: this.options.account.steamId,
+        webApiKey: this.options.account.webApiKey,
+        includePlayedFreeGames: this.options.includePlayedFreeGames,
+        signal: this.options.signal
+      });
+      ownedSpan?.end("ok", { account: this.options.account.steamId, count: ownedGames.length });
+    } catch (error) {
+      ownedSpan?.end("error", { account: this.options.account.steamId, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
 
     const familyToken = this.options.account.familyAccessToken;
     if (!familyToken) {
@@ -54,11 +65,21 @@ export class SteamImporterProvider implements ImporterProvider {
 
     const log = this.options.scanLogger;
     try {
-      const familyGroupId = await fetchFamilyGroupId({
-        accessToken: familyToken,
-        steamId: this.options.account.steamId,
-        signal: this.options.signal
+      const groupSpan = this.options.profiler?.startSpan("steam-sync", "steam-sync:family-group-fetch", {
+        account: this.options.account.steamId
       });
+      let familyGroupId: string | undefined;
+      try {
+        familyGroupId = await fetchFamilyGroupId({
+          accessToken: familyToken,
+          steamId: this.options.account.steamId,
+          signal: this.options.signal
+        });
+        groupSpan?.end("ok", { account: this.options.account.steamId, found: Boolean(familyGroupId) });
+      } catch (error) {
+        groupSpan?.end("error", { account: this.options.account.steamId, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
 
       if (!familyGroupId) {
         log?.("info", "Steam family group not found for paired account; skipping family-shared scan.");
@@ -66,12 +87,23 @@ export class SteamImporterProvider implements ImporterProvider {
         return ownedGames;
       }
 
-      const sharedGames = await fetchFamilySharedGames({
-        accessToken: familyToken,
-        steamId: this.options.account.steamId,
-        familyGroupId,
-        signal: this.options.signal
+      const sharedSpan = this.options.profiler?.startSpan("steam-sync", "steam-sync:family-shared-fetch", {
+        account: this.options.account.steamId,
+        familyGroupId
       });
+      let sharedGames: ImportedGame[];
+      try {
+        sharedGames = await fetchFamilySharedGames({
+          accessToken: familyToken,
+          steamId: this.options.account.steamId,
+          familyGroupId,
+          signal: this.options.signal
+        });
+        sharedSpan?.end("ok", { account: this.options.account.steamId, familyGroupId, count: sharedGames.length });
+      } catch (error) {
+        sharedSpan?.end("error", { account: this.options.account.steamId, familyGroupId, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
 
       const ownedAppIds = new Set(ownedGames.map((game) => game.externalId));
       const dedupedShared = sharedGames.filter((game) => !ownedAppIds.has(game.externalId));
@@ -99,7 +131,8 @@ export class SteamImporterProvider implements ImporterProvider {
       logger: this.options.metadataLogger,
       steamAppInfoProvider: this.options.steamAppInfoProvider,
       rawMetadataRecorder: this.options.rawMetadataRecorder,
-      mode: this.options.metadataMode
+      mode: this.options.metadataMode,
+      profiler: this.options.profiler
     });
   }
 }

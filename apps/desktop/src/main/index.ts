@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell } from "electron";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { HyniteRepository } from "@hynite/db";
@@ -6,7 +7,7 @@ import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider, type
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -41,6 +42,7 @@ let launchTracker: LaunchTracker;
 let activeLocalScan: { promise: Promise<unknown>; controller: AbortController } | undefined;
 let startupProfileService: StartupProfileService | undefined;
 let startupHeartbeatTimer: NodeJS.Timeout | undefined;
+let rendererUnresponsiveAt: number | undefined;
 
 const windowIconPath = join(__dirname, "../../assets/icons/app.ico");
 const METADATA_REFRESH_CONCURRENCY = 4;
@@ -77,8 +79,30 @@ function profile(phase: string, message: string, details?: Record<string, unknow
   startupProfileService?.log({ scope: "main", phase, message, details });
 }
 
+function profilePoint(category: string, name: string, details?: Record<string, unknown>): void {
+  startupProfileService?.point(category, name, details);
+}
+
+function profileSpan(category: string, name: string, details?: Record<string, unknown>): ProfileSpanHandle {
+  return startupProfileService?.startSpan(category, name, details) ?? { id: "", end: () => undefined };
+}
+
 function roundDuration(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 10) / 10;
+}
+
+function summarizeValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return { type: "array", length: value.length };
+  }
+  if (value && typeof value === "object") {
+    return { type: "object", keys: Object.keys(value as Record<string, unknown>).slice(0, 20) };
+  }
+  return { type: typeof value };
+}
+
+function summarizeIpcArgs(args: unknown[]): unknown[] {
+  return args.map(summarizeValue);
 }
 
 function yieldToEventLoop(): Promise<void> {
@@ -89,18 +113,21 @@ function yieldToEventLoop(): Promise<void> {
 
 function profileIpc<T>(channel: string, task: () => T | Promise<T>): T | Promise<T> {
   const startedAt = performance.now();
-  profile("ipc:start", channel);
+  const ipcCallId = randomUUID();
+  const span = profileSpan("ipc", "ipc:call", { channel, ipcCallId });
 
   try {
     const result = task();
     if (result && typeof (result as Promise<T>).then === "function") {
       return (result as Promise<T>)
         .then((value) => {
-          profile("ipc:end", channel, { durationMs: roundDuration(startedAt) });
+          span.end("ok", { channel, ipcCallId, durationMs: roundDuration(startedAt), result: summarizeValue(value) });
           return value;
         })
         .catch((error: unknown) => {
-          profile("ipc:error", channel, {
+          span.end("error", {
+            channel,
+            ipcCallId,
             durationMs: roundDuration(startedAt),
             error: error instanceof Error ? error.message : String(error)
           });
@@ -108,10 +135,12 @@ function profileIpc<T>(channel: string, task: () => T | Promise<T>): T | Promise
         });
     }
 
-    profile("ipc:end", channel, { durationMs: roundDuration(startedAt) });
+    span.end("ok", { channel, ipcCallId, durationMs: roundDuration(startedAt), result: summarizeValue(result) });
     return result;
   } catch (error) {
-    profile("ipc:error", channel, {
+    span.end("error", {
+      channel,
+      ipcCallId,
       durationMs: roundDuration(startedAt),
       error: error instanceof Error ? error.message : String(error)
     });
@@ -120,7 +149,10 @@ function profileIpc<T>(channel: string, task: () => T | Promise<T>): T | Promise
 }
 
 function handleIpc(channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => unknown): void {
-  ipcMain.handle(channel, (event, ...args) => profileIpc(channel, () => listener(event, ...args)));
+  ipcMain.handle(channel, (event, ...args) => {
+    profilePoint("ipc", "ipc:invoke", { channel, args: summarizeIpcArgs(args) });
+    return profileIpc(channel, () => listener(event, ...args));
+  });
 }
 
 function startStartupHeartbeat(): void {
@@ -129,14 +161,19 @@ function startStartupHeartbeat(): void {
   }
 
   let lastBeatAt = performance.now();
+  let lastElu = performance.eventLoopUtilization?.();
   startupHeartbeatTimer = setInterval(() => {
     const now = performance.now();
-    const driftMs = Math.round((now - lastBeatAt - 1_000) * 10) / 10;
+    const driftMs = Math.round((now - lastBeatAt - 500) * 10) / 10;
     lastBeatAt = now;
-    if (driftMs > 250) {
-      profile("main:heartbeat:lag", "Main event loop delayed", { driftMs });
+    const nextElu = performance.eventLoopUtilization?.();
+    const utilization = lastElu && nextElu ? performance.eventLoopUtilization(nextElu, lastElu).utilization : undefined;
+    lastElu = nextElu;
+    if (driftMs > 150) {
+      startupProfileService?.metric("event-loop", "main:event-loop-drift", driftMs, { utilization }, "main");
+      startupProfileService?.recordFreeze("main", driftMs, "heartbeat", { utilization });
     }
-  }, 1_000);
+  }, 500);
   startupHeartbeatTimer.unref?.();
 }
 
@@ -254,31 +291,44 @@ async function cacheMetadataAssets(patch: GameMetadataPatch, refresh = false): P
 }
 
 async function fetchNativeSteamAppInfoMetadata(game: ImportedGame) {
-  const appInfo = await nativeBridge.getSteamAppInfo(game.externalId);
-  if (appInfo) {
-    saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, "steam_appinfo", appInfo.raw ?? appInfo);
+  const span = profileSpan("native-bridge", "steam-appinfo:native", { appid: game.externalId, title: game.title });
+  try {
+    const appInfo = await nativeBridge.getSteamAppInfo(game.externalId);
+    if (appInfo) {
+      saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, "steam_appinfo", appInfo.raw ?? appInfo);
+    }
+    const patch = metadataFromSteamAppInfo(
+      game.externalId,
+      appInfo
+        ? {
+            name: appInfo.name,
+            type: appInfo.type,
+            parent: appInfo.parent,
+            clienticon: appInfo.clienticon,
+            icon: appInfo.icon,
+            steamReleaseDate: appInfo.steamReleaseDate,
+            headerImage: appInfo.headerImage,
+            smallCapsule: appInfo.smallCapsule,
+            associations: appInfo.associations,
+            libraryAssetsFull: appInfo.libraryAssetsFull,
+            libraryAssets: appInfo.libraryAssets,
+            extended: appInfo.extended
+          }
+        : undefined,
+      undefined,
+      game.title
+    );
+    span.end("ok", {
+      appid: game.externalId,
+      title: game.title,
+      returned: Boolean(appInfo),
+      fields: Object.keys(patch)
+    });
+    return patch;
+  } catch (error) {
+    span.end("error", { appid: game.externalId, title: game.title, error: error instanceof Error ? error.message : String(error) });
+    throw error;
   }
-  return metadataFromSteamAppInfo(
-    game.externalId,
-    appInfo
-      ? {
-          name: appInfo.name,
-          type: appInfo.type,
-          parent: appInfo.parent,
-          clienticon: appInfo.clienticon,
-          icon: appInfo.icon,
-          steamReleaseDate: appInfo.steamReleaseDate,
-          headerImage: appInfo.headerImage,
-          smallCapsule: appInfo.smallCapsule,
-          associations: appInfo.associations,
-          libraryAssetsFull: appInfo.libraryAssetsFull,
-          libraryAssets: appInfo.libraryAssets,
-          extended: appInfo.extended
-        }
-      : undefined,
-    undefined,
-    game.title
-  );
 }
 
 async function mapWithConcurrency<T>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<void>): Promise<void> {
@@ -1025,10 +1075,16 @@ function createWindow(): void {
     profile("renderer:did-finish-load", "Renderer finished loading");
   });
   mainWindow.webContents.on("unresponsive", () => {
+    rendererUnresponsiveAt = performance.now();
     profile("renderer:unresponsive", "Renderer became unresponsive");
   });
   mainWindow.webContents.on("responsive", () => {
-    profile("renderer:responsive", "Renderer became responsive");
+    const durationMs = rendererUnresponsiveAt ? roundDuration(rendererUnresponsiveAt) : undefined;
+    profile("renderer:responsive", "Renderer became responsive", { durationMs });
+    if (durationMs) {
+      startupProfileService?.recordFreeze("renderer", durationMs, "electron-unresponsive", { state: "responsive" });
+    }
+    rendererUnresponsiveAt = undefined;
   });
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     profile("renderer:process-gone", "Renderer process gone", { reason: details.reason, exitCode: details.exitCode });
@@ -1102,10 +1158,26 @@ async function startSteamSync(providerId?: ProviderId, options: { refreshStaleMe
 
 async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStaleMetadata?: boolean; signal?: AbortSignal } = {}) {
   const syncStartedAt = performance.now();
-  profile("steam-sync:start", "Steam sync started", { providerId, refreshStaleMetadata: options.refreshStaleMetadata });
+  const syncRunId = randomUUID();
+  const trigger = options.refreshStaleMetadata === false ? "startup" : "manual";
+  const runSpan = profileSpan("steam-sync", "steam-sync:run", {
+    syncRunId,
+    providerId,
+    trigger,
+    refreshStaleMetadata: options.refreshStaleMetadata
+  });
+  profile("steam-sync:start", "Steam sync started", { syncRunId, providerId, trigger, refreshStaleMetadata: options.refreshStaleMetadata });
   throwIfSteamSyncCancelled(options.signal);
+  const settingsSpan = profileSpan("steam-sync", "steam-sync:settings-load", { syncRunId });
   const settings = await settingsService.get();
+  settingsSpan.end("ok", {
+    syncRunId,
+    steamAccounts: settings.steamAccounts.length,
+    hasSteamWebApiKey: Boolean(settings.steamWebApiKey),
+    hasSteamGridDbApiKey: Boolean(settings.steamGridDbApiKey)
+  });
   throwIfSteamSyncCancelled(options.signal);
+  const decryptSpan = profileSpan("steam-sync", "steam-sync:decrypt-secrets", { syncRunId });
   const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
 
   if (providerId && providerId !== "steam") {
@@ -1113,6 +1185,11 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
   }
 
   const webApiKey = settings.steamWebApiKey ? await nativeBridge.decryptSecret(settings.steamWebApiKey) : undefined;
+  decryptSpan.end("ok", {
+    syncRunId,
+    decryptedSteamGridDbKey: Boolean(settings.steamGridDbApiKey),
+    decryptedSteamWebApiKey: Boolean(settings.steamWebApiKey)
+  });
   const eligibleAccounts = webApiKey ? settings.steamAccounts : [];
 
   if (eligibleAccounts.length === 0) {
@@ -1120,6 +1197,8 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
     syncStatusService.finish(
       webApiKey ? "Steam sync skipped: no paired accounts" : "Steam sync skipped: add a Steam Web API key in Settings"
     );
+    runSpan.end("ok", { syncRunId, scanned: 0, upserted: 0, installed: 0, skipped: true, refreshStaleMetadata: options.refreshStaleMetadata });
+    void startupProfileService?.writeReport();
     return { providerId: "steam" as const, scanned: 0, upserted: 0, warnings: [] };
   }
 
@@ -1147,6 +1226,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       rawMetadataRecorder: (game, source, raw) =>
         saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, source, raw),
       signal: options.signal,
+      profiler: startupProfileService,
       scanLogger: buildScanLogger(account),
       familyScanResult,
       metadataLogger: (entry) => {
@@ -1174,7 +1254,19 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
     const scanned: ImportedGame[] = [];
     for (const account of eligibleAccounts) {
       throwIfSteamSyncCancelled(options.signal);
-      const familyAccessToken = await resolveFamilyAccessTokenForAccount(account);
+      const familyTokenSpan = profileSpan("steam-sync", "steam-sync:family-token-refresh", {
+        syncRunId,
+        account: account.steamId,
+        hasFamilySession: Boolean(account.familySession)
+      });
+      let familyAccessToken: string | undefined;
+      try {
+        familyAccessToken = await resolveFamilyAccessTokenForAccount(account);
+        familyTokenSpan.end("ok", { syncRunId, account: account.steamId, refreshed: Boolean(familyAccessToken) });
+      } catch (error) {
+        familyTokenSpan.end("error", { syncRunId, account: account.steamId, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
       throwIfSteamSyncCancelled(options.signal);
       const familyScanStatus: { current: SteamFamilyScanStatus | undefined } = {
         current: account.familySession ? "skipped" : undefined
@@ -1186,7 +1278,19 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
         "steam:owned-games",
         `Calling Steam owned games API for ${account.personaName ?? account.steamId}`
       );
-      const accountScan = await accountProvider.scan();
+      const ownedSpan = profileSpan("steam-sync", "steam-sync:owned-games-fetch", { syncRunId, account: account.steamId });
+      let accountScan: ImportedGame[];
+      try {
+        accountScan = await accountProvider.scan();
+        ownedSpan.end("ok", { syncRunId, account: account.steamId, count: accountScan.length, familyScanStatus: familyScanStatus.current });
+      } catch (error) {
+        ownedSpan.end(isSteamSyncCancelledError(error) ? "cancelled" : "error", {
+          syncRunId,
+          account: account.steamId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
       if (account.familySession && familyScanStatus.current !== "complete") {
         incompleteFamilyScanOwners.add(account.steamId);
         const message = familyAccessToken
@@ -1211,27 +1315,40 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
     if (isSteamSyncCancelledError(error)) {
       syncStatusService.cancel(error.message);
       profile("steam-sync:cancelled", "Steam sync cancelled while loading owned games", {
+        syncRunId,
         durationMs: roundDuration(syncStartedAt),
         error: error.message
       });
+      runSpan.end("cancelled", { syncRunId, durationMs: roundDuration(syncStartedAt), error: error.message, trigger });
+      void startupProfileService?.writeReport();
       throw error;
     }
     syncStatusService.fail("Steam sync failed while loading owned games", { error: error instanceof Error ? error.message : String(error) });
     profile("steam-sync:error", "Steam sync failed while loading owned games", {
+      syncRunId,
       durationMs: roundDuration(syncStartedAt),
       error: error instanceof Error ? error.message : String(error)
     });
+    runSpan.end("error", {
+      syncRunId,
+      durationMs: roundDuration(syncStartedAt),
+      error: error instanceof Error ? error.message : String(error),
+      trigger
+    });
+    void startupProfileService?.writeReport();
     throw error;
   }
 
   try {
     syncStatusService.progress("steam:local-installs", "Reading local Steam install manifests", 0, imported.length);
+    const localInstallSpan = profileSpan("steam-sync", "steam-sync:local-install-scan", { syncRunId, imported: imported.length });
     const installedApps = await discoverInstalledSteamApps().catch((error: unknown) => {
       syncStatusService.log("warning", "steam:local-installs", "Could not read local Steam install manifests", {
         error: error instanceof Error ? error.message : String(error)
       });
       return new Map();
     });
+    localInstallSpan.end("ok", { syncRunId, count: installedApps.size });
     profile("steam-sync:local-installs", "Local Steam install scan finished", { count: installedApps.size, durationMs: roundDuration(syncStartedAt) });
     throwIfSteamSyncCancelled(options.signal);
 
@@ -1247,6 +1364,11 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       throwIfSteamSyncCancelled(options.signal);
       const chunkEnd = Math.min(imported.length, lastYieldIndex + STEAM_SYNC_UPSERT_YIELD_INTERVAL);
       const chunkStartedAt = performance.now();
+      const chunkSpan = profileSpan("steam-sync", "steam-sync:sqlite-upsert-chunk", {
+        syncRunId,
+        from: lastYieldIndex + 1,
+        to: chunkEnd
+      });
       syncStatusService.progress(
         "steam:upsert",
         `Syncing Steam library ${chunkEnd}/${imported.length}`,
@@ -1280,6 +1402,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
         }
       });
       const chunkDurationMs = roundDuration(chunkStartedAt);
+      chunkSpan.end("ok", { syncRunId, from: lastYieldIndex + 1, to: chunkEnd, durationMs: chunkDurationMs });
       if (chunkDurationMs > 50) {
         profile("steam-sync:upsert-chunk", "Steam library upsert chunk finished", {
           from: lastYieldIndex + 1,
@@ -1328,11 +1451,16 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       }
     }
 
+    const pruneSpan = profileSpan("steam-sync", "steam-sync:prune-provider-sources", {
+      syncRunId,
+      retainedSources: retainedSteamSources.length
+    });
     const pruneResult = repository.pruneProviderSources(
       "steam",
       ["", ...eligibleAccounts.map((account) => account.steamId)],
       retainedSteamSources
     );
+    pruneSpan.end("ok", { syncRunId, ...pruneResult });
     if (pruneResult.sourcesRemoved > 0 || pruneResult.gamesRemoved > 0) {
       syncStatusService.log(
         "info",
@@ -1342,48 +1470,123 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       );
     }
 
-    await mapWithConcurrency(metadataTargets, METADATA_REFRESH_CONCURRENCY, async (target, index) => {
-      throwIfSteamSyncCancelled(options.signal);
-      syncStatusService.progress("metadata:refresh", `Fetching fast metadata for ${target.game.title}`, index + 1, metadataTargets.length, {
-        appid: target.game.externalId
+    const metadataTotalSpan = profileSpan("steam-sync", "steam-sync:metadata-refresh-total", { syncRunId, count: metadataTargets.length });
+    try {
+      await mapWithConcurrency(metadataTargets, METADATA_REFRESH_CONCURRENCY, async (target, index) => {
+      const gameSpan = profileSpan("metadata", "metadata:game-refresh", {
+        syncRunId,
+        appid: target.game.externalId,
+        title: target.game.title,
+        index: index + 1,
+        total: metadataTargets.length
       });
-      const metadata = await cacheMetadataAssets(await provider.refreshMetadata(target.game), refreshStaleMetadata);
-      throwIfSteamSyncCancelled(options.signal);
-      repository.applyMetadata(target.id, metadata);
-      const enriched = repository.getGame(target.id);
-      if (enriched) {
-        enqueueRichMetadata(enriched);
+      try {
+        throwIfSteamSyncCancelled(options.signal);
+        syncStatusService.progress("metadata:refresh", `Fetching fast metadata for ${target.game.title}`, index + 1, metadataTargets.length, {
+          appid: target.game.externalId
+        });
+        const providerMetadata = await provider.refreshMetadata(target.game);
+        const cacheSpan = profileSpan("steam-sync", "steam-sync:asset-cache-metadata-patch", {
+          syncRunId,
+          appid: target.game.externalId,
+          title: target.game.title
+        });
+        const metadata = await cacheMetadataAssets(providerMetadata, refreshStaleMetadata);
+        cacheSpan.end("ok", {
+          syncRunId,
+          appid: target.game.externalId,
+          title: target.game.title,
+          fields: Object.keys(metadata)
+        });
+        throwIfSteamSyncCancelled(options.signal);
+        const applySpan = profileSpan("steam-sync", "steam-sync:metadata-apply", {
+          syncRunId,
+          appid: target.game.externalId,
+          title: target.game.title
+        });
+        repository.applyMetadata(target.id, metadata);
+        applySpan.end("ok", { syncRunId, appid: target.game.externalId, title: target.game.title, metadataStatus: metadata.metadataStatus });
+        const enriched = repository.getGame(target.id);
+        if (enriched) {
+          enqueueRichMetadata(enriched);
+        }
+        if (metadata.metadataStatus === "failed") {
+          warnings.push(`Metadata failed for ${target.game.title}`);
+        }
+        gameSpan.end("ok", {
+          syncRunId,
+          appid: target.game.externalId,
+          title: target.game.title,
+          metadataStatus: metadata.metadataStatus,
+          fields: Object.keys(metadata)
+        });
+      } catch (error) {
+        gameSpan.end(isSteamSyncCancelledError(error) ? "cancelled" : "error", {
+          syncRunId,
+          appid: target.game.externalId,
+          title: target.game.title,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
       }
-      if (metadata.metadataStatus === "failed") {
-        warnings.push(`Metadata failed for ${target.game.title}`);
-      }
-    });
+      });
+      metadataTotalSpan.end("ok", { syncRunId, count: metadataTargets.length });
+    } catch (error) {
+      metadataTotalSpan.end(isSteamSyncCancelledError(error) ? "cancelled" : "error", {
+        syncRunId,
+        count: metadataTargets.length,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
 
     profile("steam-sync:metadata-refresh", "Steam metadata refresh finished", {
       count: metadataTargets.length,
       durationMs: roundDuration(syncStartedAt)
     });
+    const richBackfillSpan = profileSpan("steam-sync", "steam-sync:rich-backfill-queue", { syncRunId });
     enqueueRichMetadataBackfill();
+    richBackfillSpan.end("ok", { syncRunId });
     throwIfSteamSyncCancelled(options.signal);
     syncStatusService.finish(`Steam sync complete: ${upserted} games, ${installedApps.size} local installs`);
     profile("steam-sync:end", "Steam sync completed", {
+      syncRunId,
       scanned: imported.length,
       upserted,
       installed: installedApps.size,
       durationMs: roundDuration(syncStartedAt)
     });
+    runSpan.end("ok", {
+      syncRunId,
+      scanned: imported.length,
+      upserted,
+      installed: installedApps.size,
+      refreshStaleMetadata,
+      trigger
+    });
+    void startupProfileService?.writeReport();
     return { providerId: "steam" as const, scanned: imported.length, upserted, warnings };
   } catch (error) {
     if (isSteamSyncCancelledError(error)) {
       syncStatusService.cancel(error.message);
       profile("steam-sync:cancelled", "Steam sync cancelled", { durationMs: roundDuration(syncStartedAt), error: error.message });
+      runSpan.end("cancelled", { syncRunId, durationMs: roundDuration(syncStartedAt), error: error.message, trigger });
+      void startupProfileService?.writeReport();
       throw error;
     }
     syncStatusService.fail("Steam sync failed", { error: error instanceof Error ? error.message : String(error) });
     profile("steam-sync:error", "Steam sync failed", {
+      syncRunId,
       durationMs: roundDuration(syncStartedAt),
       error: error instanceof Error ? error.message : String(error)
     });
+    runSpan.end("error", {
+      syncRunId,
+      durationMs: roundDuration(syncStartedAt),
+      error: error instanceof Error ? error.message : String(error),
+      trigger
+    });
+    void startupProfileService?.writeReport();
     throw error;
   }
 }
@@ -1495,9 +1698,11 @@ async function runLocalScan(): Promise<{ scanned: number; matched: number; ambig
   if (activeLocalScan) {
     return activeLocalScan.promise as Promise<ReturnType<typeof runLocalScan>>;
   }
+  const span = profileSpan("local-scan", "local-scan:run");
   const settings = await settingsService.get();
   const roots = (settings.localRoots ?? []).filter((root) => root.path && root.path.trim().length > 0);
   if (roots.length === 0) {
+    span.end("ok", { skipped: true, rootCount: 0 });
     return undefined;
   }
 
@@ -1545,6 +1750,7 @@ async function runLocalScan(): Promise<{ scanned: number; matched: number; ambig
       if (activeLocalScan?.promise === promise) {
         activeLocalScan = undefined;
       }
+      span.end("ok", { rootCount: roots.length });
     });
 
   activeLocalScan = { promise, controller };
@@ -1560,6 +1766,12 @@ function registerIpc(): void {
       details: entry?.details && typeof entry.details === "object" ? (entry.details as Record<string, unknown>) : undefined,
       rendererElapsedMs: typeof entry?.rendererElapsedMs === "number" ? entry.rendererElapsedMs : undefined
     });
+  });
+  ipcMain.on("debug:profile-record", (_event, entry: unknown) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    startupProfileService?.recordRendererEvent(entry as Parameters<StartupProfileService["recordRendererEvent"]>[0]);
   });
 
   handleIpc("library:sync", async (_event, providerId?: ProviderId) => {
@@ -2067,7 +2279,7 @@ function registerIpc(): void {
 
 app.whenReady().then(() => {
   const userData = app.getPath("userData");
-  startupProfileService = new StartupProfileService(join(userData, "startup-profile.ndjson"));
+  startupProfileService = new StartupProfileService(userData, app.getVersion());
   profile("app:ready", "Electron app ready", {
     userData,
     profileCommand: startupProfileService.enabled,
@@ -2080,7 +2292,7 @@ app.whenReady().then(() => {
   diagnosticLogService = new DiagnosticLogService(join(userData, "metadata-diagnostics.ndjson"));
   homeService = new HomeService(join(userData, "home-cache.json"), diagnosticLogService);
   sourceService = new SourceService(repository);
-  assetCacheService = new AssetCacheService(join(userData, "asset-cache"));
+  assetCacheService = new AssetCacheService(join(userData, "asset-cache"), startupProfileService);
   assetCacheService.registerProtocol(protocol);
   soundFileService = new SoundFileService(() => settingsService.get());
   soundFileService.registerProtocol(protocol);
@@ -2138,6 +2350,7 @@ app.on("window-all-closed", () => {
     startupHeartbeatTimer = undefined;
   }
   syncStatusService?.flush();
+  void startupProfileService?.finish();
   repository?.close();
   if (process.platform !== "darwin") {
     app.quit();

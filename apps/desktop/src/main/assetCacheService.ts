@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import type { Protocol } from "electron";
-import type { GameMetadataPatch, GameScreenshot } from "@hynite/core";
+import type { GameMetadataPatch, GameScreenshot, ProfileSink } from "@hynite/core";
 
 const CACHE_SCHEME = "hynite-asset";
 const CACHE_HOST = "cache";
@@ -55,7 +55,10 @@ async function exists(path: string): Promise<boolean> {
 }
 
 export class AssetCacheService {
-  constructor(private readonly cacheDir: string) {}
+  constructor(
+    private readonly cacheDir: string,
+    private readonly profiler?: ProfileSink
+  ) {}
 
   registerProtocol(protocol: Protocol): void {
     protocol.handle(CACHE_SCHEME, async (request) => {
@@ -69,15 +72,32 @@ export class AssetCacheService {
         return new Response("Missing asset", { status: 404 });
       }
 
+      const span = this.profiler?.startSpan("asset-cache", "asset-cache:protocol-read", {
+        asset: fileName.slice(0, 12),
+        extension: extname(fileName).toLocaleLowerCase()
+      });
       try {
         const data = await readFile(join(this.cacheDir, fileName));
+        span?.end("ok", {
+          status: "hit",
+          asset: fileName.slice(0, 12),
+          extension: extname(fileName).toLocaleLowerCase(),
+          bytes: data.byteLength,
+          contentType: contentTypeForFile(fileName)
+        });
         return new Response(data, {
           headers: {
             "content-type": contentTypeForFile(fileName),
             "cache-control": "public, max-age=315360000, immutable"
           }
         });
-      } catch {
+      } catch (error) {
+        span?.end("error", {
+          status: "missing",
+          asset: fileName.slice(0, 12),
+          extension: extname(fileName).toLocaleLowerCase(),
+          error: error instanceof Error ? error.message : String(error)
+        });
         return new Response("Asset not found", { status: 404 });
       }
     });
@@ -129,18 +149,46 @@ export class AssetCacheService {
     const fileName = `${hash}${extension}`;
     const targetPath = join(this.cacheDir, fileName);
     if (!options.refresh && await exists(targetPath)) {
+      this.profiler?.startSpan("asset-cache", "asset-cache:cache-hit", {
+        source: value,
+        asset: fileName.slice(0, 12),
+        extension
+      }).end("ok", { cacheStatus: "hit" });
       return `${CACHE_SCHEME}://${CACHE_HOST}/${fileName}`;
     }
 
+    const span = this.profiler?.startSpan("asset-cache", "asset-cache:remote-fetch", {
+      source: value,
+      asset: fileName.slice(0, 12),
+      extension,
+      refresh: Boolean(options.refresh)
+    });
     try {
       await mkdir(this.cacheDir, { recursive: true });
       const response = await fetch(value);
       if (!response.ok) {
+        span?.end("error", {
+          status: response.status,
+          statusText: response.statusText,
+          remoteFetch: true
+        });
         return value;
       }
-      await writeFile(targetPath, Buffer.from(await response.arrayBuffer()));
+      const data = Buffer.from(await response.arrayBuffer());
+      await writeFile(targetPath, data);
+      span?.end("ok", {
+        status: response.status,
+        statusText: response.statusText,
+        bytes: data.byteLength,
+        remoteFetch: true,
+        cacheStatus: "written"
+      });
       return `${CACHE_SCHEME}://${CACHE_HOST}/${fileName}`;
-    } catch {
+    } catch (error) {
+      span?.end("error", {
+        error: error instanceof Error ? error.message : String(error),
+        remoteFetch: true
+      });
       return value;
     }
   }
@@ -156,14 +204,23 @@ export class AssetCacheService {
       return value;
     }
 
+    const data = Buffer.from(value.slice(comma + 1), "base64");
+    const hash = createHash("sha256").update(data).digest("hex");
+    const fileName = `${hash}${extension}`;
+    const span = this.profiler?.startSpan("asset-cache", "asset-cache:data-url-write", {
+      asset: fileName.slice(0, 12),
+      extension,
+      bytes: data.byteLength
+    });
     try {
-      const data = Buffer.from(value.slice(comma + 1), "base64");
-      const hash = createHash("sha256").update(data).digest("hex");
-      const fileName = `${hash}${extension}`;
       await mkdir(this.cacheDir, { recursive: true });
       await writeFile(join(this.cacheDir, fileName), data);
+      span?.end("ok", { bytes: data.byteLength, cacheStatus: "written" });
       return `${CACHE_SCHEME}://${CACHE_HOST}/${fileName}`;
-    } catch {
+    } catch (error) {
+      span?.end("error", {
+        error: error instanceof Error ? error.message : String(error)
+      });
       return value;
     }
   }

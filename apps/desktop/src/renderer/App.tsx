@@ -54,7 +54,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
-import { profileStartup } from "./startupProfile";
+import { profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 
@@ -313,28 +313,41 @@ function launchHandoffBackground(game: Game | GameDetail): string | undefined {
   return game.backgroundUrl ?? game.headerUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.fullUrl ?? primaryCover(game);
 }
 
-function loadSplashAsset(url: string | undefined): Promise<string | undefined> {
+function loadSplashAsset(url: string | undefined, role: "launch-handoff-background" | "launch-handoff-logo", game?: Game | GameDetail): Promise<string | undefined> {
   if (!url) {
     return Promise.resolve(undefined);
   }
 
   return new Promise((resolve) => {
+    const span = profileImageStart(url, { role, gameId: game?.id, title: game?.title, lazy: false });
     const image = new Image();
     image.decoding = "async";
     image.onload = () => {
       const decoded = typeof image.decode === "function" ? image.decode() : Promise.resolve();
-      void decoded.then(() => resolve(url)).catch(() => resolve(url));
+      void decoded.then(() => {
+        span.end("ok", { role, gameId: game?.id, title: game?.title, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight });
+        resolve(url);
+      }).catch((error: unknown) => {
+        span.end("ok", { role, gameId: game?.id, title: game?.title, decodeError: error instanceof Error ? error.message : String(error) });
+        resolve(url);
+      });
     };
-    image.onerror = () => resolve(undefined);
+    image.onerror = () => {
+      profileImageError(url, { role, gameId: game?.id, title: game?.title, lazy: false });
+      span.end("error", { role, gameId: game?.id, title: game?.title });
+      resolve(undefined);
+    };
     image.src = url;
   });
 }
 
 async function loadLaunchHandoffAssets(game: Game | GameDetail): Promise<{ backgroundUrl?: string; logoUrl?: string }> {
+  const span = profileSpan("renderer-assets", "renderer-assets:launch-handoff-assets", { gameId: game.id, title: game.title });
   const [backgroundUrl, logoUrl] = await Promise.all([
-    loadSplashAsset(launchHandoffBackground(game)),
-    loadSplashAsset(game.logoUrl)
+    loadSplashAsset(launchHandoffBackground(game), "launch-handoff-background", game),
+    loadSplashAsset(game.logoUrl, "launch-handoff-logo", game)
   ]);
+  span.end("ok", { gameId: game.id, title: game.title, hasBackground: Boolean(backgroundUrl), hasLogo: Boolean(logoUrl) });
   return { backgroundUrl, logoUrl };
 }
 
@@ -968,6 +981,8 @@ function GameCover({
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const cover = primaryCover(game);
+  const coverProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
+  const logoProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
   const isInstalled = game.installState === "installed";
   const launchable = canLaunch(game);
   const playtimeLabel = formatHours(game.playtimeMinutes);
@@ -975,6 +990,30 @@ function GameCover({
   const familyOwnersTooltip = familyShared
     ? `Shared by Steam Family${familySharedOwners(game).length > 0 ? `: ${familySharedOwners(game).join(", ")}` : ""}`
     : undefined;
+
+  useEffect(() => {
+    if (!cover) return undefined;
+    const span = profileImageStart(cover, { role: "cover", gameId: game.id, title: game.title, lazy: true });
+    coverProfileRef.current = span;
+    return () => {
+      if (coverProfileRef.current === span) {
+        span.end("cancelled", { role: "cover", gameId: game.id, title: game.title });
+        coverProfileRef.current = undefined;
+      }
+    };
+  }, [cover, game.id, game.title]);
+
+  useEffect(() => {
+    if (!game.logoUrl) return undefined;
+    const span = profileImageStart(game.logoUrl, { role: "logo", gameId: game.id, title: game.title, lazy: true });
+    logoProfileRef.current = span;
+    return () => {
+      if (logoProfileRef.current === span) {
+        span.end("cancelled", { role: "logo", gameId: game.id, title: game.title });
+        logoProfileRef.current = undefined;
+      }
+    };
+  }, [game.logoUrl, game.id, game.title]);
 
   return (
     <div
@@ -1004,7 +1043,23 @@ function GameCover({
             src={cover}
             alt=""
             loading="lazy"
-            onLoad={() => setImgLoaded(true)}
+            onLoad={(event) => {
+              setImgLoaded(true);
+              coverProfileRef.current?.end("ok", {
+                role: "cover",
+                gameId: game.id,
+                title: game.title,
+                naturalWidth: event.currentTarget.naturalWidth,
+                naturalHeight: event.currentTarget.naturalHeight,
+                lazy: true
+              });
+              coverProfileRef.current = undefined;
+            }}
+            onError={() => {
+              profileImageError(cover, { role: "cover", gameId: game.id, title: game.title, lazy: true });
+              coverProfileRef.current?.end("error", { role: "cover", gameId: game.id, title: game.title });
+              coverProfileRef.current = undefined;
+            }}
           />
         ) : null}
         <span className="cover-reveal">
@@ -1016,6 +1071,24 @@ function GameCover({
                 alt={game.title}
                 loading="lazy"
                 decoding="async"
+                onLoad={(event) => {
+                  logoProfileRef.current?.end("ok", {
+                    role: "logo",
+                    gameId: game.id,
+                    title: game.title,
+                    naturalWidth: event.currentTarget.naturalWidth,
+                    naturalHeight: event.currentTarget.naturalHeight,
+                    lazy: true
+                  });
+                  logoProfileRef.current = undefined;
+                }}
+                onError={() => {
+                  if (game.logoUrl) {
+                    profileImageError(game.logoUrl, { role: "logo", gameId: game.id, title: game.title, lazy: true });
+                  }
+                  logoProfileRef.current?.end("error", { role: "logo", gameId: game.id, title: game.title });
+                  logoProfileRef.current = undefined;
+                }}
               />
             ) : (
               <span className="cover-logo-fallback">{game.title}</span>
@@ -4918,6 +4991,9 @@ export function App() {
 
   async function refresh() {
     const startedAt = performance.now();
+    const span = profileSpan("renderer-render", "renderer:refresh", {
+      query: queryRef.current
+    });
     const effectiveQuery = queryRef.current;
     let effectiveLibraryView = libraryViewRef.current;
     let loadedSettings: AppSettings | undefined;
@@ -4937,11 +5013,13 @@ export function App() {
       groupId: effectiveGroup?.id
     });
     const homePromise = window.hynite.home.get();
+    const librarySpan = profileSpan("library", "renderer:library-refresh-ipc");
     const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
       window.hynite.library.list(libraryQueryForView(effectiveQuery, effectiveLibraryView, effectiveGroup)),
       window.hynite.library.list({ search: "", sort: "recent", installState: "all" }),
       loadedSettings ? Promise.resolve(loadedSettings) : window.hynite.settings.get()
     ]);
+    librarySpan.end("ok", { games: nextGames.length, recentGames: nextRecentGames.length });
     setGames(nextGames);
     setAllGames(nextRecentGames);
     setLibraryGameIds(new Set(nextRecentGames.map((game) => game.id)));
@@ -4960,7 +5038,13 @@ export function App() {
       hasSettings: Boolean(nextSettings),
       hydratedFilters: libraryViewHydratedRef.current
     });
+    span.end("ok", {
+      durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      games: nextGames.length,
+      recentGames: nextRecentGames.length
+    });
     void homePromise.then((nextHome) => {
+      const homeSpan = profileSpan("home", "renderer:home-model-apply");
       profileStartup("home:end", "Renderer home model loaded", {
         durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
         stale: nextHome.stale,
@@ -4968,7 +5052,9 @@ export function App() {
         trendingRows: nextHome.trendingRows.length
       });
       setHome(nextHome);
+      homeSpan.end("ok", { stale: nextHome.stale, popularNow: nextHome.popularNow.length, trendingRows: nextHome.trendingRows.length });
     }).catch((error: unknown) => {
+      span.end("error", { error: error instanceof Error ? error.message : String(error) });
       profileStartup("home:error", "Renderer home model failed", { error: error instanceof Error ? error.message : String(error) });
       console.error(error);
     });
@@ -4994,6 +5080,7 @@ export function App() {
 
   useEffect(() => {
     profileStartup("initial-load:start", "Initial renderer load started");
+    const span = profileSpan("startup", "initial-load");
     void Promise.all([
       refresh(),
       window.hynite.sync.status().then((status) => {
@@ -5003,14 +5090,21 @@ export function App() {
       })
     ])
       .catch((error: unknown) => {
+        span.end("error", { error: error instanceof Error ? error.message : String(error) });
         profileStartup("initial-load:error", "Initial renderer load failed", { error: error instanceof Error ? error.message : String(error) });
         console.error(error);
       })
       .finally(() => {
+        span.end("ok");
         profileStartup("initial-load:end", "Initial renderer load finished");
         setInitialLoadComplete(true);
       });
     const unsubscribeSync = window.hynite.sync.onStatusChanged((status) => {
+      const syncSpan = profileSpan("renderer-render", "renderer:sync-status-update", {
+        active: status.active,
+        phase: status.phase,
+        backgroundActive: status.backgroundActive
+      });
       profileStartup("sync-status:update", "Sync status update received", {
         active: status.active,
         phase: status.phase,
@@ -5021,14 +5115,17 @@ export function App() {
         handledSyncSuccessAtRef.current = status.lastSuccessAt;
         void refresh();
       }
+      syncSpan.end("ok");
     });
     const unsubscribeGameUpdated = window.hynite.games.onUpdated((game) => {
+      const updateSpan = profileSpan("renderer-render", "renderer:game-update-apply", { id: game.id, title: game.title });
       profileStartup("game:update", "Game update received", { id: game.id, title: game.title });
       setGames((current) => current.map((item) => (item.id === game.id ? game : item)));
       setRecentGames((current) => current.map((item) => (item.id === game.id ? game : item)));
       setLibraryGameIds((current) => new Set([...current, game.id]));
       setSelected((current) => (current?.id === game.id ? game : current));
       void window.hynite.home.get().then(setHome).catch(console.error);
+      updateSpan.end("ok");
     });
     return () => {
       unsubscribeSync();
@@ -5211,14 +5308,23 @@ export function App() {
   }
 
   async function selectGame(game: Game) {
+    const span = profileSpan("renderer-render", "renderer:detail-open", { id: game.id, title: game.title });
     soundEngine.play("gameSelect");
     try {
       setSelected(await window.hynite.games.get(game.id));
+      span.end("ok", { id: game.id, title: game.title, source: "library" });
     } catch {
       try {
         setSelected(await window.hynite.games.hydrateDiscovery(game));
+        span.end("ok", { id: game.id, title: game.title, source: "discovery" });
       } catch {
-        setSelected({ ...game, sourceMatches: await window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT }) });
+        try {
+          setSelected({ ...game, sourceMatches: await window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT }) });
+          span.end("ok", { id: game.id, title: game.title, source: "source-search" });
+        } catch (error) {
+          span.end("error", { id: game.id, title: game.title, error: error instanceof Error ? error.message : String(error) });
+          throw error;
+        }
       }
     }
   }

@@ -1,4 +1,4 @@
-import type { GameMetadataPatch, ImportedGame } from "@hynite/core";
+import type { GameMetadataPatch, ImportedGame, ProfileSink } from "@hynite/core";
 import { fetchSteamAppInfoMetadata, fetchSteamCdnArtworkMetadata, fetchSteamMetadata, isSteamRateLimitError } from "./steam";
 
 export type MetadataProviderId = "steam-store" | "steam-appinfo" | "steam-cdn" | "steamgriddb";
@@ -84,16 +84,20 @@ export async function fetchSteamAppInfoMetadataWithNativeFallback(
   return fetchSteamAppInfoMetadata(game.externalId, fetchImpl, logger, game.title, (raw) => rawMetadataRecorder?.(game, "steam_appinfo", raw));
 }
 
-function shouldRunProvider(provider: MetadataProvider, fused: GameMetadataPatch): boolean {
+function providerSkipReason(provider: MetadataProvider, fused: GameMetadataPatch): string | undefined {
   if (provider.id === "steam-cdn") {
-    return !fused.coverUrl || !fused.backgroundUrl || !fused.headerUrl;
+    return !fused.coverUrl || !fused.backgroundUrl || !fused.headerUrl ? undefined : "art fields already filled";
   }
 
   if (provider.id === "steamgriddb") {
-    return !fused.libraryCapsuleUrl;
+    return !fused.libraryCapsuleUrl ? undefined : "library capsule already filled";
   }
 
-  return true;
+  return undefined;
+}
+
+function shouldRunProvider(provider: MetadataProvider, fused: GameMetadataPatch): boolean {
+  return !providerSkipReason(provider, fused);
 }
 
 export const steamStoreMetadataProvider: MetadataProvider = {
@@ -336,6 +340,7 @@ export type MetadataFusionOptions = {
   steamAppInfoProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>;
   rawMetadataRecorder?: (game: ImportedGame, source: string, raw: unknown) => void | Promise<void>;
   mode?: "fast" | "full";
+  profiler?: ProfileSink;
 };
 
 export function defaultMetadataProviders(options: MetadataFusionOptions = {}): MetadataProvider[] {
@@ -361,18 +366,63 @@ export async function refreshFusedMetadata(
 
   for (const provider of providers) {
     if (!shouldRunProvider(provider, fused)) {
+      if (!Array.isArray(providersOrOptions)) {
+        providersOrOptions.profiler?.point("metadata", "metadata:provider-skipped", {
+          provider: provider.id,
+          providerId: provider.id,
+          appid: game.externalId,
+          title: game.title,
+          reason: providerSkipReason(provider, fused)
+        });
+      }
       continue;
     }
 
+    const span = !Array.isArray(providersOrOptions)
+      ? providersOrOptions.profiler?.startSpan("metadata", "metadata:provider", {
+          provider: provider.id,
+          providerId: provider.id,
+          appid: game.externalId,
+          title: game.title
+        })
+      : undefined;
     try {
       const patch = await provider.refresh(game);
       if (patch.metadataStatus === "failed") {
+        span?.end("ok", {
+          provider: provider.id,
+          providerId: provider.id,
+          appid: game.externalId,
+          title: game.title,
+          status: "failed",
+          fields: Object.keys(patch)
+        });
         continue;
       }
 
       fused = mergePatch(fused, patch);
+      span?.end("ok", {
+        provider: provider.id,
+        providerId: provider.id,
+        appid: game.externalId,
+        title: game.title,
+        status: Object.keys(patch).length > 0 ? "ok" : "empty",
+        fields: Object.keys(patch),
+        suppliedLibraryCapsuleUrl: Boolean(patch.libraryCapsuleUrl),
+        suppliedLogoUrl: Boolean(patch.logoUrl),
+        suppliedBackgroundUrl: Boolean(patch.backgroundUrl),
+        suppliedHeaderUrl: Boolean(patch.headerUrl)
+      });
     } catch (error) {
       if (isSteamRateLimitError(error)) {
+        span?.end("error", {
+          provider: provider.id,
+          providerId: provider.id,
+          appid: game.externalId,
+          title: game.title,
+          status: "rate-limited",
+          retryAfterMs: error.retryAfterMs
+        });
         if (!Array.isArray(providersOrOptions)) {
           providersOrOptions.logger?.({
             level: "warning",
@@ -386,6 +436,14 @@ export async function refreshFusedMetadata(
         throw error;
       }
 
+      span?.end("error", {
+        provider: provider.id,
+        providerId: provider.id,
+        appid: game.externalId,
+        title: game.title,
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error)
+      });
       if (!Array.isArray(providersOrOptions)) {
         providersOrOptions.logger?.({
           level: "error",

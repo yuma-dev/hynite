@@ -193,7 +193,11 @@ const api = {
   debug: {
     seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed"),
     profile: (entry: { phase: string; message: string; details?: Record<string, unknown>; rendererElapsedMs?: number }): void =>
-      ipcRenderer.send("debug:profile", entry)
+      ipcRenderer.send("debug:profile", entry),
+    profileSpanStart: (entry: Record<string, unknown>): void => ipcRenderer.send("debug:profile-record", entry),
+    profileSpanEnd: (entry: Record<string, unknown>): void => ipcRenderer.send("debug:profile-record", entry),
+    profileMetric: (entry: Record<string, unknown>): void => ipcRenderer.send("debug:profile-record", entry),
+    profileRecord: (entry: Record<string, unknown>): void => ipcRenderer.send("debug:profile-record", entry)
   },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke("window:minimize"),
