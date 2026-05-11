@@ -1046,7 +1046,7 @@ function createWindow(): void {
     show: true,
     frame: false,
     autoHideMenuBar: true,
-    backgroundColor: "#0a0b0d",
+    backgroundColor: "#09080d",
     icon: windowIconPath,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),

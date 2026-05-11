@@ -150,87 +150,87 @@ button {
 }
 
 .startup-screen {
+  position: relative;
   width: 100vw;
   height: 100vh;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 18px;
-  padding: 32px;
   overflow: hidden;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 34%),
-    #0a0b0d;
-}
-
-.startup-mark {
-  position: relative;
-  width: 108px;
-  height: 108px;
   display: grid;
   place-items: center;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(52, 44, 70, 0.28), transparent 45%),
+    linear-gradient(135deg, #0e0d14, #09080d 72%);
 }
 
-.startup-mark span {
+.startup-screen::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background: linear-gradient(115deg, transparent 42%, rgba(255, 255, 255, 0.11) 50%, transparent 58%);
+  transform: translateX(-64%);
+  animation: startupSweep 1.2s cubic-bezier(0.22, 1, 0.36, 1) 0.1s forwards;
+  pointer-events: none;
+}
+
+.startup-bg-pattern {
   position: absolute;
   inset: 0;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-top-color: rgba(255, 255, 255, 0.58);
-  animation: startupSpin 1.2s linear infinite;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.startup-tint {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(255, 255, 255, 0.018), transparent 20%),
+    linear-gradient(180deg, rgba(9, 8, 13, 0.28), rgba(9, 8, 13, 0.62) 72%, rgba(9, 8, 13, 0.82)),
+    linear-gradient(90deg, rgba(9, 8, 13, 0.58), rgba(9, 8, 13, 0.1) 50%, rgba(9, 8, 13, 0.58));
+  pointer-events: none;
+}
+
+.startup-identity {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 24px;
 }
 
 .startup-logo {
-  width: 88px;
-  height: 88px;
+  width: 96px;
+  height: 96px;
   display: block;
   object-fit: contain;
-  filter: drop-shadow(0 0 26px rgba(205, 80, 255, 0.24));
+  filter:
+    drop-shadow(0 8px 24px rgba(0, 0, 0, 0.8))
+    drop-shadow(0 0 36px rgba(160, 80, 255, 0.22));
   user-select: none;
 }
 
-.startup-copy {
-  display: grid;
-  gap: 7px;
-  text-align: center;
-}
-
-.startup-copy h1 {
-  margin: 0;
-  font-size: 28px;
-  line-height: 1;
-  letter-spacing: 0;
-}
-
-.startup-copy p {
-  max-width: min(460px, 82vw);
-  margin: 0;
-  color: var(--text-2);
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.startup-progress {
-  width: min(240px, 64vw);
-  height: 3px;
+.startup-line {
+  width: 240px;
+  height: 2px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.12);
 }
 
-.startup-progress span {
+.startup-line span {
   display: block;
-  width: 38%;
+  width: 100%;
   height: 100%;
-  border-radius: inherit;
-  background: rgba(255, 255, 255, 0.82);
-  animation: startupProgress 1.4s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
+  transform: translateX(-115%);
+  animation: startupLine 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
-.startup-progress.determinate span {
-  transform: none;
-  animation: none;
-  transition: width 180ms ease;
+.startup-status {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .launch-handoff {
@@ -1081,29 +1081,34 @@ button {
   }
 }
 
-@keyframes startupSpin {
+@keyframes startupLine {
+  0% {
+    transform: translateX(-115%);
+  }
+
+  72%,
   to {
-    transform: rotate(360deg);
+    transform: translateX(115%);
   }
 }
 
-@keyframes startupProgress {
-  0% {
-    transform: translateX(-120%);
-  }
-
-  55%,
-  100% {
-    transform: translateX(260%);
+@keyframes startupSweep {
+  to {
+    transform: translateX(64%);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .startup-mark span,
-  .startup-progress span,
+  .startup-line span,
+  .startup-screen::after,
   .launch-handoff-line span,
   .launch-handoff::after {
     animation: none;
+  }
+
+  .startup-line span {
+    transform: translateX(0);
+    opacity: 0.5;
   }
 
   .launch-handoff-bg {

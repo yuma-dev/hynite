@@ -4,6 +4,7 @@ declare global {
   interface Window {
     hynite: HyniteApi;
     hyniteDebugSplash?: (durationMs?: number) => void;
+    hyniteDebugStartup?: (enable?: boolean) => void;
   }
 }
 

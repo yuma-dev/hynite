@@ -266,24 +266,74 @@ function TitleBar() {
   );
 }
 
-function StartupLoading({ syncStatus }: { syncStatus?: SyncStatus }) {
-  const progress =
-    syncStatus?.active && syncStatus.total && syncStatus.current !== undefined
-      ? Math.min(100, Math.round((syncStatus.current / Math.max(1, syncStatus.total)) * 100))
-      : undefined;
+function StartupBgPattern() {
+  const af = { dur: "1.4s", begin: "0s", fill: "freeze", calcMode: "spline", keySplines: "0.22 1 0.36 1", keyTimes: "0;1" };
+
+  function O(cx: number, cy: number, r: number, op: number, tx: number, ty: number) {
+    return (
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#ffffff" strokeWidth="1.5" opacity="0">
+        <animateTransform attributeName="transform" type="translate" from={`${tx} ${ty}`} to="0 0" {...af} />
+        <animate attributeName="opacity" from="0.35" to={String(op)} {...af} />
+      </circle>
+    );
+  }
+
+  function X(cx: number, cy: number, s: number, op: number, tx: number, ty: number, rot: number) {
+    const d = `M${cx - s} ${cy - s} L${cx + s} ${cy + s} M${cx + s} ${cy - s} L${cx - s} ${cy + s}`;
+    return (
+      <g opacity="0">
+        <animateTransform attributeName="transform" type="translate" from={`${tx} ${ty}`} to="0 0" {...af} />
+        <animateTransform attributeName="transform" type="rotate" from={`${rot} ${cx} ${cy}`} to={`0 ${cx} ${cy}`} additive="sum" {...af} />
+        <animate attributeName="opacity" from="0.35" to={String(op)} {...af} />
+        <path d={d} stroke="#ffffff" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+      </g>
+    );
+  }
 
   return (
+    <svg className="startup-bg-pattern" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" aria-hidden="true" preserveAspectRatio="xMidYMid slice">
+      {O(85,   92,  20, 0.07,  635,  358)}
+      {O(245,  310, 26, 0.05,  475,  140)}
+      {O(540,  82,  18, 0.06,  180,  368)}
+      {O(1095, 68,  22, 0.05, -375,  382)}
+      {O(1285, 305, 17, 0.06, -565,  145)}
+      {O(155,  580, 24, 0.06,  565, -130)}
+      {O(695,  568, 19, 0.05,   25, -118)}
+      {O(1210, 622, 21, 0.05, -490, -172)}
+      {O(345,  840, 23, 0.06,  375, -390)}
+      {O(640,  798, 16, 0.05,   80, -348)}
+      {O(1118, 808, 20, 0.05, -398, -358)}
+      {O(32,   462, 28, 0.04,  688,  -12)}
+      {O(1405, 440, 22, 0.04, -685,   10)}
+      {X(345,  140, 12, 0.07,  375,  310,  60)}
+      {X(680,  262, 16, 0.06,   40,  188, -40)}
+      {X(1340, 150, 10, 0.06, -620,  300,  35)}
+      {X(428,  245, 14, 0.07,  292,  205,  55)}
+      {X(1062, 285, 15, 0.06, -342,  165, -45)}
+      {X(65,   788, 13, 0.06,  655, -338,  35)}
+      {X(445,  638, 17, 0.06,  275, -188, -70)}
+      {X(978,  618, 14, 0.06, -258, -168,  50)}
+      {X(1390, 605,  9, 0.04, -670, -155, -25)}
+      {X(875,  840, 11, 0.04, -155, -390,  45)}
+      {X(1310, 852, 12, 0.06, -590, -402, -55)}
+      {X(178,  234, 11, 0.05,  542,  216,  30)}
+      {X(1180, 480, 14, 0.05, -460,  -30, -40)}
+      {X(300,  470, 11, 0.04,  420,  -20,  65)}
+    </svg>
+  );
+}
+
+function StartupLoading({ syncStatus }: { syncStatus?: SyncStatus }) {
+  return (
     <main className="startup-screen">
-      <div className="startup-mark">
-        <BrandLogo className="startup-logo" sizes="88px" />
-        <span />
-      </div>
-      <div className="startup-copy">
-        <h1>Hynite</h1>
-        <p>{syncStatus?.active ? syncStatus.message : "Loading library"}</p>
-      </div>
-      <div className={progress === undefined ? "startup-progress" : "startup-progress determinate"} aria-label="Startup progress">
-        <span style={progress === undefined ? undefined : { width: `${progress}%` }} />
+      <StartupBgPattern />
+      <div className="startup-tint" />
+      <div className="startup-identity">
+        <BrandLogo className="startup-logo" sizes="96px" />
+        <div className="startup-line">
+          <span />
+        </div>
+        <p className="startup-status">{syncStatus?.active ? syncStatus.message : "Loading"}</p>
       </div>
     </main>
   );
@@ -4770,6 +4820,9 @@ export function App() {
   const navigationSoundReadyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const [homeFirstLoaded, setHomeFirstLoaded] = useState(false);
+  const homeFirstLoadedRef = useRef(false);
+  const debugStartupLockRef = useRef(false);
   const [startupDone, setStartupDone] = useState(false);
   const contentRef = useRef<HTMLElement | null>(null);
   const handledSyncSuccessAtRef = useRef<string | undefined>();
@@ -4955,6 +5008,17 @@ export function App() {
   }, [startLaunchHandoff]);
 
   useEffect(() => {
+    window.hyniteDebugStartup = (enable?: boolean) => {
+      const show = enable !== false;
+      debugStartupLockRef.current = show;
+      setStartupDone(!show);
+    };
+    return () => {
+      delete window.hyniteDebugStartup;
+    };
+  }, []);
+
+  useEffect(() => {
     const onLaunchGame = (event: Event) => {
       const detail = (event as CustomEvent<LaunchGameEventDetail>).detail;
       if (!detail) {
@@ -5138,18 +5202,23 @@ export function App() {
     }).catch((error: unknown) => {
       profileStartup("home:error", "Renderer home model failed", { error: error instanceof Error ? error.message : String(error) });
       console.error(error);
+    }).finally(() => {
+      if (!homeFirstLoadedRef.current) {
+        homeFirstLoadedRef.current = true;
+        setHomeFirstLoaded(true);
+      }
     });
   }
 
   useEffect(() => {
-    if (!initialLoadComplete) return;
-    // Wait for two animation frames so the main content has actually painted before hiding the overlay.
+    if (!initialLoadComplete || !homeFirstLoaded || debugStartupLockRef.current) return;
     profileStartup("startup-overlay:paint-wait", "Initial load complete; waiting for paint");
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (debugStartupLockRef.current) return;
       profileStartup("startup-overlay:hidden", "Startup overlay hidden");
       setStartupDone(true);
     }));
-  }, [initialLoadComplete]);
+  }, [initialLoadComplete, homeFirstLoaded]);
 
   useEffect(() => {
     if (!startupDone || startupSoundPlayedRef.current) {
@@ -5161,6 +5230,7 @@ export function App() {
 
   useEffect(() => {
     if (!initialLoadStartedRef.current) {
+      document.getElementById("startup-static")?.remove();
       initialLoadStartedRef.current = true;
       profileStartup("initial-load:start", "Initial renderer load started");
       const span = profileSpan("startup", "initial-load");

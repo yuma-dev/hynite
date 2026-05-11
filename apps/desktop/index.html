@@ -11,8 +11,132 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <title>Hynite</title>
+    <style>
+      body { margin: 0; background: #09080d; }
+      #startup-static {
+        position: fixed;
+        inset: 0;
+        z-index: 9998;
+        overflow: hidden;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 50% 48%, rgba(52,44,70,0.28), transparent 45%),
+          linear-gradient(135deg, #0e0d14, #09080d 72%);
+      }
+      #startup-static::after {
+        content: "";
+        position: absolute;
+        inset: -20%;
+        background: linear-gradient(115deg, transparent 42%, rgba(255,255,255,0.11) 50%, transparent 58%);
+        transform: translateX(-64%);
+        animation: ss-sweep 1.2s cubic-bezier(0.22,1,0.36,1) 0.1s forwards;
+        pointer-events: none;
+      }
+      #startup-static .s-tint {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(circle at 50% 46%, rgba(255,255,255,0.016), transparent 20%),
+          linear-gradient(180deg, rgba(9,8,13,0.28), rgba(9,8,13,0.62) 72%, rgba(9,8,13,0.82)),
+          linear-gradient(90deg, rgba(9,8,13,0.58), rgba(9,8,13,0.1) 50%, rgba(9,8,13,0.58));
+        pointer-events: none;
+      }
+      #startup-static svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      #startup-static .s-id {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 24px;
+      }
+      #startup-static .s-logo {
+        width: 96px;
+        height: 96px;
+        object-fit: contain;
+        filter: drop-shadow(0 8px 24px rgba(0,0,0,0.8)) drop-shadow(0 0 36px rgba(160,80,255,0.22));
+      }
+      #startup-static .s-line {
+        width: 240px;
+        height: 2px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.12);
+      }
+      #startup-static .s-line span {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.9), transparent);
+        transform: translateX(-115%);
+        animation: ss-line 1.8s cubic-bezier(0.22,1,0.36,1) infinite;
+      }
+      #startup-static .s-status {
+        margin: 0;
+        color: rgba(255,255,255,0.42);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-family: system-ui, sans-serif;
+      }
+      @keyframes ss-line {
+        0% { transform: translateX(-115%); }
+        72%, to { transform: translateX(115%); }
+      }
+      @keyframes ss-sweep {
+        to { transform: translateX(64%); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #startup-static .s-line span, #startup-static::after { animation: none; }
+        #startup-static .s-line span { transform: translateX(0); opacity: 0.5; }
+      }
+    </style>
   </head>
   <body>
+    <div id="startup-static">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" aria-hidden="true" preserveAspectRatio="xMidYMid slice">
+        <circle cx="85"   cy="92"  r="20" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="635 358"   to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.07" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="245"  cy="310" r="26" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="475 140"   to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.05" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="540"  cy="82"  r="18" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="180 368"   to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="1095" cy="68"  r="22" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="-375 382"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.05" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="1285" cy="305" r="17" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="-565 145"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="155"  cy="580" r="24" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="565 -130"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="695"  cy="568" r="19" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="25 -118"    to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.05" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="1210" cy="622" r="21" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="-490 -172" to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.05" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="345"  cy="840" r="23" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="375 -390"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="640"  cy="798" r="16" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="80 -348"    to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.05" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="1118" cy="808" r="20" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="-398 -358" to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.05" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="32"   cy="462" r="28" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="688 -12"    to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.04" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <circle cx="1405" cy="440" r="22" fill="none" stroke="#fff" stroke-width="1.5" opacity="0"><animateTransform attributeName="transform" type="translate" from="-685 10"    to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.04" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/></circle>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="375 310"   to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="60 345 140"   to="0 345 140"   dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.07" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M333 128 L357 152 M357 128 L333 152" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="40 188"    to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="-40 680 262"  to="0 680 262"   dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M664 246 L696 278 M696 246 L664 278" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="-620 300"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="35 1340 150"  to="0 1340 150"  dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M1330 140 L1350 160 M1350 140 L1330 160" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="292 205"   to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="55 428 245"   to="0 428 245"   dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.07" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M414 231 L442 259 M442 231 L414 259" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="-342 165"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="-45 1062 285" to="0 1062 285" dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M1047 270 L1077 300 M1077 270 L1047 300" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="655 -338"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="35 65 788"    to="0 65 788"    dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M52 775 L78 801 M78 775 L52 801" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="275 -188"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="-70 445 638"  to="0 445 638"   dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M428 621 L462 655 M462 621 L428 655" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="-258 -168" to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="50 978 618"   to="0 978 618"   dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M964 604 L992 632 M992 604 L964 632" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="-670 -155" to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="-25 1390 605" to="0 1390 605" dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.04" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M1381 596 L1399 614 M1399 596 L1381 614" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="-155 -390" to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="45 875 840"   to="0 875 840"   dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.04" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M864 829 L886 851 M886 829 L864 851" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="-590 -402" to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="-55 1310 852" to="0 1310 852" dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.06" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M1298 840 L1322 864 M1322 840 L1298 864" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="542 216"   to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="30 178 234"   to="0 178 234"   dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.05" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M167 223 L189 245 M189 223 L167 245" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="-460 -30"  to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="-40 1180 480" to="0 1180 480" dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.05" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M1166 466 L1194 494 M1194 466 L1166 494" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+        <g opacity="0"><animateTransform attributeName="transform" type="translate" from="420 -20"   to="0 0" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animateTransform attributeName="transform" type="rotate" from="65 300 470"   to="0 300 470"   dur="1.4s" begin="0s" fill="freeze" additive="sum" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><animate attributeName="opacity" from="0.35" to="0.04" dur="1.4s" begin="0s" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/><path d="M289 459 L311 481 M311 459 L289 481" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>
+      </svg>
+      <div class="s-tint"></div>
+      <div class="s-id">
+        <img class="s-logo" src="/logo-128.png" srcset="/logo-64.png 64w, /logo-128.png 128w, /logo-256.png 256w" sizes="96px" alt="Hynite" draggable="false">
+        <div class="s-line"><span></span></div>
+        <p class="s-status">Loading</p>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/renderer/main.tsx"></script>
   </body>
