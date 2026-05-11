@@ -67,6 +67,45 @@ describe("StartupProfileService", () => {
     expect(report.freezes[0].likelyCause.category).toBe("steam-sync");
   });
 
+  it("groups cancelled renderer images without letting them dominate slowest spans", async () => {
+    process.env.HYNITE_STARTUP_PROFILE = "1";
+    const userData = await tempUserData();
+    const service = new StartupProfileService(userData, "0.0.0-test");
+
+    const ipcSpan = service.startSpan("ipc", "ipc:call", { channel: "home:get" });
+    ipcSpan.end("ok");
+    service.recordRendererEvent({
+      kind: "span-start",
+      id: "image-1",
+      ts: new Date().toISOString(),
+      elapsedMs: 10,
+      process: "renderer",
+      category: "renderer-assets",
+      name: "renderer-assets:image-load",
+      details: { sourceKind: "hynite-asset", role: "cover", asset: "abc123" }
+    } as any);
+    service.recordRendererEvent({
+      kind: "span-end",
+      id: "image-1",
+      ts: new Date().toISOString(),
+      elapsedMs: 5010,
+      durationMs: 5000,
+      process: "renderer",
+      category: "renderer-assets",
+      name: "renderer-assets:image-load",
+      status: "cancelled",
+      details: { role: "cover" }
+    } as any);
+    await service.finish();
+
+    const events = await readFile(service.eventsPath, "utf8");
+    const report = JSON.parse(await readFile(service.reportPath, "utf8"));
+    expect(events).toContain("\"sourceKind\":\"hynite-asset\"");
+    expect(report.assets.rendererImagesByStatus.cancelled.count).toBe(1);
+    expect(report.assets.rendererImagesByStatus.cancelled.slowest[0].details.sourceKind).toBe("hynite-asset");
+    expect(report.summary.slowestSpans.some((span: { status: string }) => span.status === "cancelled")).toBe(false);
+  });
+
   it("redacts secrets and full local paths", async () => {
     process.env.HYNITE_STARTUP_PROFILE = "1";
     const userData = await tempUserData();

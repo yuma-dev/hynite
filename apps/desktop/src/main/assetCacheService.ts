@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
+import { Readable } from "node:stream";
 import type { Protocol } from "electron";
 import type { GameMetadataPatch, GameScreenshot, ProfileSink } from "@hynite/core";
 
@@ -77,17 +79,19 @@ export class AssetCacheService {
         extension: extname(fileName).toLocaleLowerCase()
       });
       try {
-        const data = await readFile(join(this.cacheDir, fileName));
+        const filePath = join(this.cacheDir, fileName);
+        const info = await stat(filePath);
+        const contentType = contentTypeForFile(fileName);
         span?.end("ok", {
           status: "hit",
           asset: fileName.slice(0, 12),
           extension: extname(fileName).toLocaleLowerCase(),
-          bytes: data.byteLength,
-          contentType: contentTypeForFile(fileName)
+          bytes: info.size,
+          contentType
         });
-        return new Response(data, {
+        return new Response(Readable.toWeb(createReadStream(filePath)) as ReadableStream, {
           headers: {
-            "content-type": contentTypeForFile(fileName),
+            "content-type": contentType,
             "cache-control": "public, max-age=315360000, immutable"
           }
         });

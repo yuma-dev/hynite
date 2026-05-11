@@ -2127,6 +2127,10 @@ button {
   gap: 18px 14px;
 }
 
+.library-load-sentinel {
+  height: 1px;
+}
+
 .search-box {
   height: 34px;
   min-width: min(340px, 52vw);

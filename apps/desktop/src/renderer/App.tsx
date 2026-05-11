@@ -199,6 +199,7 @@ const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
 const HERO_AUTOPLAY_MS = 9000;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
+const LIBRARY_GRID_BATCH_SIZE = 72;
 const DOWNLOAD_MATCH_BATCH_SIZE = 20;
 const DOWNLOAD_MATCH_SEARCH_LIMIT = 500;
 const APP_ASSET_BASE_URL = import.meta.env.BASE_URL;
@@ -1043,6 +1044,7 @@ function GameCover({
             src={cover}
             alt=""
             loading="lazy"
+            decoding="async"
             onLoad={(event) => {
               setImgLoaded(true);
               coverProfileRef.current?.end("ok", {
@@ -2214,8 +2216,10 @@ function LibraryScreen({
   onOpenSettings: () => void;
 }) {
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(gridRef, 180);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(LIBRARY_GRID_BATCH_SIZE);
 
   const facets = useMemo(() => {
     const sourceSet = new Set<ProviderId>();
@@ -2237,6 +2241,26 @@ function LibraryScreen({
   }, [facetGames]);
 
   const activeCount = countActiveFilters(view.filters);
+  const visibleGames = games.slice(0, visibleCount);
+  const hasMoreGames = visibleCount < games.length;
+
+  useEffect(() => {
+    setVisibleCount(LIBRARY_GRID_BATCH_SIZE);
+  }, [games]);
+
+  useEffect(() => {
+    if (!hasMoreGames) return undefined;
+    const sentinel = loadMoreRef.current;
+    if (!sentinel) return undefined;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisibleCount((current) => Math.min(games.length, current + LIBRARY_GRID_BATCH_SIZE));
+      }
+    }, { rootMargin: "720px 0px" });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [games.length, hasMoreGames]);
 
   function setFilters(filters: LibraryFilters) {
     setView({ ...view, filters });
@@ -2303,11 +2327,14 @@ function LibraryScreen({
           )}
         </div>
       ) : (
-        <div className="library-grid" ref={gridRef} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
-          {games.map((game) => (
-            <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
-          ))}
-        </div>
+        <>
+          <div className="library-grid" ref={gridRef} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
+            {visibleGames.map((game) => (
+              <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
+            ))}
+          </div>
+          {hasMoreGames ? <div ref={loadMoreRef} className="library-load-sentinel" aria-hidden="true" /> : null}
+        </>
       )}
       <LibraryFiltersPanel
         open={filtersOpen}
@@ -4746,6 +4773,11 @@ export function App() {
   const [startupDone, setStartupDone] = useState(false);
   const contentRef = useRef<HTMLElement | null>(null);
   const handledSyncSuccessAtRef = useRef<string | undefined>();
+  const initialLoadStartedRef = useRef(false);
+  const refreshPromiseRef = useRef<Promise<void> | undefined>();
+  const homePromiseRef = useRef<Promise<HomeModel> | undefined>();
+  const homeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const homeApplyTokenRef = useRef(0);
   const prefersReducedMotion = usePrefersReducedMotion();
   const reduceLaunchMotion = Boolean(settings?.reduceMotion || prefersReducedMotion);
 
@@ -4989,7 +5021,53 @@ export function App() {
     }
   }, [activeGroupId, activeGroup, settings, setActiveGroupId]);
 
-  async function refresh() {
+  function loadHome(options: { dedupe?: boolean } = {}): Promise<HomeModel> {
+    const dedupe = options.dedupe !== false;
+    if (dedupe && homePromiseRef.current) {
+      return homePromiseRef.current;
+    }
+
+    const promise = window.hynite.home.get().finally(() => {
+      if (homePromiseRef.current === promise) {
+        homePromiseRef.current = undefined;
+      }
+    });
+    if (dedupe) {
+      homePromiseRef.current = promise;
+    }
+    return promise;
+  }
+
+  function scheduleHomeRefresh(): void {
+    const token = ++homeApplyTokenRef.current;
+    if (homeRefreshTimerRef.current) {
+      clearTimeout(homeRefreshTimerRef.current);
+    }
+    homeRefreshTimerRef.current = setTimeout(() => {
+      homeRefreshTimerRef.current = undefined;
+      void loadHome({ dedupe: false }).then((nextHome) => {
+        if (homeApplyTokenRef.current === token) {
+          setHome(nextHome);
+        }
+      }).catch(console.error);
+    }, 250);
+  }
+
+  function refresh(): Promise<void> {
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    const promise = runRefresh().finally(() => {
+      if (refreshPromiseRef.current === promise) {
+        refreshPromiseRef.current = undefined;
+      }
+    });
+    refreshPromiseRef.current = promise;
+    return promise;
+  }
+
+  async function runRefresh() {
     const startedAt = performance.now();
     const span = profileSpan("renderer-render", "renderer:refresh", {
       query: queryRef.current
@@ -5012,7 +5090,7 @@ export function App() {
       filters: effectiveLibraryView.filters,
       groupId: effectiveGroup?.id
     });
-    const homePromise = window.hynite.home.get();
+    const homePromise = loadHome();
     const librarySpan = profileSpan("library", "renderer:library-refresh-ipc");
     const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
       window.hynite.library.list(libraryQueryForView(effectiveQuery, effectiveLibraryView, effectiveGroup)),
@@ -5043,7 +5121,11 @@ export function App() {
       games: nextGames.length,
       recentGames: nextRecentGames.length
     });
+    const homeToken = homeApplyTokenRef.current;
     void homePromise.then((nextHome) => {
+      if (homeApplyTokenRef.current !== homeToken) {
+        return;
+      }
       const homeSpan = profileSpan("home", "renderer:home-model-apply");
       profileStartup("home:end", "Renderer home model loaded", {
         durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
@@ -5054,7 +5136,6 @@ export function App() {
       setHome(nextHome);
       homeSpan.end("ok", { stale: nextHome.stale, popularNow: nextHome.popularNow.length, trendingRows: nextHome.trendingRows.length });
     }).catch((error: unknown) => {
-      span.end("error", { error: error instanceof Error ? error.message : String(error) });
       profileStartup("home:error", "Renderer home model failed", { error: error instanceof Error ? error.message : String(error) });
       console.error(error);
     });
@@ -5079,26 +5160,29 @@ export function App() {
   }, [startupDone]);
 
   useEffect(() => {
-    profileStartup("initial-load:start", "Initial renderer load started");
-    const span = profileSpan("startup", "initial-load");
-    void Promise.all([
-      refresh(),
-      window.hynite.sync.status().then((status) => {
-        profileStartup("sync-status:initial", "Initial sync status loaded", { active: status.active, phase: status.phase });
-        handledSyncSuccessAtRef.current = status.lastSuccessAt;
-        setSyncStatus(status);
-      })
-    ])
-      .catch((error: unknown) => {
-        span.end("error", { error: error instanceof Error ? error.message : String(error) });
-        profileStartup("initial-load:error", "Initial renderer load failed", { error: error instanceof Error ? error.message : String(error) });
-        console.error(error);
-      })
-      .finally(() => {
-        span.end("ok");
-        profileStartup("initial-load:end", "Initial renderer load finished");
-        setInitialLoadComplete(true);
-      });
+    if (!initialLoadStartedRef.current) {
+      initialLoadStartedRef.current = true;
+      profileStartup("initial-load:start", "Initial renderer load started");
+      const span = profileSpan("startup", "initial-load");
+      void Promise.all([
+        refresh(),
+        window.hynite.sync.status().then((status) => {
+          profileStartup("sync-status:initial", "Initial sync status loaded", { active: status.active, phase: status.phase });
+          handledSyncSuccessAtRef.current = status.lastSuccessAt;
+          setSyncStatus(status);
+        })
+      ])
+        .catch((error: unknown) => {
+          span.end("error", { error: error instanceof Error ? error.message : String(error) });
+          profileStartup("initial-load:error", "Initial renderer load failed", { error: error instanceof Error ? error.message : String(error) });
+          console.error(error);
+        })
+        .finally(() => {
+          span.end("ok");
+          profileStartup("initial-load:end", "Initial renderer load finished");
+          setInitialLoadComplete(true);
+        });
+    }
     const unsubscribeSync = window.hynite.sync.onStatusChanged((status) => {
       const syncSpan = profileSpan("renderer-render", "renderer:sync-status-update", {
         active: status.active,
@@ -5124,10 +5208,14 @@ export function App() {
       setRecentGames((current) => current.map((item) => (item.id === game.id ? game : item)));
       setLibraryGameIds((current) => new Set([...current, game.id]));
       setSelected((current) => (current?.id === game.id ? game : current));
-      void window.hynite.home.get().then(setHome).catch(console.error);
+      scheduleHomeRefresh();
       updateSpan.end("ok");
     });
     return () => {
+      if (homeRefreshTimerRef.current) {
+        clearTimeout(homeRefreshTimerRef.current);
+        homeRefreshTimerRef.current = undefined;
+      }
       unsubscribeSync();
       unsubscribeGameUpdated();
     };

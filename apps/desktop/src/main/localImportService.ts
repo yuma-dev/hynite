@@ -31,6 +31,14 @@ import type { NativeBridge } from "./nativeBridge";
 
 export type LocalImportLogger = (level: "info" | "warning" | "error", message: string, details?: Record<string, unknown>) => void;
 
+const LOCAL_IMPORT_YIELD_INTERVAL = 10;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 export type LocalImportRunOptions = {
   roots: Array<{ path: string; depth: number }>;
   excludePatterns: string[];
@@ -169,7 +177,12 @@ export class LocalImportService {
 
     let matched = 0;
     let upserted = 0;
-    for (const game of imported) {
+    for (let index = 0; index < imported.length; index += 1) {
+      const game = imported[index]!;
+      if (index > 0 && index % LOCAL_IMPORT_YIELD_INTERVAL === 0) {
+        await yieldToEventLoop();
+      }
+      options.signal?.throwIfAborted();
       const persisted = this.repository.upsertImportedGame(game);
       upserted += 1;
       const candidateId = game.externalId;

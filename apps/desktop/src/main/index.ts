@@ -49,7 +49,9 @@ const METADATA_REFRESH_CONCURRENCY = 4;
 const RICH_METADATA_CONCURRENCY = 1;
 const RICH_METADATA_STARTUP_LIMIT = Number.POSITIVE_INFINITY;
 const STARTUP_BACKGROUND_DELAY_MS = 1_000;
+const STARTUP_LOCAL_SCAN_DELAY_MS = 3_000;
 const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
+const STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL = 5;
 protocol.registerSchemesAsPrivileged([
   { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
@@ -1360,15 +1362,18 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
 
     const upsertStartedAt = performance.now();
     let lastYieldIndex = 0;
+    let upsertChunkSize = STEAM_SYNC_UPSERT_YIELD_INTERVAL;
     while (lastYieldIndex < imported.length) {
       throwIfSteamSyncCancelled(options.signal);
-      const chunkEnd = Math.min(imported.length, lastYieldIndex + STEAM_SYNC_UPSERT_YIELD_INTERVAL);
+      const chunkEnd = Math.min(imported.length, lastYieldIndex + upsertChunkSize);
       const chunkStartedAt = performance.now();
       const chunkSpan = profileSpan("steam-sync", "steam-sync:sqlite-upsert-chunk", {
         syncRunId,
         from: lastYieldIndex + 1,
-        to: chunkEnd
+        to: chunkEnd,
+        size: upsertChunkSize
       });
+      const rowTimings: Array<{ id: string; title: string; durationMs: number }> = [];
       syncStatusService.progress(
         "steam:upsert",
         `Syncing Steam library ${chunkEnd}/${imported.length}`,
@@ -1380,6 +1385,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       repository.transaction(() => {
         for (let index = lastYieldIndex; index < chunkEnd; index += 1) {
           throwIfSteamSyncCancelled(options.signal);
+          const rowStartedAt = performance.now();
           const game = imported[index] as ImportedGame;
           const installed = installedApps.get(game.externalId);
           const gameWithInstallState = {
@@ -1389,6 +1395,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
           };
           const persisted = repository.upsertImportedGameSummary(gameWithInstallState);
           upserted += 1;
+          rowTimings.push({ id: persisted.id, title: game.title, durationMs: roundDuration(rowStartedAt) });
           if (hasAnyCachedMetadata(persisted) && !refreshStaleMetadata) {
             metadataCacheHits += 1;
             continue;
@@ -1402,15 +1409,27 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
         }
       });
       const chunkDurationMs = roundDuration(chunkStartedAt);
-      chunkSpan.end("ok", { syncRunId, from: lastYieldIndex + 1, to: chunkEnd, durationMs: chunkDurationMs });
+      const slowestRows = rowTimings
+        .sort((a, b) => b.durationMs - a.durationMs)
+        .slice(0, 5);
+      const chunkDetails: Record<string, unknown> = { syncRunId, from: lastYieldIndex + 1, to: chunkEnd, size: upsertChunkSize, durationMs: chunkDurationMs };
+      if (chunkDurationMs > 50) {
+        chunkDetails.slowestRows = slowestRows;
+      }
+      chunkSpan.end("ok", chunkDetails);
       if (chunkDurationMs > 50) {
         profile("steam-sync:upsert-chunk", "Steam library upsert chunk finished", {
           from: lastYieldIndex + 1,
           to: chunkEnd,
-          durationMs: chunkDurationMs
+          size: upsertChunkSize,
+          durationMs: chunkDurationMs,
+          slowestRows
         });
       }
       lastYieldIndex = chunkEnd;
+      upsertChunkSize = chunkDurationMs > 50
+        ? STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL
+        : Math.min(STEAM_SYNC_UPSERT_YIELD_INTERVAL, upsertChunkSize + STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL);
       await yieldToEventLoop();
     }
     profile("steam-sync:upsert", "Steam library upsert finished", {
@@ -2314,10 +2333,13 @@ app.whenReady().then(() => {
     const localRoots = (settings.localRoots ?? []).filter((root) => root.path && root.path.trim().length > 0);
     const runStartupLocalScan = (): void => {
       if (localRoots.length === 0) return;
-      profile("startup:background:local-scan", "Starting background local scan", { rootCount: localRoots.length });
-      void runLocalScan().catch((error: unknown) => {
-        console.warn("Startup local scan failed", error);
-      });
+      profile("startup:background:local-scan:scheduled", "Startup background local scan scheduled", { rootCount: localRoots.length, delayMs: STARTUP_LOCAL_SCAN_DELAY_MS });
+      setTimeout(() => {
+        profile("startup:background:local-scan", "Starting background local scan", { rootCount: localRoots.length });
+        void runLocalScan().catch((error: unknown) => {
+          console.warn("Startup local scan failed", error);
+        });
+      }, STARTUP_LOCAL_SCAN_DELAY_MS).unref?.();
     };
 
     runAfterInitialRendererPaint(() => {

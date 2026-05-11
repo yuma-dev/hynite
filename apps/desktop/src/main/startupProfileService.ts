@@ -365,6 +365,11 @@ export class StartupProfileService implements ProfileSink {
     if (event.kind === "span-end") {
       const started = this.activeSpans.get(event.id);
       this.activeSpans.delete(event.id);
+      const mergedDetails = redactDetails({ ...started?.details, ...event.details });
+      const mergedEvent: ProfileEvent = {
+        ...event,
+        details: mergedDetails
+      };
       this.completedSpans.push({
         id: event.id,
         process: event.process,
@@ -373,10 +378,10 @@ export class StartupProfileService implements ProfileSink {
         startedAtElapsedMs: started?.elapsedMs ?? round(event.elapsedMs - event.durationMs),
         durationMs: event.durationMs,
         status: event.status,
-        details: redactDetails({ ...started?.details, ...event.details })
+        details: mergedDetails
       });
       this.trimCompletedSpans();
-      this.record(event);
+      this.record(mergedEvent);
       return;
     }
     if (event.kind === "metric") {
@@ -551,7 +556,10 @@ export class StartupProfileService implements ProfileSink {
     const durationMs = this.elapsed();
     const mainFreezes = this.freezes.filter((freeze) => freeze.process === "main");
     const rendererFreezes = this.freezes.filter((freeze) => freeze.process === "renderer");
-    const slowestSpans = [...this.completedSpans].sort((a, b) => b.durationMs - a.durationMs).slice(0, MAX_SLOWEST);
+    const slowestSpans = [...this.completedSpans]
+      .filter((span) => !(span.name === "renderer-assets:image-load" && span.status === "cancelled"))
+      .sort((a, b) => b.durationMs - a.durationMs)
+      .slice(0, MAX_SLOWEST);
     const topCategories = this.topCategories();
     const warnings: string[] = [];
     if (this.droppedEventCount > 0) warnings.push(`Dropped ${this.droppedEventCount} profile events because the async queue was full.`);
@@ -627,6 +635,11 @@ export class StartupProfileService implements ProfileSink {
     const spans = this.completedSpans.filter((span) => span.category === "asset-cache" || span.category === "renderer-assets");
     const localReads = spans.filter((span) => span.name === "asset-cache:protocol-read");
     const rendererImages = spans.filter((span) => span.name.startsWith("renderer-assets:image"));
+    const rendererImagesByStatus = {
+      ok: timingStats(rendererImages.filter((span) => span.status === "ok"), (span) => `${String(span.details?.role ?? "image")} ${String(span.details?.sourceKind ?? "")}`.trim()),
+      error: timingStats(rendererImages.filter((span) => span.status === "error"), (span) => `${String(span.details?.role ?? "image")} ${String(span.details?.sourceKind ?? "")}`.trim()),
+      cancelled: timingStats(rendererImages.filter((span) => span.status === "cancelled"), (span) => `${String(span.details?.role ?? "image")} ${String(span.details?.sourceKind ?? "")}`.trim())
+    };
     const cacheHits = spans.filter((span) => span.name === "asset-cache:cache-hit").length;
     const remoteFetches = spans.filter((span) => span.name === "asset-cache:remote-fetch");
     const failed = spans.filter((span) => span.status === "error" || span.details?.status === "missing" || span.name.endsWith(":image-error"));
@@ -636,8 +649,9 @@ export class StartupProfileService implements ProfileSink {
       remoteFetches: remoteFetches.length,
       protocolReads: timingStats(localReads, (span) => String(span.details?.asset ?? span.name)),
       rendererImages: timingStats(rendererImages, (span) => `${String(span.details?.role ?? "image")} ${String(span.details?.sourceKind ?? "")}`.trim()),
+      rendererImagesByStatus,
       slowestLocalReads: timingStats(localReads).slowest,
-      slowestRendererImages: timingStats(rendererImages).slowest,
+      slowestRendererImages: timingStats(rendererImages.filter((span) => span.status !== "cancelled")).slowest,
       failed: failed.slice(-100),
       oneByOneGaps: this.assetGaps(rendererImages)
     };

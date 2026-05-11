@@ -64,6 +64,15 @@ type GameRow = {
   updated_at: string;
 };
 
+type GameSourceRow = {
+  game_id: string;
+  provider: ProviderId;
+  external_id: string;
+  share_type: string | null;
+  family_owner_steamids_json: string | null;
+  owner_steamid: string | null;
+};
+
 export type PersistedDownloadEntry = {
   id: string;
   sourceId: string;
@@ -143,6 +152,11 @@ function isLegacyGuessedLibraryCapsuleUrl(value: string | null | undefined): boo
 
 export class HyniteRepository {
   readonly db: DatabaseSync;
+  private upsertGameSummaryStatement?: ReturnType<DatabaseSync["prepare"]>;
+  private selectExistingSourceStatement?: ReturnType<DatabaseSync["prepare"]>;
+  private updateOwnedSourceStatement?: ReturnType<DatabaseSync["prepare"]>;
+  private upsertGameSourceStatement?: ReturnType<DatabaseSync["prepare"]>;
+  private selectGameSummaryStatement?: ReturnType<DatabaseSync["prepare"]>;
 
   constructor(dbPath: string) {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -236,8 +250,7 @@ export class HyniteRepository {
   upsertImportedGameSummary(game: ImportedGame): UpsertImportedGameSummary {
     const id = makeGameId(game.provider, game.externalId);
     const now = new Date().toISOString();
-    this.db
-      .prepare(
+    this.upsertGameSummaryStatement ??= this.db.prepare(
         `INSERT INTO games (
           id, title, sort_title, install_state, install_directory, executable_path,
           community_icon_url, genres_json, tags_json, developers_json, publishers_json,
@@ -255,8 +268,8 @@ export class HyniteRepository {
           added_at = COALESCE(excluded.added_at, games.added_at),
           launch_command = excluded.launch_command,
           updated_at = excluded.updated_at`
-      )
-      .run(
+      );
+    this.upsertGameSummaryStatement.run(
         id,
         game.title,
         makeSortTitle(game.title),
@@ -278,31 +291,27 @@ export class HyniteRepository {
       : null;
     const ownerSteamid = game.ownerSteamid ?? "";
 
-    const existingSource = this.db
-      .prepare("SELECT share_type FROM game_sources WHERE provider = ? AND external_id = ? AND owner_steamid = ?")
-      .get(game.provider, game.externalId, ownerSteamid) as { share_type: string } | undefined;
+    this.selectExistingSourceStatement ??= this.db.prepare("SELECT share_type FROM game_sources WHERE provider = ? AND external_id = ? AND owner_steamid = ?");
+    const existingSource = this.selectExistingSourceStatement.get(game.provider, game.externalId, ownerSteamid) as { share_type: string } | undefined;
 
     // Owned-takes-precedence: never downgrade an existing owned row to family for the same owner.
     if (existingSource?.share_type === "owned" && incomingShareType === "family") {
-      this.db
-        .prepare("UPDATE game_sources SET game_id = ? WHERE provider = ? AND external_id = ? AND owner_steamid = ?")
-        .run(id, game.provider, game.externalId, ownerSteamid);
+      this.updateOwnedSourceStatement ??= this.db.prepare("UPDATE game_sources SET game_id = ? WHERE provider = ? AND external_id = ? AND owner_steamid = ?");
+      this.updateOwnedSourceStatement.run(id, game.provider, game.externalId, ownerSteamid);
     } else {
-      this.db
-        .prepare(
+      this.upsertGameSourceStatement ??= this.db.prepare(
           `INSERT INTO game_sources (game_id, provider, external_id, share_type, family_owner_steamids_json, owner_steamid)
            VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(provider, external_id, owner_steamid) DO UPDATE SET
              game_id = excluded.game_id,
              share_type = excluded.share_type,
              family_owner_steamids_json = excluded.family_owner_steamids_json`
-        )
-        .run(id, game.provider, game.externalId, incomingShareType, ownerJson, ownerSteamid);
+        );
+      this.upsertGameSourceStatement.run(id, game.provider, game.externalId, incomingShareType, ownerJson, ownerSteamid);
     }
 
-    const summary = this.db
-      .prepare("SELECT id, metadata_status, metadata_version FROM games WHERE id = ?")
-      .get(id) as { id: string; metadata_status: Game["metadataStatus"]; metadata_version: number } | undefined;
+    this.selectGameSummaryStatement ??= this.db.prepare("SELECT id, metadata_status, metadata_version FROM games WHERE id = ?");
+    const summary = this.selectGameSummaryStatement.get(id) as { id: string; metadata_status: Game["metadataStatus"]; metadata_version: number } | undefined;
     if (!summary) {
       throw new Error(`Failed to persist game ${id}`);
     }
@@ -485,7 +494,7 @@ export class HyniteRepository {
 
   listGames(): Game[] {
     const rows = this.db.prepare("SELECT * FROM games ORDER BY sort_title ASC").all() as GameRow[];
-    return rows.map((row) => this.mapGameRow(row));
+    return this.mapGameRows(rows);
   }
 
   queryGames(query: LibraryQuery = {}): Game[] {
@@ -580,7 +589,7 @@ export class HyniteRepository {
 
   getGame(id: string): Game | undefined {
     const row = this.db.prepare("SELECT * FROM games WHERE id = ?").get(id) as GameRow | undefined;
-    return row ? this.mapGameRow(row) : undefined;
+    return row ? this.mapGameRows([row])[0] : undefined;
   }
 
   addPlaytime(gameId: string, minutesToAdd: number, lastPlayedAt = new Date().toISOString()): void {
@@ -669,19 +678,13 @@ export class HyniteRepository {
   listLocalGames(): Game[] {
     const rows = this.db
       .prepare(
-        `SELECT g.* FROM games g
+        `SELECT DISTINCT g.* FROM games g
          INNER JOIN game_sources s ON s.game_id = g.id
-         WHERE s.provider = 'local'`
+         WHERE s.provider = 'local'
+         ORDER BY g.sort_title ASC`
       )
       .all() as GameRow[];
-    const seen = new Set<string>();
-    const games: Game[] = [];
-    for (const row of rows) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
-      games.push(this.mapGameRow(row));
-    }
-    return games;
+    return this.mapGameRows(rows);
   }
 
   /** Remove every local-provider game and its sources. Returns the deleted count. */
@@ -961,16 +964,27 @@ export class HyniteRepository {
     return matches;
   }
 
-  private mapGameRow(row: GameRow): Game {
+  private mapGameRows(rows: GameRow[]): Game[] {
+    if (rows.length === 0) return [];
+    const placeholders = rows.map(() => "?").join(", ");
     const sourceRows = this.db
-      .prepare("SELECT provider, external_id, share_type, family_owner_steamids_json, owner_steamid FROM game_sources WHERE game_id = ?")
-      .all(row.id) as Array<{
-        provider: ProviderId;
-        external_id: string;
-        share_type: string | null;
-        family_owner_steamids_json: string | null;
-        owner_steamid: string | null;
-      }>;
+      .prepare(
+        `SELECT game_id, provider, external_id, share_type, family_owner_steamids_json, owner_steamid
+         FROM game_sources
+         WHERE game_id IN (${placeholders})`
+      )
+      .all(...rows.map((row) => row.id)) as GameSourceRow[];
+    const sourcesByGame = new Map<string, GameSourceRow[]>();
+    for (const source of sourceRows) {
+      const entries = sourcesByGame.get(source.game_id) ?? [];
+      entries.push(source);
+      sourcesByGame.set(source.game_id, entries);
+    }
+
+    return rows.map((row) => this.mapGameRow(row, sourcesByGame.get(row.id) ?? []));
+  }
+
+  private mapGameRow(row: GameRow, sourceRows: GameSourceRow[]): Game {
 
     const libraryCapsuleUrl = isLegacyGuessedLibraryCapsuleUrl(row.library_capsule_url) ? undefined : (row.library_capsule_url ?? undefined);
     const coverUrl = isLegacyGuessedLibraryCapsuleUrl(row.cover_url) ? undefined : (row.cover_url ?? undefined);

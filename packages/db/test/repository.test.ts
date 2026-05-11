@@ -268,6 +268,52 @@ describe("HyniteRepository", () => {
     repository.close();
   });
 
+  it("maps source rows consistently for full, filtered, and local library reads", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "local-alpha",
+      title: "Alpha Local",
+      installState: "installed",
+      installDirectory: "C:\\Games\\Alpha"
+    });
+    repository.attachSecondarySource({
+      gameId: "local:local-alpha",
+      provider: "steam",
+      externalId: "123"
+    });
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "456",
+      title: "Shared Beta",
+      installState: "unknown",
+      shareType: "family",
+      familyOwnerSteamIds: ["76561198000000001"],
+      ownerSteamid: "76561198000000002"
+    });
+
+    const fullLocal = repository.listGames().find((game) => game.id === "local:local-alpha");
+    const filteredLocal = repository.queryGames({ sources: ["steam"] }).find((game) => game.id === "local:local-alpha");
+    const localScreenGame = repository.listLocalGames().find((game) => game.id === "local:local-alpha");
+    const shared = repository.queryGames({ ownership: "family" })[0];
+
+    expect(fullLocal?.sourceIds.map((source) => `${source.provider}:${source.externalId}`).sort()).toEqual([
+      "local:local-alpha",
+      "steam:123"
+    ]);
+    expect(filteredLocal?.sourceIds).toEqual(fullLocal?.sourceIds);
+    expect(localScreenGame?.sourceIds).toEqual(fullLocal?.sourceIds);
+    expect(shared?.sourceIds[0]).toMatchObject({
+      provider: "steam",
+      externalId: "456",
+      shareType: "family",
+      familyOwnerSteamIds: ["76561198000000001"],
+      ownerSteamid: "76561198000000002"
+    });
+
+    repository.close();
+  });
+
   it("does not downgrade an owned source row to family on subsequent imports", () => {
     const repository = createRepository();
     repository.upsertImportedGame({
