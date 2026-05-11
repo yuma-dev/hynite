@@ -2667,23 +2667,6 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
 
 type SettingsTab = "steam" | "metadata" | "sources" | "sound" | "advanced";
 
-function formatRelativeExpiry(expiresAt: string): string {
-  const expiry = Date.parse(expiresAt);
-  if (!Number.isFinite(expiry)) {
-    return "soon";
-  }
-  const diffMs = expiry - Date.now();
-  if (diffMs <= 0) {
-    return "now (token expired — refresh)";
-  }
-  const hours = Math.floor(diffMs / (60 * 60 * 1000));
-  const minutes = Math.floor((diffMs % (60 * 60 * 1000)) / (60 * 1000));
-  if (hours >= 1) {
-    return `in ${hours}h ${minutes}m`;
-  }
-  return `in ${minutes}m`;
-}
-
 function soundFileName(filePath?: string): string {
   if (!filePath) {
     return "No file selected";
@@ -2809,17 +2792,6 @@ function SettingsScreen({
       setSteamMessage("Steam family library connected.");
     } catch (error) {
       setSteamMessage(error instanceof Error ? error.message : "Failed to connect family library.");
-    }
-  }
-
-  async function refreshFamilyLibrary(steamId: string) {
-    setSteamMessage(undefined);
-    try {
-      const next = await window.hynite.steam.refreshFamily(steamId);
-      setSettings(next);
-      setSteamMessage("Steam family session refreshed.");
-    } catch (error) {
-      setSteamMessage(error instanceof Error ? error.message : "Failed to refresh family session.");
     }
   }
 
@@ -3083,7 +3055,7 @@ function SettingsScreen({
                     <div className="steam-account-extras">
                       <span className="extras-label">
                         {account.familySession ? (
-                          <>Family library connected · expires {formatRelativeExpiry(account.familySession.expiresAt)}</>
+                          <>Family library connected · renews automatically</>
                         ) : (
                           <>Family library not connected (optional)</>
                         )}
@@ -3104,10 +3076,6 @@ function SettingsScreen({
                             </button>
                             {account.familySession ? (
                               <>
-                                <button className="secondary-action" onClick={() => void refreshFamilyLibrary(account.steamId)}>
-                                  <RefreshCw size={14} />
-                                  Refresh
-                                </button>
                                 <button className="secondary-action" onClick={() => void disconnectFamilyLibrary(account.steamId)}>
                                   <LogOut size={14} />
                                   Disconnect

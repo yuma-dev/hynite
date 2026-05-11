@@ -123,7 +123,7 @@ function decodeJwtPayload(token: string): { exp?: number; sub?: string } | undef
 async function fetchAsyncConfigFromPartition(): Promise<AsyncConfigResponse | undefined> {
   const partition = session.fromPartition(familySessionPartition);
   try {
-    const response = await partition.fetch(familyTokenEndpoint, { redirect: "manual" });
+    const response = await partition.fetch(familyTokenEndpoint, { credentials: "include", redirect: "manual" });
     if (response.status >= 300 && response.status < 400) {
       return undefined;
     }

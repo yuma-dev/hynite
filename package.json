@@ -11,11 +11,41 @@
     "dev": "node scripts/electron-vite.mjs dev --config apps/desktop/electron.vite.config.ts",
     "dev:profile": "node scripts/electron-vite.mjs --startup-profile dev --config apps/desktop/electron.vite.config.ts",
     "build": "npm run typecheck && electron-vite build --config apps/desktop/electron.vite.config.ts",
+    "installer": "npm run build && npm run native:publish && electron-builder --win nsis",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
     "assets:logos": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-logo-assets.ps1",
-    "native:build": "dotnet build native/Hynite.NativeBridge/Hynite.NativeBridge.csproj"
+    "native:build": "dotnet build native/Hynite.NativeBridge/Hynite.NativeBridge.csproj",
+    "native:publish": "dotnet publish native/Hynite.NativeBridge/Hynite.NativeBridge.csproj -c Release -r win-x64 --self-contained true -o dist/native/Hynite.NativeBridge"
+  },
+  "build": {
+    "appId": "app.hynite.launcher",
+    "productName": "Hynite",
+    "directories": {
+      "output": "dist/installer"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/native/Hynite.NativeBridge",
+        "to": "native/Hynite.NativeBridge"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icons/app.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.4",
@@ -37,6 +67,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitest/ui": "^3.2.4",
     "electron": "^39.8.5",
+    "electron-builder": "^26.8.1",
     "typescript": "^5.9.3",
     "vite": "^7.1.7",
     "vitest": "^3.2.4"

@@ -9,6 +9,8 @@ export type SteamScanLogger = (
   details?: Record<string, unknown>
 ) => void;
 
+export type SteamFamilyScanStatus = "complete" | "skipped" | "not-member" | "auth-error" | "error";
+
 export type SteamProviderOptions = {
   account?: {
     steamId: string;
@@ -23,6 +25,7 @@ export type SteamProviderOptions = {
   rawMetadataRecorder?: MetadataFusionOptions["rawMetadataRecorder"];
   metadataMode?: MetadataFusionOptions["mode"];
   signal?: AbortSignal;
+  familyScanResult?: (result: { status: SteamFamilyScanStatus; error?: string }) => void;
 };
 
 export class SteamImporterProvider implements ImporterProvider {
@@ -45,6 +48,7 @@ export class SteamImporterProvider implements ImporterProvider {
 
     const familyToken = this.options.account.familyAccessToken;
     if (!familyToken) {
+      this.options.familyScanResult?.({ status: "skipped" });
       return ownedGames;
     }
 
@@ -58,6 +62,7 @@ export class SteamImporterProvider implements ImporterProvider {
 
       if (!familyGroupId) {
         log?.("info", "Steam family group not found for paired account; skipping family-shared scan.");
+        this.options.familyScanResult?.({ status: "not-member" });
         return ownedGames;
       }
 
@@ -71,14 +76,18 @@ export class SteamImporterProvider implements ImporterProvider {
       const ownedAppIds = new Set(ownedGames.map((game) => game.externalId));
       const dedupedShared = sharedGames.filter((game) => !ownedAppIds.has(game.externalId));
 
+      this.options.familyScanResult?.({ status: "complete" });
       return [...ownedGames, ...dedupedShared];
     } catch (error) {
       if (error instanceof SteamFamilyAuthError) {
         log?.("warning", error.message, { code: error.code });
+        this.options.familyScanResult?.({ status: "auth-error", error: error.message });
       } else {
+        const message = error instanceof Error ? error.message : String(error);
         log?.("warning", "Steam family-shared games scan failed; continuing with owned library only.", {
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         });
+        this.options.familyScanResult?.({ status: "error", error: message });
       }
       return ownedGames;
     }

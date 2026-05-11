@@ -23,6 +23,10 @@ type PendingRequest<T> = {
   timeout: NodeJS.Timeout;
 };
 
+type BridgeLaunchTarget =
+  | { kind: "executable"; path: string }
+  | { kind: "project"; path: string };
+
 export type NativeSteamAppInfo = {
   appid: number;
   name?: string;
@@ -156,12 +160,18 @@ export class NativeBridge {
       return this.process;
     }
 
-    const projectPath = this.findBridgeProject();
-    const child = spawn("dotnet", ["run", "--project", projectPath], {
-      cwd: dirname(projectPath),
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true
-    });
+    const target = this.findBridgeLaunchTarget();
+    const child = target.kind === "executable"
+      ? spawn(target.path, [], {
+          cwd: dirname(target.path),
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true
+        })
+      : spawn("dotnet", ["run", "--project", target.path], {
+          cwd: dirname(target.path),
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true
+        });
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.onStdout(chunk));
@@ -220,19 +230,29 @@ export class NativeBridge {
     }
   }
 
-  private findBridgeProject(): string {
-    const candidates = [
+  private findBridgeLaunchTarget(): BridgeLaunchTarget {
+    const executableCandidates = [
+      join(process.resourcesPath ?? "", "native/Hynite.NativeBridge/Hynite.NativeBridge.exe"),
+      resolve(process.cwd(), "dist/native/Hynite.NativeBridge/Hynite.NativeBridge.exe")
+    ];
+
+    const executablePath = executableCandidates.find((candidate) => existsSync(candidate));
+    if (executablePath) {
+      return { kind: "executable", path: executablePath };
+    }
+
+    const projectCandidates = [
       resolve(process.cwd(), "native/Hynite.NativeBridge/Hynite.NativeBridge.csproj"),
       resolve(__dirname, "../../../native/Hynite.NativeBridge/Hynite.NativeBridge.csproj"),
       resolve(__dirname, "../../native/Hynite.NativeBridge/Hynite.NativeBridge.csproj"),
       join(process.resourcesPath ?? "", "native/Hynite.NativeBridge/Hynite.NativeBridge.csproj")
     ];
 
-    const projectPath = candidates.find((candidate) => existsSync(candidate));
+    const projectPath = projectCandidates.find((candidate) => existsSync(candidate));
     if (!projectPath) {
-      throw new Error("Could not find Hynite.NativeBridge project.");
+      throw new Error("Could not find Hynite.NativeBridge executable or project.");
     }
 
-    return projectPath;
+    return { kind: "project", path: projectPath };
   }
 }

@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell } 
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { HyniteRepository } from "@hynite/db";
-import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider } from "@hynite/importers";
+import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider, type SteamFamilyScanStatus } from "@hynite/importers";
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
@@ -184,7 +184,10 @@ async function resolveFamilyAccessTokenForAccount(account: SteamAccountSettings)
   }
 
   const expiresAt = Date.parse(session.expiresAt);
-  const isExpiringSoon = !Number.isFinite(expiresAt) || expiresAt - Date.now() < FAMILY_TOKEN_REFRESH_THRESHOLD_MS;
+  const now = Date.now();
+  const hasUsableExpiry = Number.isFinite(expiresAt);
+  const isExpired = !hasUsableExpiry || expiresAt <= now;
+  const isExpiringSoon = !hasUsableExpiry || expiresAt - now < FAMILY_TOKEN_REFRESH_THRESHOLD_MS;
 
   if (!isExpiringSoon) {
     try {
@@ -212,15 +215,15 @@ async function resolveFamilyAccessTokenForAccount(account: SteamAccountSettings)
     console.warn("Steam family access token refresh failed", error);
   }
 
-  if (!isExpiringSoon) {
-    return undefined;
+  if (!isExpired) {
+    try {
+      return await nativeBridge.decryptSecret(session.accessToken);
+    } catch {
+      return undefined;
+    }
   }
 
-  try {
-    return await nativeBridge.decryptSecret(session.accessToken);
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 function hasAnyCachedMetadata(game: { metadataStatus: string }): boolean {
@@ -1129,7 +1132,12 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
     }
   };
 
-  const buildProvider = (account: SteamAccountSettings, key: string, familyAccessToken: string | undefined) =>
+  const buildProvider = (
+    account: SteamAccountSettings,
+    key: string,
+    familyAccessToken: string | undefined,
+    familyScanResult?: (result: { status: SteamFamilyScanStatus; error?: string }) => void
+  ) =>
     new SteamImporterProvider({
       account: { steamId: account.steamId, webApiKey: key, familyAccessToken },
       includePlayedFreeGames: true,
@@ -1140,6 +1148,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
         saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, source, raw),
       signal: options.signal,
       scanLogger: buildScanLogger(account),
+      familyScanResult,
       metadataLogger: (entry) => {
         diagnosticLogService.log({
           level: entry.level,
@@ -1160,18 +1169,33 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
   // Scan all accounts sequentially so progress events stay coherent.
   let imported: ImportedGame[];
   let provider: SteamImporterProvider;
+  const incompleteFamilyScanOwners = new Set<string>();
   try {
     const scanned: ImportedGame[] = [];
     for (const account of eligibleAccounts) {
       throwIfSteamSyncCancelled(options.signal);
       const familyAccessToken = await resolveFamilyAccessTokenForAccount(account);
       throwIfSteamSyncCancelled(options.signal);
-      const accountProvider = buildProvider(account, webApiKey!, familyAccessToken);
+      const familyScanStatus: { current: SteamFamilyScanStatus | undefined } = {
+        current: account.familySession ? "skipped" : undefined
+      };
+      const accountProvider = buildProvider(account, webApiKey!, familyAccessToken, (result) => {
+        familyScanStatus.current = result.status;
+      });
       syncStatusService.progress(
         "steam:owned-games",
         `Calling Steam owned games API for ${account.personaName ?? account.steamId}`
       );
       const accountScan = await accountProvider.scan();
+      if (account.familySession && familyScanStatus.current !== "complete") {
+        incompleteFamilyScanOwners.add(account.steamId);
+        const message = familyAccessToken
+          ? "Steam family library refresh did not complete; preserving existing family-shared games."
+          : "Steam family token could not auto-renew; preserving existing family-shared games.";
+        const details = { account: account.personaName ?? account.steamId, status: familyScanStatus.current };
+        syncStatusService.log("warning", "steam:family", message, details);
+        diagnosticLogService.log({ level: "warning", phase: "steam:family", message, details });
+      }
       scanned.push(...accountScan);
       profile("steam-sync:owned-games", "Steam owned games scan finished", {
         account: account.steamId,
@@ -1281,10 +1305,33 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       syncStatusService.log("info", "metadata:cache", `Manual metadata refresh targets queued: ${staleMetadataCount}`);
     }
 
+    const retainedSteamSources = imported.map((game) => ({ externalId: game.externalId, ownerSteamid: game.ownerSteamid ?? "" }));
+    if (incompleteFamilyScanOwners.size > 0) {
+      const preservedLegacyFamilySources = new Set<string>();
+      for (const game of repository.listGames()) {
+        for (const source of game.sourceIds) {
+          const ownerSteamid = source.ownerSteamid ?? "";
+          if (
+            source.provider !== "steam" ||
+            source.shareType !== "family" ||
+            (!incompleteFamilyScanOwners.has(ownerSteamid) && ownerSteamid !== "")
+          ) {
+            continue;
+          }
+          const key = `${source.externalId}\u0000${ownerSteamid}`;
+          if (preservedLegacyFamilySources.has(key)) {
+            continue;
+          }
+          preservedLegacyFamilySources.add(key);
+          retainedSteamSources.push({ externalId: source.externalId, ownerSteamid });
+        }
+      }
+    }
+
     const pruneResult = repository.pruneProviderSources(
       "steam",
       ["", ...eligibleAccounts.map((account) => account.steamId)],
-      imported.map((game) => ({ externalId: game.externalId, ownerSteamid: game.ownerSteamid ?? "" }))
+      retainedSteamSources
     );
     if (pruneResult.sourcesRemoved > 0 || pruneResult.gamesRemoved > 0) {
       syncStatusService.log(
