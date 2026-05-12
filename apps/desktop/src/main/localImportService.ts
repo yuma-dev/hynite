@@ -39,6 +39,11 @@ function yieldToEventLoop(): Promise<void> {
   });
 }
 
+function localMetadataPatch(patch: GameMetadataPatch): GameMetadataPatch {
+  const { title: _title, sortTitle: _sortTitle, ...rest } = patch;
+  return rest;
+}
+
 export type LocalImportRunOptions = {
   roots: Array<{ path: string; depth: number }>;
   excludePatterns: string[];
@@ -210,7 +215,7 @@ export class LocalImportService {
       try {
         const patch = await provider.refreshMetadata(game);
         if (patch && Object.keys(patch).length > 0) {
-          this.repository.applyMetadata(persisted.id, patch);
+          this.repository.applyMetadata(persisted.id, localMetadataPatch(patch));
         }
       } catch (error) {
         options.log?.("warning", "Local metadata refresh failed", {
@@ -492,7 +497,8 @@ export class LocalImportService {
       title,
       installState: "installed",
       installDirectory: candidate.folderPath,
-      executablePath: chosenExe.path
+      executablePath: chosenExe.path,
+      addedAt: candidate.addedAtMs ? new Date(candidate.addedAtMs).toISOString() : undefined
     };
     const persisted = this.repository.upsertImportedGame(game);
 
@@ -525,7 +531,7 @@ export class LocalImportService {
           if (igdbGame) patch = mapIgdbGameToPatch(igdbGame);
         }
         if (patch && Object.keys(patch).length > 0) {
-          this.repository.applyMetadata(persisted.id, patch);
+          this.repository.applyMetadata(persisted.id, localMetadataPatch(patch));
         }
       } catch (error) {
         options.log?.("warning", "Single-add metadata refresh failed", {

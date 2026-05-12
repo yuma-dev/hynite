@@ -257,8 +257,8 @@ export class HyniteRepository {
           playtime_minutes, last_played_at, added_at, imported_at, metadata_status, launch_command, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', '[]', ?, ?, ?, ?, 'none', ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-          title = excluded.title,
-          sort_title = excluded.sort_title,
+          title = CASE WHEN excluded.id LIKE 'local:%' THEN games.title ELSE excluded.title END,
+          sort_title = CASE WHEN excluded.id LIKE 'local:%' THEN games.sort_title ELSE excluded.sort_title END,
           install_state = excluded.install_state,
           install_directory = excluded.install_directory,
           executable_path = excluded.executable_path,

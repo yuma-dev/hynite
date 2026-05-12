@@ -60,7 +60,7 @@ export class SteamImporterProvider implements ImporterProvider {
     const familyToken = this.options.account.familyAccessToken;
     if (!familyToken) {
       this.options.familyScanResult?.({ status: "skipped" });
-      return ownedGames;
+      return filterSteamLibraryVariants(ownedGames);
     }
 
     const log = this.options.scanLogger;
@@ -84,7 +84,7 @@ export class SteamImporterProvider implements ImporterProvider {
       if (!familyGroupId) {
         log?.("info", "Steam family group not found for paired account; skipping family-shared scan.");
         this.options.familyScanResult?.({ status: "not-member" });
-        return ownedGames;
+        return filterSteamLibraryVariants(ownedGames);
       }
 
       const sharedSpan = this.options.profiler?.startSpan("steam-sync", "steam-sync:family-shared-fetch", {
@@ -109,7 +109,7 @@ export class SteamImporterProvider implements ImporterProvider {
       const dedupedShared = sharedGames.filter((game) => !ownedAppIds.has(game.externalId));
 
       this.options.familyScanResult?.({ status: "complete" });
-      return [...ownedGames, ...dedupedShared];
+      return filterSteamLibraryVariants([...ownedGames, ...dedupedShared]);
     } catch (error) {
       if (error instanceof SteamFamilyAuthError) {
         log?.("warning", error.message, { code: error.code });
@@ -121,7 +121,7 @@ export class SteamImporterProvider implements ImporterProvider {
         });
         this.options.familyScanResult?.({ status: "error", error: message });
       }
-      return ownedGames;
+      return filterSteamLibraryVariants(ownedGames);
     }
   }
 
@@ -135,4 +135,49 @@ export class SteamImporterProvider implements ImporterProvider {
       profiler: this.options.profiler
     });
   }
+}
+
+type SteamLibraryVariant = "demo" | "playtest";
+
+function steamLibraryVariant(title: string): { baseTitle: string; variant?: SteamLibraryVariant } {
+  const compact = title.replace(/\s+/g, " ").trim();
+  const patterns: Array<[RegExp, SteamLibraryVariant]> = [
+    [/\s*[-:–—]\s*(?:demo|playtest)\s*$/i, "demo"],
+    [/\s*\((?:demo|playtest)\)\s*$/i, "demo"],
+    [/\s*\[(?:demo|playtest)\]\s*$/i, "demo"],
+    [/\s+(?:demo|playtest)\s*$/i, "demo"]
+  ];
+
+  for (const [pattern, fallbackVariant] of patterns) {
+    const match = pattern.exec(compact);
+    if (!match) continue;
+    const variant = /playtest/i.test(match[0]) ? "playtest" : fallbackVariant;
+    return { baseTitle: compact.slice(0, match.index).trim(), variant };
+  }
+
+  return { baseTitle: compact };
+}
+
+function normalizedSteamTitle(title: string): string {
+  return title
+    .toLocaleLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function filterSteamLibraryVariants(games: ImportedGame[]): ImportedGame[] {
+  const parsed = games.map((game) => ({ game, ...steamLibraryVariant(game.title) }));
+  const fullTitles = new Set(
+    parsed
+      .filter((entry) => !entry.variant)
+      .map((entry) => normalizedSteamTitle(entry.baseTitle))
+      .filter(Boolean)
+  );
+
+  return parsed
+    .filter((entry) => !entry.variant || !fullTitles.has(normalizedSteamTitle(entry.baseTitle)))
+    .map((entry) => entry.game);
 }

@@ -58,3 +58,26 @@ describe("SteamImporterProvider family scan status", () => {
     expect(result.map((game) => game.externalId)).toEqual(["20"]);
   });
 });
+
+describe("SteamImporterProvider library variants", () => {
+  it("filters Steam demos and playtests when the full game is present", async () => {
+    stubSteamFetch({
+      "IPlayerService/GetOwnedGames": new Response(JSON.stringify({
+        response: {
+          games: [
+            { appid: 10, name: "Shapez 2" },
+            { appid: 11, name: "Shapez 2 Demo" },
+            { appid: 12, name: "Shapez 2 Playtest" },
+            { appid: 13, name: "Standalone Demo" }
+          ]
+        }
+      }), { status: 200 })
+    });
+
+    const result = await new SteamImporterProvider({
+      account: { steamId: callerSteamId, webApiKey: "key" }
+    }).scan();
+
+    expect(result.map((game) => game.externalId)).toEqual(["10", "13"]);
+  });
+});

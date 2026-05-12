@@ -4029,7 +4029,7 @@ dd {
 }
 
 .asset-editor-backdrop {
-  z-index: 70;
+  z-index: 1200;
 }
 
 .asset-editor {
@@ -4048,6 +4048,23 @@ dd {
 
 .asset-editor-head {
   align-items: center;
+}
+
+.asset-title-field {
+  width: min(420px, 52vw);
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.asset-title-field span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.asset-title-field input {
+  width: 100%;
+  min-width: 0;
 }
 
 .asset-editor-body {

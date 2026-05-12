@@ -4141,6 +4141,7 @@ function GameAssetEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [customUrl, setCustomUrl] = useState("");
+  const [displayName, setDisplayName] = useState(game.title);
   const [selectedUrls, setSelectedUrls] = useState<Record<GameAssetKind, string | undefined>>(() => ({
     grid: gameAssetUrl(game, "grid"),
     hero: gameAssetUrl(game, "hero"),
@@ -4197,7 +4198,8 @@ function GameAssetEditor({
   const activeSlot = assetSlot(activeKind);
   const activeCrop = cropByKind[activeKind];
   const activeFit = fitModes[activeKind];
-  const dirty = ASSET_SLOTS.some((slot) => selectedUrls[slot.kind] !== gameAssetUrl(game, slot.kind));
+  const trimmedDisplayName = displayName.trim();
+  const dirty = trimmedDisplayName !== game.title || ASSET_SLOTS.some((slot) => selectedUrls[slot.kind] !== gameAssetUrl(game, slot.kind));
 
   function selectCandidate(candidate: GameAssetCandidate) {
     setSelectedUrls((current) => ({ ...current, [candidate.kind]: candidate.url }));
@@ -4225,11 +4227,18 @@ function GameAssetEditor({
 
   async function saveAssets() {
     const update: GameAssetUpdate = {};
+    if (trimmedDisplayName && trimmedDisplayName !== game.title) {
+      update.title = trimmedDisplayName;
+    }
     for (const slot of ASSET_SLOTS) {
       const next = selectedUrls[slot.kind];
       if (next !== gameAssetUrl(game, slot.kind)) {
         update[slot.kind] = next ?? null;
       }
+    }
+    if (!trimmedDisplayName) {
+      setError("Display name cannot be empty.");
+      return;
     }
     if (Object.keys(update).length === 0) {
       onClose();
@@ -4276,8 +4285,12 @@ function GameAssetEditor({
       >
         <div className="modal-head asset-editor-head">
           <div>
-            <p className="eyebrow">Artwork</p>
+            <p className="eyebrow">Game</p>
             <h2 id="asset-editor-title">Edit game assets</h2>
+            <label className="asset-title-field">
+              <span>Display name</span>
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+            </label>
           </div>
           <button className="close-button inline-close" type="button" onClick={onClose} aria-label="Close asset editor">
             <X size={18} />
@@ -4456,7 +4469,7 @@ function GameAssetEditor({
           </button>
           <button type="button" className="primary-action" disabled={saving || !dirty} onClick={() => void saveAssets()}>
             <Save size={15} />
-            {saving ? "Saving..." : "Save assets"}
+            {saving ? "Saving..." : "Save changes"}
           </button>
         </div>
       </motion.section>
@@ -5306,7 +5319,6 @@ function GameContextMenu({
         : item
     );
     await saveGroups(nextGroups);
-    onChanged();
   }
 
   async function removeFromCurrentGroup() {
@@ -5318,7 +5330,6 @@ function GameContextMenu({
         : item
     );
     await saveGroups(nextGroups);
-    onChanged();
   }
 
   async function setLaunchPreference(steamId: string | undefined) {
@@ -6311,7 +6322,6 @@ export function App() {
     void persistGroups([...normalizeGroups(settingsRef.current), nextGroup]).then(() => {
       setActiveGroupId(nextGroup.id);
       setRoute("library");
-      void refresh();
     }).catch(console.error);
   }
 

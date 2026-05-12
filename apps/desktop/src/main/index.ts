@@ -51,6 +51,7 @@ let windowStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let windowStateSaveChain: Promise<unknown> = Promise.resolve();
 
 const windowIconPath = join(__dirname, "../../assets/icons/app.ico");
+const WINDOWS_APP_USER_MODEL_ID = "app.hynite.launcher";
 const DEFAULT_WINDOW_WIDTH = 1440;
 const DEFAULT_WINDOW_HEIGHT = 900;
 const MIN_WINDOW_WIDTH = 980;
@@ -68,6 +69,10 @@ protocol.registerSchemesAsPrivileged([
   { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "hynite-music", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
 ]);
+
+if (process.platform === "win32") {
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+}
 const richMetadataQueued = new Set<string>();
 const richMetadataQueue: string[] = [];
 const richMetadataInFlight = new Set<string>();
@@ -2536,8 +2541,20 @@ function registerIpc(): void {
     if (!game) {
       throw new Error(`Game ${id} was not found.`);
     }
-    const cachedPatch = await cacheMetadataAssets(assetUpdateToPatch(update), true);
-    repository.updateGameAssets(id, patchToAssetUpdate(cachedPatch, update));
+    const nextTitle = typeof update.title === "string" ? update.title.trim() : undefined;
+    if (update.title !== undefined && !nextTitle) {
+      throw new Error("Game title cannot be empty.");
+    }
+    if (nextTitle && nextTitle !== game.title) {
+      repository.applyMetadata(id, { title: nextTitle });
+    }
+    const hasAssetUpdate = ["grid", "hero", "logo", "icon", "header", "poster"].some((kind) =>
+      Object.prototype.hasOwnProperty.call(update, kind)
+    );
+    if (hasAssetUpdate) {
+      const cachedPatch = await cacheMetadataAssets(assetUpdateToPatch(update), true);
+      repository.updateGameAssets(id, patchToAssetUpdate(cachedPatch, update));
+    }
     const updated = repository.getGame(id);
     if (!updated) {
       throw new Error(`Game ${id} was not found after asset update.`);

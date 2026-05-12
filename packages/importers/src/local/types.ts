@@ -30,6 +30,8 @@ export type LocalGameCandidate = {
   siblingMarkers: SiblingMarkers;
   /** Folder mtime in ms — used by the rescan cache to skip unchanged folders. */
   mtimeMs: number;
+  /** Filesystem birth time in ms for the candidate at this path; used as provider added activity. */
+  addedAtMs?: number;
 };
 
 export type ExeFileInfo = {

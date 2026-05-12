@@ -147,7 +147,8 @@ export class LocalImporterProvider implements ImporterProvider {
       title,
       installState: "installed",
       installDirectory: candidate.folderPath,
-      executablePath: selection.chosen.path
+      executablePath: selection.chosen.path,
+      addedAt: candidate.addedAtMs ? new Date(candidate.addedAtMs).toISOString() : undefined
     };
   }
 }

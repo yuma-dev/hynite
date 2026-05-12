@@ -75,6 +75,35 @@ describe("HyniteRepository", () => {
     repository.close();
   });
 
+  it("preserves edited local display names across local rescans", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "folder-a",
+      title: "Detected Title",
+      installState: "installed",
+      addedAt: "2024-01-01T00:00:00.000Z"
+    });
+    repository.applyMetadata("local:folder-a", { title: "My Display Name" });
+
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "folder-a",
+      title: "Detected Title After Rescan",
+      installState: "installed",
+      addedAt: "2024-02-01T00:00:00.000Z",
+      executablePath: "G:\\Games\\FolderA\\game.exe"
+    });
+
+    const game = repository.getGame("local:folder-a");
+    expect(game?.title).toBe("My Display Name");
+    expect(game?.sortTitle).toBe("my display name");
+    expect(game?.addedAt).toBe("2024-02-01T00:00:00.000Z");
+    expect(game?.executablePath).toBe("G:\\Games\\FolderA\\game.exe");
+
+    repository.close();
+  });
+
   it("groups exact normalized download title matches by source", () => {
     const repository = createRepository();
     repository.saveDownloadSource({

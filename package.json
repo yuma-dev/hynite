@@ -44,12 +44,15 @@
       "target": [
         "nsis"
       ],
-      "icon": "assets/icons/app.ico"
+      "icon": "assets/icons/app.ico",
+      "executableName": "Hynite"
     },
     "nsis": {
+      "guid": "app.hynite.launcher",
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Hynite"
     }
   },
   "dependencies": {

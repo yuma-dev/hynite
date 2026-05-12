@@ -48,6 +48,11 @@ export function shouldSkipFolder(folderName: string, excludePatterns: string[]):
   return false;
 }
 
+function addedAtMsFromStats(stats: Awaited<ReturnType<typeof stat>> | undefined): number | undefined {
+  if (!stats || typeof stats.birthtimeMs !== "number" || !Number.isFinite(stats.birthtimeMs) || stats.birthtimeMs <= 0) return undefined;
+  return stats.birthtimeMs;
+}
+
 function isExcludedExeName(name: string): boolean {
   return HARD_EXCLUDED_EXE_PATTERNS.some((pattern) => pattern.test(name));
 }
@@ -148,7 +153,8 @@ export async function buildSingleCandidate(folderPath: string): Promise<LocalGam
     folderName: basename(resolved),
     exeFiles: exes,
     siblingMarkers: markers,
-    mtimeMs: stats?.mtimeMs ?? 0
+    mtimeMs: stats?.mtimeMs ?? 0,
+    addedAtMs: addedAtMsFromStats(stats)
   };
 }
 
@@ -161,6 +167,7 @@ export async function buildSingleCandidateForFile(filePath: string): Promise<Loc
   const resolved = resolve(filePath);
   const folderPath = resolve(resolved, "..");
   const stats = await stat(folderPath).catch(() => undefined);
+  const fileStats = await stat(resolved).catch(() => undefined);
   // Best-effort sibling-marker detection in the parent dir (steam_appid.txt etc.)
   const markers = await detectSiblingMarkers(folderPath).catch(() => ({}));
   // Use the file's basename (without extension) as the candidate's folder name so
@@ -172,7 +179,8 @@ export async function buildSingleCandidateForFile(filePath: string): Promise<Loc
     folderName: fileBase || basename(folderPath),
     exeFiles: [resolved],
     siblingMarkers: markers,
-    mtimeMs: stats?.mtimeMs ?? 0
+    mtimeMs: stats?.mtimeMs ?? 0,
+    addedAtMs: addedAtMsFromStats(fileStats) ?? addedAtMsFromStats(stats)
   };
 }
 
@@ -246,7 +254,8 @@ async function enumerateCandidates(
       folderName: basename(folderPath),
       exeFiles: exes,
       siblingMarkers: markers,
-      mtimeMs: stats?.mtimeMs ?? 0
+      mtimeMs: stats?.mtimeMs ?? 0,
+      addedAtMs: addedAtMsFromStats(stats)
     });
   }
 }

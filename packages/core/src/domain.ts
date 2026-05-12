@@ -205,7 +205,9 @@ export type GameAssetCandidateResult = {
   warnings: string[];
 };
 
-export type GameAssetUpdate = Partial<Record<GameAssetKind, string | null>>;
+export type GameAssetUpdate = Partial<Record<GameAssetKind, string | null>> & {
+  title?: string;
+};
 
 export type ImporterProvider = {
   id: Exclude<ProviderId, "manual" | "igdb">;
