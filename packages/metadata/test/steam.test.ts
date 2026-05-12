@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { fetchSteamAppInfoMetadata, fetchSteamMetadata } from "../src/steam";
+import { fetchSteamAppInfoMetadata, fetchSteamMetadata, metadataFromSteamAppDetailsResponse } from "../src/steam";
 
 describe("fetchSteamMetadata", () => {
+  it("normalizes cached Steam appdetails raw payloads", () => {
+    const patch = metadataFromSteamAppDetailsResponse("10", {
+      "10": {
+        success: true,
+        data: {
+          name: "Cached Game",
+          short_description: "Fast details",
+          screenshots: [{ id: 1, path_thumbnail: "thumb.jpg", path_full: "full.jpg" }],
+          movies: [{ id: 1, name: "Trailer", thumbnail: "poster.jpg", mp4: { max: "trailer.mp4" }, highlight: true }],
+          categories: [{ id: 2, description: "Single-player" }]
+        }
+      }
+    });
+
+    expect(patch).toMatchObject({
+      title: "Cached Game",
+      shortDescription: "Fast details",
+      trailerUrl: "trailer.mp4",
+      screenshots: [{ thumbnailUrl: "thumb.jpg", fullUrl: "full.jpg" }],
+      playerModes: ["single_player"],
+      metadataStatus: "complete"
+    });
+  });
+
   it("extracts rich Steam appdetails metadata", async () => {
     const fetchMock = async () =>
       new Response(

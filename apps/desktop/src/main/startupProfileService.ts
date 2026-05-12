@@ -86,6 +86,7 @@ type ProfileReport = {
     backgroundSyncStartedMs?: number;
   };
   assets: Record<string, unknown>;
+  detailOpen: Record<string, unknown>;
   steamSync: Record<string, unknown>;
   ipc: Record<string, unknown>;
   renderer: Record<string, unknown>;
@@ -589,6 +590,7 @@ export class StartupProfileService implements ProfileSink {
       freezes: this.freezes,
       startup: this.startupReport(),
       assets: this.assetReport(),
+      detailOpen: this.detailOpenReport(),
       steamSync: this.steamSyncReport(),
       ipc: this.ipcReport(),
       renderer: this.processReport("renderer"),
@@ -678,6 +680,68 @@ export class StartupProfileService implements ProfileSink {
       }
     }
     return gaps.slice(-100);
+  }
+
+  private detailOpenReport(): Record<string, unknown> {
+    const byName = (name: string) => this.completedSpans.filter((span) => span.name === name);
+    const prefixed = (prefix: string) => this.completedSpans.filter((span) => span.name.startsWith(prefix));
+    const gamesGetIpc = this.completedSpans.filter((span) => span.category === "ipc" && span.name === "ipc:call" && span.details?.channel === "games:get");
+    const detailSpans = [
+      ...prefixed("renderer:detail-open"),
+      ...prefixed("detail:get"),
+      ...prefixed("metadata:detail"),
+      ...prefixed("source-search"),
+      ...gamesGetIpc
+    ];
+
+    const slowest = [...detailSpans]
+      .sort((a, b) => b.durationMs - a.durationMs)
+      .slice(0, 30);
+    const byGame = new Map<string, ProfileSpanSummary[]>();
+    for (const span of detailSpans) {
+      const gameId = typeof span.details?.gameId === "string"
+        ? span.details.gameId
+        : typeof span.details?.id === "string"
+          ? span.details.id
+          : undefined;
+      if (!gameId) continue;
+      const spans = byGame.get(gameId) ?? [];
+      spans.push(span);
+      byGame.set(gameId, spans);
+    }
+    const slowestGames = [...byGame.entries()]
+      .map(([gameId, spans]) => {
+        const outer = spans.find((span) => span.name === "renderer:detail-open");
+        const title = spans.find((span) => typeof span.details?.title === "string")?.details?.title;
+        return {
+          gameId,
+          title,
+          totalMs: outer?.durationMs ?? round(spans.reduce((sum, span) => sum + span.durationMs, 0)),
+          source: outer?.details?.source,
+          hasRichDetail: spans.find((span) => Object.prototype.hasOwnProperty.call(span.details ?? {}, "hasRichDetail"))?.details?.hasRichDetail,
+          screenshots: spans.find((span) => typeof span.details?.screenshots === "number")?.details?.screenshots,
+          sourceMatches: spans.find((span) => typeof span.details?.sourceMatches === "number")?.details?.sourceMatches,
+          slowestSteps: [...spans].sort((a, b) => b.durationMs - a.durationMs).slice(0, 10)
+        };
+      })
+      .sort((a, b) => Number(b.totalMs) - Number(a.totalMs))
+      .slice(0, 20);
+
+    return {
+      opens: timingStats(byName("renderer:detail-open"), (span) => String(span.details?.title ?? span.details?.id ?? span.name)),
+      rendererGamesGet: timingStats(byName("renderer:detail-open:games-get"), (span) => String(span.details?.title ?? span.details?.id ?? span.name)),
+      ipcGamesGet: timingStats(gamesGetIpc, (span) => String(span.details?.channel ?? span.name)),
+      dbRead: timingStats(byName("detail:get:db-read"), (span) => String(span.details?.title ?? span.details?.gameId ?? span.name)),
+      sourceMatches: timingStats([...byName("sources:search"), ...byName("sources:search-title")], (span) => String(span.details?.title ?? span.details?.gameId ?? span.name)),
+      rawCacheLookup: timingStats(byName("metadata:detail:raw-cache-lookup"), (span) => String(span.details?.title ?? span.details?.appid ?? span.name)),
+      rawCacheNormalize: timingStats(byName("metadata:detail:raw-cache-normalize"), (span) => String(span.details?.title ?? span.details?.appid ?? span.name)),
+      steamFetch: timingStats(byName("metadata:detail:steam-fetch"), (span) => String(span.details?.title ?? span.details?.appid ?? span.name)),
+      metadataAssetCache: timingStats(byName("metadata:detail:asset-cache"), (span) => String(span.details?.title ?? span.details?.appid ?? span.name)),
+      metadataApply: timingStats(byName("metadata:detail:apply"), (span) => String(span.details?.title ?? span.details?.appid ?? span.name)),
+      rendererApplyState: timingStats(byName("renderer:detail-open:apply-state"), (span) => String(span.details?.title ?? span.details?.id ?? span.name)),
+      slowest,
+      slowestGames
+    };
   }
 
   private steamSyncReport(): Record<string, unknown> {

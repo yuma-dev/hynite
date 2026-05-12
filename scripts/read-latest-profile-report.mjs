@@ -63,6 +63,25 @@ if (!found) {
     }
   }
 
+  const detailOpen = report.detailOpen;
+  if (detailOpen?.opens?.count) {
+    console.log("\nDetail opens:");
+    console.log(`- Opens: count ${detailOpen.opens.count}, p95 ${detailOpen.opens.p95Ms}ms, max ${detailOpen.opens.maxMs}ms`);
+    console.log(`- games:get IPC: count ${detailOpen.ipcGamesGet?.count ?? 0}, p95 ${detailOpen.ipcGamesGet?.p95Ms ?? 0}ms, max ${detailOpen.ipcGamesGet?.maxMs ?? 0}ms`);
+    console.log(`- DB read: p95 ${detailOpen.dbRead?.p95Ms ?? 0}ms, max ${detailOpen.dbRead?.maxMs ?? 0}ms`);
+    console.log(`- Source matches: p95 ${detailOpen.sourceMatches?.p95Ms ?? 0}ms, max ${detailOpen.sourceMatches?.maxMs ?? 0}ms`);
+    console.log(`- Raw cache lookup: p95 ${detailOpen.rawCacheLookup?.p95Ms ?? 0}ms, max ${detailOpen.rawCacheLookup?.maxMs ?? 0}ms`);
+    console.log(`- Steam detail fetch: count ${detailOpen.steamFetch?.count ?? 0}, p95 ${detailOpen.steamFetch?.p95Ms ?? 0}ms, max ${detailOpen.steamFetch?.maxMs ?? 0}ms`);
+    console.log(`- Metadata asset cache: p95 ${detailOpen.metadataAssetCache?.p95Ms ?? 0}ms, max ${detailOpen.metadataAssetCache?.maxMs ?? 0}ms`);
+    const slowestGames = detailOpen.slowestGames ?? [];
+    if (slowestGames.length) {
+      console.log("- Slowest games:");
+      for (const game of slowestGames.slice(0, 5)) {
+        console.log(`  - ${game.title ?? game.gameId}: ${game.totalMs}ms (${game.source ?? "unknown"})`);
+      }
+    }
+  }
+
   const freezes = report.freezes ?? [];
   if (freezes.length) {
     console.log("\nFreezes:");

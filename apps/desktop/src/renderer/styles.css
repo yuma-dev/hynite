@@ -570,6 +570,7 @@ button {
   place-items: center;
   overflow: hidden;
   position: relative;
+  contain: paint;
 }
 
 .recent-icon-button {
@@ -596,12 +597,9 @@ button {
 }
 
 .recent-play-overlay svg {
-  position: absolute;
-  top: 45%;
-  left: 45%;
   width: 13px;
   height: 13px;
-  transform: translate(-50%, -50%);
+  display: block;
 }
 
 .recent-link:hover .recent-play-overlay,
@@ -615,9 +613,13 @@ button {
 }
 
 .recent-icon img {
-  width: 100%;
-  height: 100%;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
+  max-width: calc(100% - 4px);
+  max-height: calc(100% - 4px);
+  display: block;
   object-fit: contain;
+  place-self: center;
 }
 
 .content {

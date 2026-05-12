@@ -131,7 +131,7 @@ const api = {
     remove: (id: string): Promise<void> => ipcRenderer.invoke("sources:remove", id),
     refreshSource: (id: string, json: string): Promise<SourceImportResult> =>
       ipcRenderer.invoke("sources:refreshSource", id, json),
-    search: (gameId: string): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:search", gameId),
+    search: (gameId: string, options?: SourceSearchOptions): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:search", gameId, options),
     searchTitle: (title: string, options?: SourceSearchOptions): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:searchTitle", title, options),
     exactTitleMatches: (title: string): Promise<SourceExactMatch[]> => ipcRenderer.invoke("sources:exactTitleMatches", title)
   },

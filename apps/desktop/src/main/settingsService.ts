@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, extname, join } from "node:path";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join } from "node:path";
 import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
 import { readAudioMetadata } from "./audioMetadata";
 
@@ -359,11 +359,39 @@ export class SettingsService {
     return this.bundledAudioCache;
   }
 
-  async get(): Promise<AppSettings> {
+  private backupPath(): string {
+    return `${this.filePath}.bak`;
+  }
+
+  private async readRawSettings(): Promise<LegacySettings | undefined> {
     try {
-      const raw = await readFile(this.filePath, "utf8");
-      return migrate(JSON.parse(raw) as LegacySettings, this.bundledAudio());
-    } catch {
+      return JSON.parse(await readFile(this.filePath, "utf8")) as LegacySettings;
+    } catch (primaryError) {
+      try {
+        return JSON.parse(await readFile(this.backupPath(), "utf8")) as LegacySettings;
+      } catch {
+        if (!(primaryError instanceof Error && "code" in primaryError && primaryError.code === "ENOENT")) {
+          console.warn(`Settings file could not be read; using defaults. ${primaryError instanceof Error ? primaryError.message : String(primaryError)}`);
+        }
+        return undefined;
+      }
+    }
+  }
+
+  private async writeSettings(settings: AppSettings): Promise<void> {
+    await mkdir(dirname(this.filePath), { recursive: true });
+    if (existsSync(this.filePath)) {
+      await copyFile(this.filePath, this.backupPath()).catch(() => undefined);
+    }
+    const tempPath = join(dirname(this.filePath), `.${basename(this.filePath)}.${process.pid}.${Date.now()}.tmp`);
+    await writeFile(tempPath, JSON.stringify(settings, null, 2));
+    await rename(tempPath, this.filePath);
+    await copyFile(this.filePath, this.backupPath()).catch(() => undefined);
+  }
+
+  async get(): Promise<AppSettings> {
+    const raw = await this.readRawSettings();
+    if (!raw) {
       return {
         ...defaultSettings,
         steamAccounts: [],
@@ -371,15 +399,11 @@ export class SettingsService {
         music: sanitizeMusicSettings(defaultSettings.music, this.bundledAudio())
       };
     }
+    return migrate(raw, this.bundledAudio());
   }
 
   async getWindowState(): Promise<WindowState | undefined> {
-    try {
-      const raw = await readFile(this.filePath, "utf8");
-      return sanitizeWindowState((JSON.parse(raw) as LegacySettings).windowState);
-    } catch {
-      return undefined;
-    }
+    return sanitizeWindowState((await this.readRawSettings())?.windowState);
   }
 
   async update(patch: Partial<AppSettings>): Promise<AppSettings> {
@@ -392,8 +416,7 @@ export class SettingsService {
     next.sound = sanitizeSoundSettings(next.sound, this.bundledAudio());
     next.music = sanitizeMusicSettings(next.music, this.bundledAudio());
     next.windowState = sanitizeWindowState(next.windowState);
-    await mkdir(dirname(this.filePath), { recursive: true });
-    await writeFile(this.filePath, JSON.stringify(next, null, 2));
+    await this.writeSettings(next);
     return next;
   }
 

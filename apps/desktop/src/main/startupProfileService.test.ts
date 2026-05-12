@@ -106,6 +106,46 @@ describe("StartupProfileService", () => {
     expect(report.summary.slowestSpans.some((span: { status: string }) => span.status === "cancelled")).toBe(false);
   });
 
+  it("summarizes detail-open substeps", async () => {
+    process.env.HYNITE_STARTUP_PROFILE = "1";
+    const userData = await tempUserData();
+    const service = new StartupProfileService(userData, "0.0.0-test");
+
+    service.recordRendererEvent({
+      kind: "span-start",
+      id: "detail-open-1",
+      ts: new Date().toISOString(),
+      elapsedMs: 10,
+      process: "renderer",
+      category: "renderer-render",
+      name: "renderer:detail-open",
+      details: { id: "steam:10", title: "Cached Game" }
+    } as any);
+    service.recordRendererEvent({
+      kind: "span-end",
+      id: "detail-open-1",
+      ts: new Date().toISOString(),
+      elapsedMs: 130,
+      durationMs: 120,
+      process: "renderer",
+      category: "renderer-render",
+      name: "renderer:detail-open",
+      status: "ok",
+      details: { id: "steam:10", title: "Cached Game", source: "library" }
+    } as any);
+    const dbSpan = service.startSpan("sqlite", "detail:get:db-read", { gameId: "steam:10", title: "Cached Game" });
+    dbSpan.end("ok", { hasRichDetail: false, screenshots: 0 });
+    const metadataSpan = service.startSpan("metadata", "metadata:detail:raw-cache-lookup", { gameId: "steam:10", appid: "10", title: "Cached Game" });
+    metadataSpan.end("ok", { cacheHit: true });
+    await service.finish();
+
+    const report = JSON.parse(await readFile(service.reportPath, "utf8"));
+    expect(report.detailOpen.opens.count).toBe(1);
+    expect(report.detailOpen.dbRead.count).toBe(1);
+    expect(report.detailOpen.rawCacheLookup.count).toBe(1);
+    expect(report.detailOpen.slowestGames[0].gameId).toBe("steam:10");
+  });
+
   it("redacts secrets and full local paths", async () => {
     process.env.HYNITE_STARTUP_PROFILE = "1";
     const userData = await tempUserData();

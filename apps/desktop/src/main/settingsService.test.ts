@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -88,6 +88,19 @@ describe("SettingsService", () => {
       cacheTtlHours: 6,
       reduceMotion: true,
       autoHideAfterLaunch: true
+    });
+  });
+
+  it("writes a backup and recovers settings when the primary file is corrupt", async () => {
+    const service = createService();
+    await service.update({ cacheTtlHours: 6, reduceMotion: true });
+    expect(existsSync(join(tempDir!, "settings.json.bak"))).toBe(true);
+
+    writeFileSync(join(tempDir!, "settings.json"), "{");
+
+    await expect(service.get()).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      reduceMotion: true
     });
   });
 

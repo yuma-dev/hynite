@@ -4244,6 +4244,7 @@ function DetailOverlay({
   const [downloadQuery, setDownloadQuery] = useState(game.title);
   const [downloadMatches, setDownloadMatches] = useState<SourceMatch[]>(game.sourceMatches);
   const [downloadSearching, setDownloadSearching] = useState(false);
+  const [downloadMatchesLoading, setDownloadMatchesLoading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | undefined>();
   const [expandedSourceIds, setExpandedSourceIds] = useState<Set<string>>(() => new Set());
   const [visibleBySource, setVisibleBySource] = useState<Record<string, number>>({});
@@ -4349,6 +4350,43 @@ function DetailOverlay({
     setExpandedSourceIds(new Set());
     setVisibleBySource({});
   }, [game.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const span = profileSpan("renderer-render", "renderer:detail-open:source-matches-lazy", { id: game.id, title: game.title });
+    setDownloadMatchesLoading(true);
+    const search = game.sourceMatches.length > 0
+      ? Promise.resolve(game.sourceMatches)
+      : game.id.startsWith("steam:") || game.id.startsWith("local:")
+        ? window.hynite.sources.search(game.id, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT })
+        : window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT });
+    search
+      .then((matches) => {
+        if (cancelled) {
+          span.end("cancelled", { id: game.id, title: game.title });
+          return;
+        }
+        setDownloadMatches(matches);
+        span.end("ok", { id: game.id, title: game.title, sourceMatches: matches.length });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          span.end("cancelled", { id: game.id, title: game.title });
+          return;
+        }
+        setDownloadError(error instanceof Error ? error.message : "Search failed.");
+        span.end("error", { id: game.id, title: game.title, error: error instanceof Error ? error.message : String(error) });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDownloadMatchesLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+      setDownloadMatchesLoading(false);
+    };
+  }, [game.id, game.title, game.sourceMatches]);
 
   useEffect(() => {
     const savedSteamId = settings?.launchAccountPreferences?.[game.id];
@@ -4605,7 +4643,7 @@ function DetailOverlay({
               </div>
               {downloadError ? <p className="error-line">{downloadError}</p> : null}
               {downloadGroups.length === 0 ? (
-                <p className="muted">No source matches.</p>
+                <p className="muted">{downloadMatchesLoading ? "Loading source matches..." : "No source matches."}</p>
               ) : (
                 <div className="source-match-groups">
                   {downloadGroups.map((group) => {
@@ -5881,15 +5919,47 @@ export function App() {
     const span = profileSpan("renderer-render", "renderer:detail-open", { id: game.id, title: game.title });
     soundEngine.play("gameSelect");
     try {
-      setSelected(await window.hynite.games.get(game.id));
+      const ipcSpan = profileSpan("renderer-render", "renderer:detail-open:games-get", { id: game.id, title: game.title });
+      const detail = await window.hynite.games.get(game.id);
+      ipcSpan.end("ok", {
+        id: game.id,
+        title: game.title,
+        screenshots: detail.screenshots.length,
+        sourceMatches: detail.sourceMatches?.length ?? 0,
+        hasTrailer: Boolean(detail.trailerUrl),
+        hasAboutText: Boolean(detail.aboutText)
+      });
+      const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "library" });
+      setSelected(detail);
+      applySpan.end("ok");
       span.end("ok", { id: game.id, title: game.title, source: "library" });
     } catch {
       try {
-        setSelected(await window.hynite.games.hydrateDiscovery(game));
-        span.end("ok", { id: game.id, title: game.title, source: "discovery" });
+        const partialDetail = { ...game, sourceMatches: [] };
+        const applyPartialSpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "discovery-partial" });
+        setSelected(partialDetail);
+        applyPartialSpan.end("ok", { partial: true });
+        span.end("ok", { id: game.id, title: game.title, source: "discovery-partial", hydrationDeferred: true });
+        const hydrateSpan = profileSpan("renderer-render", "renderer:detail-open:hydrate-discovery", { id: game.id, title: game.title });
+        const detail = await window.hynite.games.hydrateDiscovery(game);
+        hydrateSpan.end("ok", {
+          id: game.id,
+          title: game.title,
+          screenshots: detail.screenshots.length,
+          hasTrailer: Boolean(detail.trailerUrl),
+          hasAboutText: Boolean(detail.aboutText)
+        });
+        const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "discovery" });
+        setSelected(detail);
+        applySpan.end("ok");
       } catch {
         try {
-          setSelected({ ...game, sourceMatches: await window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT }) });
+          const sourceSpan = profileSpan("renderer-render", "renderer:detail-open:source-search", { id: game.id, title: game.title });
+          const sourceMatches = await window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT });
+          sourceSpan.end("ok", { id: game.id, title: game.title, sourceMatches: sourceMatches.length });
+          const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "source-search" });
+          setSelected({ ...game, sourceMatches });
+          applySpan.end("ok");
           span.end("ok", { id: game.id, title: game.title, source: "source-search" });
         } catch (error) {
           span.end("error", { id: game.id, title: game.title, error: error instanceof Error ? error.message : String(error) });

@@ -185,6 +185,64 @@ function movieUrl(movie: SteamMovie | undefined): string | undefined {
   return movie?.mp4?.max ?? movie?.mp4?.["480"] ?? movie?.webm?.max ?? movie?.webm?.["480"] ?? movie?.hls_h264;
 }
 
+export function metadataFromSteamAppDetailsResponse(
+  appid: string,
+  json: unknown,
+  logger?: SteamMetadataLogger,
+  gameTitle = appid
+): GameMetadataPatch {
+  const details = (json as SteamAppDetailsResponse | undefined)?.[appid];
+  if (!details?.success || !details.data) {
+    logger?.({
+      level: "warning",
+      providerId: "steam-store",
+      gameTitle,
+      appid,
+      message: "Steam appdetails returned no game details",
+      details: { success: details?.success, returnedKeys: details?.data ? Object.keys(details.data) : [] }
+    });
+    return { metadataStatus: "failed" };
+  }
+
+  const data = details.data;
+  const highlightedMovie = data.movies?.find((movie) => movie.highlight && movieUrl(movie)) ?? data.movies?.find((movie) => movieUrl(movie));
+  return {
+    title: data.name,
+    backgroundUrl: data.background_raw ?? data.background,
+    headerUrl: data.header_image ?? data.capsule_imagev5 ?? data.capsule_image,
+    trailerUrl: movieUrl(highlightedMovie),
+    trailerPosterUrl: highlightedMovie?.thumbnail,
+    screenshots:
+      data.screenshots
+        ?.filter((screenshot) => screenshot.path_thumbnail && screenshot.path_full)
+        .map((screenshot) => ({
+          thumbnailUrl: screenshot.path_thumbnail as string,
+          fullUrl: screenshot.path_full as string
+        })) ?? [],
+    shortDescription: stripHtml(data.short_description),
+    aboutText: data.about_the_game ?? data.detailed_description,
+    websiteUrl: data.website,
+    supportUrl: data.support_info?.url,
+    platforms: data.platforms
+      ? {
+          windows: Boolean(data.platforms.windows),
+          mac: Boolean(data.platforms.mac),
+          linux: Boolean(data.platforms.linux)
+        }
+      : undefined,
+    achievementCount: data.achievements?.total,
+    recommendationCount: data.recommendations?.total,
+    contentDescriptors: data.content_descriptors?.notes ? [stripHtml(data.content_descriptors.notes) ?? data.content_descriptors.notes] : [],
+    genres: data.genres?.map((genre) => genre.description) ?? [],
+    tags: data.categories?.map((category) => category.description) ?? [],
+    playerModes: playerModesFromSteamCategories(data.categories),
+    developers: data.developers ?? [],
+    publishers: data.publishers ?? [],
+    releaseDate: parseSteamDate(data.release_date?.date),
+    metadataStatus: "complete"
+  };
+}
+
 export async function fetchSteamMetadata(
   appid: string,
   fetchImpl: typeof fetch = fetch,
@@ -209,56 +267,7 @@ export async function fetchSteamMetadata(
 
     const json = (await response.json()) as SteamAppDetailsResponse;
     await rawRecorder?.(json);
-    const details = json[appid];
-    if (!details?.success || !details.data) {
-      logger?.({
-        level: "warning",
-        providerId: "steam-store",
-        gameTitle,
-        appid,
-        message: "Steam appdetails returned no game details",
-        details: { success: details?.success, returnedKeys: details?.data ? Object.keys(details.data) : [] }
-      });
-      return { metadataStatus: "failed" };
-    }
-
-    const data = details.data;
-    const highlightedMovie = data.movies?.find((movie) => movie.highlight && movieUrl(movie)) ?? data.movies?.find((movie) => movieUrl(movie));
-    return {
-      title: data.name,
-      backgroundUrl: data.background_raw ?? data.background,
-      headerUrl: data.header_image ?? data.capsule_imagev5 ?? data.capsule_image,
-      trailerUrl: movieUrl(highlightedMovie),
-      trailerPosterUrl: highlightedMovie?.thumbnail,
-      screenshots:
-        data.screenshots
-          ?.filter((screenshot) => screenshot.path_thumbnail && screenshot.path_full)
-          .map((screenshot) => ({
-            thumbnailUrl: screenshot.path_thumbnail as string,
-            fullUrl: screenshot.path_full as string
-          })) ?? [],
-      shortDescription: stripHtml(data.short_description),
-      aboutText: data.about_the_game ?? data.detailed_description,
-      websiteUrl: data.website,
-      supportUrl: data.support_info?.url,
-      platforms: data.platforms
-        ? {
-            windows: Boolean(data.platforms.windows),
-            mac: Boolean(data.platforms.mac),
-            linux: Boolean(data.platforms.linux)
-          }
-        : undefined,
-      achievementCount: data.achievements?.total,
-      recommendationCount: data.recommendations?.total,
-      contentDescriptors: data.content_descriptors?.notes ? [stripHtml(data.content_descriptors.notes) ?? data.content_descriptors.notes] : [],
-      genres: data.genres?.map((genre) => genre.description) ?? [],
-      tags: data.categories?.map((category) => category.description) ?? [],
-      playerModes: playerModesFromSteamCategories(data.categories),
-      developers: data.developers ?? [],
-      publishers: data.publishers ?? [],
-      releaseDate: parseSteamDate(data.release_date?.date),
-      metadataStatus: "complete"
-    };
+    return metadataFromSteamAppDetailsResponse(appid, json, logger, gameTitle);
   } catch (error) {
     if (isSteamRateLimitError(error)) {
       logger?.({

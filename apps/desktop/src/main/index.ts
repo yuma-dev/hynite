@@ -11,7 +11,7 @@ import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
 import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
-import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
+import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
 import { HomeService } from "./homeService";
 import { NativeBridge } from "./nativeBridge";
@@ -981,7 +981,40 @@ async function hydrateRichDetailMetadata(game: Game): Promise<Game> {
   }
 
   try {
+    const rawLookupSpan = profileSpan("metadata", "metadata:detail:raw-cache-lookup", { gameId: game.id, appid: imported.externalId, title: game.title });
+    const cachedRaw = repository.getRawGameMetadata("steam", imported.externalId, "steam_appdetails");
+    rawLookupSpan.end("ok", { gameId: game.id, appid: imported.externalId, title: game.title, cacheHit: Boolean(cachedRaw) });
+    if (cachedRaw) {
+      const normalizeSpan = profileSpan("metadata", "metadata:detail:raw-cache-normalize", { gameId: game.id, appid: imported.externalId, title: game.title });
+      const cachedMetadata = metadataFromSteamAppDetailsResponse(imported.externalId, cachedRaw.raw, undefined, imported.title);
+      normalizeSpan.end(cachedMetadata.metadataStatus === "failed" ? "error" : "ok", {
+        gameId: game.id,
+        appid: imported.externalId,
+        title: game.title,
+        metadataStatus: cachedMetadata.metadataStatus,
+        fields: Object.keys(cachedMetadata)
+      });
+      if (cachedMetadata.metadataStatus !== "failed") {
+        const cacheAssetsSpan = profileSpan("metadata", "metadata:detail:asset-cache", { gameId: game.id, appid: imported.externalId, title: game.title, source: "raw-cache" });
+        const cachedAssetsMetadata = await cacheMetadataAssets(cachedMetadata);
+        cacheAssetsSpan.end("ok", { gameId: game.id, appid: imported.externalId, title: game.title, fields: Object.keys(cachedAssetsMetadata) });
+        const applySpan = profileSpan("metadata", "metadata:detail:apply", { gameId: game.id, appid: imported.externalId, title: game.title, source: "raw-cache" });
+        repository.applyMetadata(game.id, cachedAssetsMetadata);
+        const hydrated = repository.getGame(game.id) ?? game;
+        applySpan.end("ok", {
+          gameId: game.id,
+          appid: imported.externalId,
+          title: game.title,
+          screenshots: hydrated.screenshots.length,
+          hasTrailer: Boolean(hydrated.trailerUrl),
+          hasAboutText: Boolean(hydrated.aboutText)
+        });
+        return hydrated;
+      }
+    }
+
     syncStatusService.log("info", "metadata:detail", `Fetching detail metadata for ${game.title}`, { appid: imported.externalId });
+    const fetchSpan = profileSpan("metadata", "metadata:detail:steam-fetch", { gameId: game.id, appid: imported.externalId, title: game.title });
     const metadata = await fetchSteamMetadata(imported.externalId, fetch, (entry) => {
       diagnosticLogService.log({
         level: entry.level,
@@ -993,12 +1026,32 @@ async function hydrateRichDetailMetadata(game: Game): Promise<Game> {
         }
       });
     }, imported.title, (raw) => saveSteamRawMetadata(game.id, imported.externalId, "steam_appdetails", raw));
+    fetchSpan.end(metadata.metadataStatus === "failed" ? "error" : "ok", {
+      gameId: game.id,
+      appid: imported.externalId,
+      title: game.title,
+      metadataStatus: metadata.metadataStatus,
+      fields: Object.keys(metadata)
+    });
     if (metadata.metadataStatus === "failed") {
       return game;
     }
 
-    repository.applyMetadata(game.id, await cacheMetadataAssets(metadata));
-    return repository.getGame(game.id) ?? game;
+    const cacheAssetsSpan = profileSpan("metadata", "metadata:detail:asset-cache", { gameId: game.id, appid: imported.externalId, title: game.title, source: "steam-fetch" });
+    const cachedMetadata = await cacheMetadataAssets(metadata);
+    cacheAssetsSpan.end("ok", { gameId: game.id, appid: imported.externalId, title: game.title, fields: Object.keys(cachedMetadata) });
+    const applySpan = profileSpan("metadata", "metadata:detail:apply", { gameId: game.id, appid: imported.externalId, title: game.title, source: "steam-fetch" });
+    repository.applyMetadata(game.id, cachedMetadata);
+    const hydrated = repository.getGame(game.id) ?? game;
+    applySpan.end("ok", {
+      gameId: game.id,
+      appid: imported.externalId,
+      title: game.title,
+      screenshots: hydrated.screenshots.length,
+      hasTrailer: Boolean(hydrated.trailerUrl),
+      hasAboutText: Boolean(hydrated.aboutText)
+    });
+    return hydrated;
   } catch (error) {
     diagnosticLogService.log({
       level: "warning",
@@ -2393,12 +2446,30 @@ function registerIpc(): void {
   });
 
   handleIpc("games:get", (_event, id: string) => {
+    const detailSpan = profileSpan("ipc", "detail:get", { gameId: id });
+    const dbSpan = profileSpan("sqlite", "detail:get:db-read", { gameId: id });
     const game = repository.getGame(id);
+    dbSpan.end(game ? "ok" : "error", {
+      gameId: id,
+      title: game?.title,
+      hasRichDetail: game ? hasRichDetailMetadata(game) : false,
+      screenshots: game?.screenshots.length ?? 0
+    });
     if (!game) {
+      detailSpan.end("error", { gameId: id, error: "not-found" });
       throw new Error(`Game ${id} was not found.`);
     }
+    const queueSpan = profileSpan("metadata", "detail:get:rich-queue", { gameId: id, title: game.title });
     enqueueRichMetadata(game, true);
-    return { ...game, sourceMatches: sourceService.search(id) };
+    queueSpan.end("ok", { gameId: id, title: game.title, alreadyRich: hasRichDetailMetadata(game) });
+    detailSpan.end("ok", {
+      gameId: id,
+      title: game.title,
+      hasRichDetail: hasRichDetailMetadata(game),
+      screenshots: game.screenshots.length,
+      sourceMatchesDeferred: true
+    });
+    return { ...game, sourceMatches: [] };
   });
 
   handleIpc("games:get-asset-candidates", async (_event, id: string) => {
@@ -2427,7 +2498,7 @@ function registerIpc(): void {
 
   handleIpc("games:hydrateDiscovery", async (_event, game: Game) => {
     const hydrated = await hydrateDiscoveryDetailMetadata(game);
-    return { ...hydrated, sourceMatches: sourceService.searchTitle(hydrated.title) };
+    return { ...hydrated, sourceMatches: [] };
   });
 
   handleIpc("games:launch", async (_event, id: string, preferredSteamId?: string) => resolveLaunchOrSwitch(id, preferredSteamId));
@@ -2468,8 +2539,18 @@ function registerIpc(): void {
   handleIpc("sources:list", () => sourceService.list());
   handleIpc("sources:remove", (_event, id: string) => sourceService.remove(id));
   handleIpc("sources:refreshSource", (_event, id: string, json: string) => sourceService.refreshSource(id, json));
-  handleIpc("sources:search", (_event, gameId: string) => sourceService.search(gameId));
-  handleIpc("sources:searchTitle", (_event, title: string, options) => sourceService.searchTitle(title, options));
+  handleIpc("sources:search", (_event, gameId: string, options) => {
+    const span = profileSpan("source-search", "sources:search", { gameId });
+    const matches = sourceService.search(gameId, options);
+    span.end("ok", { gameId, sourceMatches: matches.length });
+    return matches;
+  });
+  handleIpc("sources:searchTitle", (_event, title: string, options) => {
+    const span = profileSpan("source-search", "sources:search-title", { title });
+    const matches = sourceService.searchTitle(title, options);
+    span.end("ok", { title, sourceMatches: matches.length });
+    return matches;
+  });
   handleIpc("sources:exactTitleMatches", (_event, title: string) => sourceService.exactTitleMatches(title));
   handleIpc("clipboard:copy", (_event, text: string) => clipboard.writeText(text));
   handleIpc("settings:get", () => settingsService.get());
