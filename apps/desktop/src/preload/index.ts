@@ -151,6 +151,7 @@ const api = {
   },
   music: {
     url: (trackIndex: number): string => `hynite-music://track/${trackIndex}`,
+    coverUrl: (trackIndex: number): string => `hynite-music://cover/${trackIndex}`,
     isSystemAudioActive: (): Promise<boolean> => ipcRenderer.invoke("music:system-audio-active"),
     systemAudioDebug: (): Promise<string> => ipcRenderer.invoke("music:system-audio-debug"),
     onSystemAudioChanged: (callback: (active: boolean) => void): (() => void) => {

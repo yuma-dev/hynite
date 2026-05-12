@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname } from "node:path";
 import type { Protocol } from "electron";
 import { soundEffectIds, type AppSettings, type SoundEffectId } from "@hynite/core";
+import { readAudioArtwork } from "./audioMetadata";
 
 const MAX_SOUND_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_MUSIC_FILE_BYTES = 50 * 1024 * 1024;
@@ -35,6 +36,19 @@ function response(status: number, body = ""): Response {
   });
 }
 
+function responseWithHeaders(status: number, body: BodyInit, contentType: string): Response {
+  return new Response(body, {
+    status,
+    headers: soundHeaders(contentType)
+  });
+}
+
+function bufferToArrayBuffer(bytes: Buffer): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function soundEffectIdFromUrl(rawUrl: string): SoundEffectId | undefined {
   const url = new URL(rawUrl);
   const pathCandidate = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
@@ -55,13 +69,15 @@ export class SoundFileService {
 
   registerMusicProtocol(protocol: Protocol): void {
     protocol.handle("hynite-music", async (request) => {
-      // URL shape: hynite-music://track/<index>. The literal "track" host
-      // prevents Electron's standard-scheme parser from interpreting a bare
+      // URL shapes: hynite-music://track/<index> and
+      // hynite-music://cover/<index>. The literal host prevents Electron's
+      // standard-scheme parser from interpreting a bare
       // numeric path as an IPv4 address (e.g. ".../8" → host "0.0.0.8").
       const url = new URL(request.url);
+      const route = url.hostname.toLowerCase();
       const pathStr = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
       const index = parseInt(pathStr, 10);
-      if (!Number.isFinite(index) || index < 0) {
+      if ((route !== "track" && route !== "cover") || !Number.isFinite(index) || index < 0) {
         return response(400);
       }
 
@@ -93,6 +109,12 @@ export class SoundFileService {
         }
         if (fileStat.size > MAX_MUSIC_FILE_BYTES) {
           return response(413, "Music file is too large (max 50 MB).");
+        }
+        if (route === "cover") {
+          const artwork = readAudioArtwork(track.filePath);
+          return artwork
+            ? responseWithHeaders(200, bufferToArrayBuffer(artwork.bytes), artwork.mimeType)
+            : response(404);
         }
         const bytes = await readFile(track.filePath);
         return new Response(bytes, { headers: soundHeaders(contentType) });

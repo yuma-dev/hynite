@@ -1,4 +1,4 @@
-import type { AppSettings, MusicSettings } from "@hynite/core";
+import type { AppSettings, MusicSettings, MusicTrack } from "@hynite/core";
 
 const DEFAULT_MUSIC_SETTINGS: Required<Omit<MusicSettings, "tracks">> & { tracks: NonNullable<MusicSettings["tracks"]> } = {
   enabled: true,
@@ -34,6 +34,8 @@ export type MusicStatus = {
   prevQueueTail: number[];
   currentTrackIndex: number | null;
   currentTrackTitle: string | null;
+  currentTrackArtist: string | null;
+  currentTrackAlbum: string | null;
   currentTrackCopyright: string | null;
 };
 
@@ -88,6 +90,16 @@ function isAppSettings(value: AppSettings | MusicSettings | undefined): value is
   return Boolean(value && ("sound" in value || "steamAccounts" in value));
 }
 
+function trackFileName(filePath?: string): string | undefined {
+  if (!filePath) return undefined;
+  const parts = filePath.split(/[\\/]/);
+  return parts[parts.length - 1] || filePath;
+}
+
+function trackTitle(track?: MusicTrack): string | null {
+  return track?.title ?? trackFileName(track?.filePath) ?? null;
+}
+
 export class MusicEngine {
   private settings: MusicSettings = normalizeMusicSettings();
 
@@ -140,6 +152,7 @@ export class MusicEngine {
   getStatus(): MusicStatus {
     const settingsEnabled = this.settings.enabled !== false;
     const hasTracks = (this.settings.tracks?.length ?? 0) > 0;
+    const currentTrack = this.currentTrackIndex === null ? undefined : this.settings.tracks?.[this.currentTrackIndex];
     let pauseReason: string | null = null;
     if (this.active && settingsEnabled && hasTracks && !this.audible) {
       if (this.startupTimer) pauseReason = "waiting for startup";
@@ -162,8 +175,10 @@ export class MusicEngine {
       queueIndex: this.queueIndex,
       prevQueueTail: [...this.prevQueueTail],
       currentTrackIndex: this.currentTrackIndex,
-      currentTrackTitle: this.currentTrackIndex === null ? null : this.settings.tracks?.[this.currentTrackIndex]?.title ?? null,
-      currentTrackCopyright: this.currentTrackIndex === null ? null : this.settings.tracks?.[this.currentTrackIndex]?.copyright ?? null
+      currentTrackTitle: trackTitle(currentTrack),
+      currentTrackArtist: currentTrack?.artist ?? null,
+      currentTrackAlbum: currentTrack?.album ?? null,
+      currentTrackCopyright: currentTrack?.copyright ?? null
     };
   }
 

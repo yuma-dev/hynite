@@ -2765,6 +2765,53 @@ function musicTrackLabel(track: NonNullable<MusicSettings["tracks"]>[number]): s
   return track.title || soundFileName(track.filePath);
 }
 
+function CurrentTrackCredit({ status }: { status: MusicStatus }) {
+  const [coverFailed, setCoverFailed] = useState(false);
+  const trackIndex = status.currentTrackIndex;
+  const title = status.currentTrackTitle ?? "Unknown track";
+  const artist = status.currentTrackArtist ?? "Unknown artist";
+  const album = status.currentTrackAlbum ?? "Unknown album";
+  const chipLabel = status.currentTrackCopyright ?? status.currentTrackArtist ?? status.currentTrackTitle;
+  const coverUrl = trackIndex === null || coverFailed ? undefined : window.hynite.music.coverUrl(trackIndex);
+
+  useEffect(() => {
+    setCoverFailed(false);
+  }, [trackIndex]);
+
+  if (!chipLabel) {
+    return null;
+  }
+
+  return (
+    <span className="music-copyright-wrap">
+      <span
+        className="music-copyright-chip"
+        tabIndex={0}
+        aria-describedby="current-track-tooltip"
+        aria-label={`Music credit: ${chipLabel}. Currently playing ${title}, ${album}, ${artist}.`}
+      >
+        <Music2 size={10} />
+        {chipLabel}
+      </span>
+      <span className="current-track-tooltip" id="current-track-tooltip" role="tooltip">
+        <span className="current-track-cover">
+          {coverUrl ? (
+            <img src={coverUrl} alt="" onError={() => setCoverFailed(true)} />
+          ) : (
+            <Music2 size={24} />
+          )}
+        </span>
+        <span className="current-track-details">
+          <span className="current-track-kicker">Currently playing</span>
+          <strong>{title}</strong>
+          <span>{album}</span>
+          <span>{artist}</span>
+        </span>
+      </span>
+    </span>
+  );
+}
+
 function soundSettingsPatch(settings: SoundSettings | undefined, patch: Partial<SoundSettings>): SoundSettings {
   return normalizeSoundSettings({
     ...normalizeSoundSettings(settings),
@@ -6005,11 +6052,8 @@ export function App() {
             {musicStatus.pauseReason}
           </span>
         )}
-        {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.audible && musicStatus.currentTrackCopyright ? (
-          <span className="music-copyright-chip" title={musicStatus.currentTrackTitle ?? undefined}>
-            <Music2 size={10} />
-            {musicStatus.currentTrackCopyright}
-          </span>
+        {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.active && musicStatus.currentTrackTitle ? (
+          <CurrentTrackCredit status={musicStatus} />
         ) : null}
       </footer>
     </div>

@@ -1,7 +1,8 @@
-import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
+import { readAudioMetadata } from "./audioMetadata";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
   "^_redist$",
@@ -48,8 +49,6 @@ const BUNDLED_SOUND_FILES: Record<SoundEffectId, string> = {
   navigation: "selection.mp3"
 };
 
-type AudioMetadata = Pick<MusicTrack, "title" | "artist" | "album" | "copyright">;
-
 type BundledAudioDefaults = {
   soundEffects: Partial<Record<SoundEffectId, NonNullable<SoundSettings["effects"]>[SoundEffectId]>>;
   musicTracks: MusicTrack[];
@@ -71,79 +70,6 @@ const defaultSettings: AppSettings = {
   music: DEFAULT_MUSIC_SETTINGS,
   windowState: undefined
 };
-
-function synchsafeToInt(bytes: Buffer, offset: number): number {
-  return ((bytes[offset] ?? 0) & 0x7f) << 21
-    | ((bytes[offset + 1] ?? 0) & 0x7f) << 14
-    | ((bytes[offset + 2] ?? 0) & 0x7f) << 7
-    | ((bytes[offset + 3] ?? 0) & 0x7f);
-}
-
-function decodeId3TextFrame(bytes: Buffer): string | undefined {
-  if (bytes.length < 2) return undefined;
-  const encoding = bytes[0];
-  const data = bytes.subarray(1);
-  let text: string;
-  if (encoding === 1 || encoding === 2) {
-    text = data.toString("utf16le");
-  } else if (encoding === 3) {
-    text = data.toString("utf8");
-  } else {
-    text = data.toString("latin1");
-  }
-  const cleaned = text.replace(/^\uFEFF/, "").replace(/\0/g, "").trim();
-  return cleaned || undefined;
-}
-
-function readMp3Metadata(filePath: string): AudioMetadata {
-  let fd: number | undefined;
-  try {
-    fd = openSync(filePath, "r");
-    const header = Buffer.alloc(10);
-    if (readSync(fd, header, 0, header.length, 0) !== header.length) return {};
-    if (header.subarray(0, 3).toString("latin1") !== "ID3") return {};
-    const version = header[3];
-    const tagSize = synchsafeToInt(header, 6);
-    const bytes = Buffer.alloc(10 + tagSize);
-    header.copy(bytes, 0);
-    readSync(fd, bytes, 10, tagSize, 10);
-    const end = bytes.length;
-    const metadata: AudioMetadata = {};
-    let offset = 10;
-
-    while (offset + 10 <= end) {
-      const frameId = bytes.subarray(offset, offset + 4).toString("latin1");
-      if (!/^[A-Z0-9]{4}$/.test(frameId)) break;
-      const frameSize = version === 4 ? synchsafeToInt(bytes, offset + 4) : bytes.readUInt32BE(offset + 4);
-      offset += 10;
-      if (frameSize <= 0 || offset + frameSize > end) break;
-      const value = decodeId3TextFrame(bytes.subarray(offset, offset + frameSize));
-      if (value) {
-        if (frameId === "TIT2") metadata.title = value;
-        if (frameId === "TPE1") metadata.artist = value;
-        if (frameId === "TALB") metadata.album = value;
-        if (frameId === "TCOP") metadata.copyright = value;
-      }
-      offset += frameSize;
-    }
-
-    return metadata;
-  } catch {
-    return {};
-  } finally {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // Ignore close failure after metadata best-effort read.
-      }
-    }
-  }
-}
-
-function readAudioMetadata(filePath: string): AudioMetadata {
-  return extname(filePath).toLowerCase() === ".mp3" ? readMp3Metadata(filePath) : {};
-}
 
 function sanitizeTrackMetadata(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;

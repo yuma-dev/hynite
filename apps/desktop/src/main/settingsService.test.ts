@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SettingsService } from "./settingsService";
+import { readAudioArtwork } from "./audioMetadata";
 
 let tempDir: string | undefined;
 
@@ -27,8 +28,23 @@ function textFrame(id: string, value: string): Buffer {
   return Buffer.concat([Buffer.from(id, "latin1"), size, Buffer.alloc(2), payload]);
 }
 
-function taggedMp3(tags: Record<string, string>): Buffer {
-  const frames = Buffer.concat(Object.entries(tags).map(([id, value]) => textFrame(id, value)));
+function apicFrame(mimeType: string, imageBytes: Buffer): Buffer {
+  const payload = Buffer.concat([
+    Buffer.from([3]),
+    Buffer.from(mimeType, "latin1"),
+    Buffer.from([0, 3, 0]),
+    imageBytes
+  ]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(payload.length);
+  return Buffer.concat([Buffer.from("APIC", "latin1"), size, Buffer.alloc(2), payload]);
+}
+
+function taggedMp3(tags: Record<string, string>, extraFrames: Buffer[] = []): Buffer {
+  const frames = Buffer.concat([
+    ...Object.entries(tags).map(([id, value]) => textFrame(id, value)),
+    ...extraFrames
+  ]);
   return Buffer.concat([Buffer.from("ID3", "latin1"), Buffer.from([3, 0, 0]), synchsafe(frames.length), frames, Buffer.from([0xff, 0xfb])]);
 }
 
@@ -182,6 +198,17 @@ describe("SettingsService", () => {
       }
     });
 
+  });
+
+  it("reads embedded MP3 artwork for music cover tooltips", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "hynite-settings-"));
+    const coverBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]);
+    const filePath = join(tempDir, "cover.mp3");
+    writeFileSync(filePath, taggedMp3({ TIT2: "Theme" }, [apicFrame("image/png", coverBytes)]));
+
+    const artwork = readAudioArtwork(filePath);
+    expect(artwork?.mimeType).toBe("image/png");
+    expect(artwork?.bytes.equals(coverBytes)).toBe(true);
   });
 
   it("persists and sanitizes music settings", async () => {
