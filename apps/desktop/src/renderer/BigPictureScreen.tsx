@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import { Play, X, Download, Info, SlidersHorizontal, Plus, Star } from "lucide-react";
 import type { AppSettings, ControllerActionId, ControllerSettings, Game, GameGroup } from "@hynite/core";
 import { expandPaletteToSlots, extractPalette, fallbackPalette, getCachedPalette, type CoverPalette, type PaletteDebugInfo } from "./colorExtract";
@@ -31,6 +31,7 @@ type Props = {
 };
 
 type ViewMode = "shelf" | "grid";
+type TransitionDirection = "left" | "right" | "up" | "down" | "none";
 
 const PALETTE_DEBOUNCE_MS = 250;
 const PALETTE_TWEEN_MS = 700;
@@ -40,6 +41,42 @@ const COLOR_SLOTS = 8;
 const GAMEPAD_REPEAT_INITIAL_MS = 280;
 const GAMEPAD_REPEAT_MS = 110;
 const STICK_THRESHOLD = 0.55;
+const VIEW_TRANSITION: { duration: number; ease: [number, number, number, number] } = {
+  duration: 0.42,
+  ease: [0.16, 1, 0.3, 1]
+};
+const SHELF_CONTENT_VARIANTS: Variants = {
+  initial: (direction: TransitionDirection) => ({
+    x: direction === "left" ? "-100%" : direction === "right" ? "100%" : 0,
+    y: direction === "down" ? "100%" : direction === "up" ? "-100%" : 0
+  }),
+  animate: {
+    x: 0,
+    y: 0,
+    transition: VIEW_TRANSITION
+  },
+  exit: (direction: TransitionDirection) => ({
+    x: direction === "left" ? "100%" : direction === "right" ? "-100%" : 0,
+    y: direction === "down" ? "-100%" : direction === "up" ? "100%" : 0,
+    transition: VIEW_TRANSITION
+  })
+};
+const GRID_CONTENT_VARIANTS: Variants = {
+  initial: (direction: TransitionDirection) => ({
+    x: direction === "left" ? "-100%" : direction === "right" ? "100%" : 0,
+    y: direction === "down" ? "100%" : direction === "up" ? "-100%" : 0
+  }),
+  animate: {
+    x: 0,
+    y: 0,
+    transition: VIEW_TRANSITION
+  },
+  exit: (direction: TransitionDirection) => ({
+    x: direction === "left" ? "100%" : direction === "right" ? "-100%" : 0,
+    y: direction === "down" ? "-100%" : direction === "up" ? "100%" : 0,
+    transition: VIEW_TRANSITION
+  })
+};
 const DIGITAL_CONTROLLER_ACTIONS: ControllerActionId[] = [
   "moveUp",
   "moveDown",
@@ -189,6 +226,7 @@ export function BigPictureScreen({
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("shelf");
   const [gridColumns, setGridColumns] = useState(6);
+  const [transitionDirection, setTransitionDirection] = useState<TransitionDirection>("none");
 
   const rowRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -208,6 +246,7 @@ export function BigPictureScreen({
   defaultTabIdRef.current = defaultTabId;
   const controller = useMemo<ControllerSettings>(() => normalizeControllerSettings(settings), [settings]);
   const binding = useCallback((action: ControllerActionId) => controller.bindings[action], [controller]);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     setFocusedIndex(0);
@@ -223,9 +262,55 @@ export function BigPictureScreen({
     const idx = tabs.findIndex((t) => t.id === defaultTabId);
     if (idx >= 0) {
       defaultTabAppliedRef.current = true;
+      setTransitionDirection(idx >= tabIndex ? "right" : "left");
       setTabIndex(idx);
     }
-  }, [defaultTabId, tabs]);
+  }, [defaultTabId, tabIndex, tabs]);
+
+  const switchTab = useCallback((nextIndex: number) => {
+    setTabIndex((current) => {
+      const next = Math.max(0, Math.min(nextIndex, tabs.length - 1));
+      if (next !== current) {
+        setTransitionDirection(next > current ? "right" : "left");
+      }
+      return next;
+    });
+  }, [tabs.length]);
+
+  const shiftTab = useCallback((delta: -1 | 1) => {
+    setTabIndex((current) => {
+      const next = Math.max(0, Math.min(current + delta, tabs.length - 1));
+      if (next !== current) {
+        setTransitionDirection(delta > 0 ? "right" : "left");
+      }
+      return next;
+    });
+  }, [tabs.length]);
+
+  const enterGrid = useCallback(() => {
+    setViewMode((mode) => {
+      if (mode !== "grid") {
+        setTransitionDirection("down");
+      }
+      return "grid";
+    });
+  }, []);
+
+  const exitGrid = useCallback(() => {
+    setViewMode((mode) => {
+      if (mode !== "shelf") {
+        setTransitionDirection("up");
+      }
+      return "shelf";
+    });
+  }, []);
+
+  const toggleGrid = useCallback(() => {
+    setViewMode((mode) => {
+      setTransitionDirection(mode === "grid" ? "up" : "down");
+      return mode === "grid" ? "shelf" : "grid";
+    });
+  }, []);
 
   // ── Palette: cover extraction is debounced and tweened toward over
   // PALETTE_TWEEN_MS via rAF. We tween across fixed COLOR_SLOTS so dominant
@@ -340,7 +425,7 @@ export function BigPictureScreen({
       if (event.key === "Escape") {
         event.preventDefault();
         if (viewMode === "grid") {
-          setViewMode("shelf");
+          exitGrid();
         } else {
           onExit();
         }
@@ -358,12 +443,12 @@ export function BigPictureScreen({
       // Tab switching (LB/RB analogs).
       if (event.key === "[" || event.key === "q" || event.key === "Q") {
         event.preventDefault();
-        setTabIndex((i) => Math.max(i - 1, 0));
+        shiftTab(-1);
         return;
       }
       if (event.key === "]" || event.key === "e" || event.key === "E") {
         event.preventDefault();
-        setTabIndex((i) => Math.min(i + 1, tabs.length - 1));
+        shiftTab(1);
         return;
       }
 
@@ -371,40 +456,46 @@ export function BigPictureScreen({
       if (viewMode === "shelf") {
         if (event.key === "ArrowRight") {
           event.preventDefault();
+          setTransitionDirection("right");
           setFocusedIndex((i) => Math.min(i + 1, count - 1));
           return;
         }
         if (event.key === "ArrowLeft") {
           event.preventDefault();
+          setTransitionDirection("left");
           setFocusedIndex((i) => Math.max(i - 1, 0));
           return;
         }
         if (event.key === "ArrowDown") {
           event.preventDefault();
-          setViewMode("grid");
+          enterGrid();
           return;
         }
       } else {
         if (event.key === "ArrowRight") {
           event.preventDefault();
+          setTransitionDirection("right");
           setFocusedIndex((i) => Math.min(i + 1, count - 1));
           return;
         }
         if (event.key === "ArrowLeft") {
           event.preventDefault();
+          setTransitionDirection("left");
           setFocusedIndex((i) => Math.max(i - 1, 0));
           return;
         }
         if (event.key === "ArrowDown") {
           event.preventDefault();
+          setTransitionDirection("down");
           setFocusedIndex((i) => Math.min(i + gridColumns, count - 1));
           return;
         }
         if (event.key === "ArrowUp") {
           event.preventDefault();
+          setTransitionDirection("up");
           setFocusedIndex((i) => {
             if (i < gridColumns) {
-              setViewMode("shelf");
+              exitGrid();
               return i;
             }
             return Math.max(i - gridColumns, 0);
@@ -415,30 +506,46 @@ export function BigPictureScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentTab, focusedGame, tabs.length, viewMode, gridColumns, onExit, onLaunch, onSelect]);
+  }, [currentTab, enterGrid, exitGrid, focusedGame, shiftTab, viewMode, gridColumns, onExit, onLaunch, onSelect]);
 
   const moveFocus = useCallback((direction: "up" | "down" | "left" | "right") => {
     const count = currentTab?.games.length ?? 0;
     if (count <= 0) return;
     if (viewMode === "shelf") {
-      if (direction === "right") setFocusedIndex((i) => Math.min(i + 1, count - 1));
-      if (direction === "left") setFocusedIndex((i) => Math.max(i - 1, 0));
-      if (direction === "down") setViewMode("grid");
+      if (direction === "right") {
+        setTransitionDirection("right");
+        setFocusedIndex((i) => Math.min(i + 1, count - 1));
+      }
+      if (direction === "left") {
+        setTransitionDirection("left");
+        setFocusedIndex((i) => Math.max(i - 1, 0));
+      }
+      if (direction === "down") enterGrid();
       return;
     }
-    if (direction === "right") setFocusedIndex((i) => Math.min(i + 1, count - 1));
-    if (direction === "left") setFocusedIndex((i) => Math.max(i - 1, 0));
-    if (direction === "down") setFocusedIndex((i) => Math.min(i + gridColumns, count - 1));
+    if (direction === "right") {
+      setTransitionDirection("right");
+      setFocusedIndex((i) => Math.min(i + 1, count - 1));
+    }
+    if (direction === "left") {
+      setTransitionDirection("left");
+      setFocusedIndex((i) => Math.max(i - 1, 0));
+    }
+    if (direction === "down") {
+      setTransitionDirection("down");
+      setFocusedIndex((i) => Math.min(i + gridColumns, count - 1));
+    }
     if (direction === "up") {
+      setTransitionDirection("up");
       setFocusedIndex((i) => {
         if (i < gridColumns) {
-          setViewMode("shelf");
+          exitGrid();
           return i;
         }
         return Math.max(i - gridColumns, 0);
       });
     }
-  }, [currentTab?.games.length, gridColumns, viewMode]);
+  }, [currentTab?.games.length, enterGrid, exitGrid, gridColumns, viewMode]);
 
   const runControllerAction = useCallback((action: string) => {
     if (action === "exitBigPicture") {
@@ -474,11 +581,11 @@ export function BigPictureScreen({
       return;
     }
     if (action === "previousGroup") {
-      setTabIndex((i) => Math.max(i - 1, 0));
+      shiftTab(-1);
       return;
     }
     if (action === "nextGroup") {
-      setTabIndex((i) => Math.min(i + 1, tabs.length - 1));
+      shiftTab(1);
       return;
     }
     if (action === "play" && focusedGame) {
@@ -495,14 +602,14 @@ export function BigPictureScreen({
       return;
     }
     if (action === "toggleGrid") {
-      setViewMode((mode) => mode === "grid" ? "shelf" : "grid");
+      toggleGrid();
       return;
     }
     if (action === "back") {
       if (onBack()) return;
-      if (viewMode === "grid") setViewMode("shelf");
+      if (viewMode === "grid") exitGrid();
     }
-  }, [detailOpen, filterOpen, focusedGame, moveFocus, onBack, onExit, onLaunch, onOpenFilters, onSelect, onSetDefaultTab, tabs.length, viewMode]);
+  }, [detailOpen, exitGrid, filterOpen, focusedGame, moveFocus, onBack, onExit, onLaunch, onOpenFilters, onSelect, onSetDefaultTab, shiftTab, toggleGrid, viewMode]);
 
   useEffect(() => {
     if (!controller.enabled) return;
@@ -598,6 +705,7 @@ export function BigPictureScreen({
   const groupPointerX = tabs.length > 1 ? (tabIndex / (tabs.length - 1)) * 1.6 - 0.8 : 0;
   const currentTabIsGroup = currentTab?.id?.startsWith("group:");
   const isDefaultTab = currentTab?.id === defaultTabId;
+  const motionDirection = reduceMotion ? "none" : transitionDirection;
 
   return (
     <div
@@ -634,7 +742,7 @@ export function BigPictureScreen({
               role="tab"
               aria-selected={i === tabIndex}
               className={i === tabIndex ? "bp-tab active" : "bp-tab"}
-              onClick={() => setTabIndex(i)}
+              onClick={() => switchTab(i)}
             >
               {tab.label}
               <span className="bp-tab-count">{tab.games.length}</span>
@@ -674,118 +782,131 @@ export function BigPictureScreen({
         </div>
       </header>
 
-      {viewMode === "shelf" ? (
-        <>
-          <section className="bp-hero">
-            <AnimatePresence mode="wait">
-              {focusedGame ? (
-                <motion.div
-                  key={focusedGame.id}
-                  className="bp-hero-inner"
-                  initial={{ opacity: 0, y: 14 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 14 }}
-                  transition={{ duration: 0.25, ease: "easeOut" }}
-                >
-                  {focusedGame.logoUrl ? (
-                    <img className="bp-hero-logo" src={focusedGame.logoUrl} alt={focusedGame.title} />
-                  ) : (
-                    <h1 className="bp-hero-title">{focusedGame.title}</h1>
-                  )}
-                  {focusedGame.shortDescription ? (
-                    <p className="bp-hero-summary">{focusedGame.shortDescription}</p>
-                  ) : null}
-                  <div className="bp-hero-actions">
-                    {canLaunch(focusedGame) ? (
-                      <button type="button" className="bp-play" onClick={() => onLaunch(focusedGame)}>
-                        <Play size={20} fill="currentColor" />
-                        <span>Play</span>
-                        <kbd>{bindingLabel(binding("play"))}</kbd>
-                      </button>
+      <div className="bp-stage-viewport">
+        <AnimatePresence initial={false} custom={motionDirection}>
+          {viewMode === "shelf" ? (
+            <motion.div
+              key={`shelf-${currentTab?.id ?? "empty"}`}
+              className="bp-view-stage bp-shelf-stage"
+              custom={motionDirection}
+              variants={SHELF_CONTENT_VARIANTS}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+            >
+              <section className="bp-hero">
+                {focusedGame ? (
+                  <div className="bp-hero-inner">
+                    {focusedGame.logoUrl ? (
+                      <img className="bp-hero-logo" src={focusedGame.logoUrl} alt={focusedGame.title} />
                     ) : (
-                      <button type="button" className="bp-play secondary" onClick={() => onSelect(focusedGame)}>
-                        <Info size={20} />
-                        <span>View</span>
-                        <kbd>{bindingLabel(binding("play"))}</kbd>
-                      </button>
+                      <h1 className="bp-hero-title">{focusedGame.title}</h1>
                     )}
-                    <button type="button" className="bp-info" onClick={() => onSelect(focusedGame)} aria-label={canLaunch(focusedGame) ? "Details" : "Download / Install"}>
-                      {canLaunch(focusedGame) ? <Info size={18} /> : <Download size={18} />}
-                      <kbd>{bindingLabel(binding("details"))}</kbd>
-                    </button>
+                    {focusedGame.shortDescription ? (
+                      <p className="bp-hero-summary">{focusedGame.shortDescription}</p>
+                    ) : null}
+                    <div className="bp-hero-actions">
+                      {canLaunch(focusedGame) ? (
+                        <button type="button" className="bp-play" onClick={() => onLaunch(focusedGame)}>
+                          <Play size={20} fill="currentColor" />
+                          <span>Play</span>
+                          <kbd>{bindingLabel(binding("play"))}</kbd>
+                        </button>
+                      ) : (
+                        <button type="button" className="bp-play secondary" onClick={() => onSelect(focusedGame)}>
+                          <Info size={20} />
+                          <span>View</span>
+                          <kbd>{bindingLabel(binding("play"))}</kbd>
+                        </button>
+                      )}
+                      <button type="button" className="bp-info" onClick={() => onSelect(focusedGame)} aria-label={canLaunch(focusedGame) ? "Details" : "Download / Install"}>
+                        {canLaunch(focusedGame) ? <Info size={18} /> : <Download size={18} />}
+                        <kbd>{bindingLabel(binding("details"))}</kbd>
+                      </button>
+                    </div>
                   </div>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
-          </section>
+                ) : null}
+              </section>
 
-          <section className="bp-row-wrap">
-            <div className="bp-row" ref={rowRef}>
-              {currentTab?.games.map((game, i) => {
-                const cover = gameCoverUrl(game);
-                const isFocused = i === focusedIndex;
-                return (
-                  <button
-                    key={game.id}
-                    type="button"
-                    data-focused={isFocused}
-                    className={isFocused ? "bp-card focused" : "bp-card"}
-                    onClick={() => {
-                      if (i === focusedIndex && focusedGame) {
-                        if (canLaunch(focusedGame)) onLaunch(focusedGame);
-                        else onSelect(focusedGame);
-                      } else {
-                        setFocusedIndex(i);
-                      }
-                    }}
-                    aria-label={game.title}
-                  >
-                    {cover ? (
-                      <img src={cover} alt="" loading="lazy" />
-                    ) : (
-                      <span className="bp-card-fallback">{game.title}</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        </>
-      ) : (
-        <section className="bp-grid-wrap">
-          <div className="bp-grid" ref={gridRef}>
-            {currentTab?.games.map((game, i) => {
-              const cover = gameCoverUrl(game);
-              const isFocused = i === focusedIndex;
-              return (
-                <button
-                  key={game.id}
-                  type="button"
-                  data-focused={isFocused}
-                  className={isFocused ? "bp-grid-card focused" : "bp-grid-card"}
-                  onClick={() => {
-                    if (i === focusedIndex && focusedGame) {
-                      if (canLaunch(focusedGame)) onLaunch(focusedGame);
-                      else onSelect(focusedGame);
-                    } else {
-                      setFocusedIndex(i);
-                    }
-                  }}
-                  aria-label={game.title}
-                >
-                  <div className="bp-grid-card-cover">
-                    {cover ? (
-                      <img src={cover} alt="" loading="lazy" />
-                    ) : (
-                      <span className="bp-card-fallback">{game.title}</span>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      )}
+              <section className="bp-row-wrap">
+                <div className="bp-row" ref={rowRef}>
+                  {currentTab?.games.map((game, i) => {
+                    const cover = gameCoverUrl(game);
+                    const isFocused = i === focusedIndex;
+                    return (
+                      <button
+                        key={game.id}
+                        type="button"
+                        data-focused={isFocused}
+                        className={isFocused ? "bp-card focused" : "bp-card"}
+                        onClick={() => {
+                          if (i === focusedIndex && focusedGame) {
+                            if (canLaunch(focusedGame)) onLaunch(focusedGame);
+                            else onSelect(focusedGame);
+                          } else {
+                            setTransitionDirection(i > focusedIndex ? "right" : "left");
+                            setFocusedIndex(i);
+                          }
+                        }}
+                        aria-label={game.title}
+                      >
+                        {cover ? (
+                          <img src={cover} alt="" loading="lazy" />
+                        ) : (
+                          <span className="bp-card-fallback">{game.title}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            </motion.div>
+          ) : (
+            <motion.section
+              key={`grid-${currentTab?.id ?? "empty"}`}
+              className="bp-view-stage bp-grid-wrap"
+              custom={motionDirection}
+              variants={GRID_CONTENT_VARIANTS}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+            >
+              <div className="bp-grid" ref={gridRef}>
+                {currentTab?.games.map((game, i) => {
+                  const cover = gameCoverUrl(game);
+                  const isFocused = i === focusedIndex;
+                  return (
+                    <button
+                      key={game.id}
+                      type="button"
+                      data-focused={isFocused}
+                      className={isFocused ? "bp-grid-card focused" : "bp-grid-card"}
+                      onClick={() => {
+                        if (i === focusedIndex && focusedGame) {
+                          if (canLaunch(focusedGame)) onLaunch(focusedGame);
+                          else onSelect(focusedGame);
+                        } else {
+                          setTransitionDirection(i > focusedIndex ? "right" : "left");
+                          setFocusedIndex(i);
+                        }
+                      }}
+                      aria-label={game.title}
+                    >
+                      <div className="bp-grid-card-cover">
+                        {cover ? (
+                          <img src={cover} alt="" loading="lazy" />
+                        ) : (
+                          <span className="bp-card-fallback">{game.title}</span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
+      </div>
 
     </div>
   );

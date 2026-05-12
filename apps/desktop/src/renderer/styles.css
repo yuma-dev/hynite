@@ -5538,6 +5538,29 @@ dd {
     linear-gradient(180deg, rgba(5, 4, 9, 0.76) 0%, rgba(5, 4, 9, 0.93) 100%);
 }
 
+.bp-stage-viewport {
+  position: relative;
+  grid-row: 2 / 5;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bp-view-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+
+.bp-shelf-stage {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  overflow: hidden;
+}
+
 .bp-top {
   position: relative;
   z-index: 2;
@@ -5604,6 +5627,7 @@ dd {
   background: rgba(255, 255, 255, 0.16);
   color: #fff;
   border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 10px 28px rgba(255, 255, 255, 0.08);
 }
 
 .bp-tab-count {
@@ -5776,6 +5800,7 @@ dd {
 }
 
 .bp-card {
+  position: relative;
   flex: 0 0 auto;
   width: var(--bp-card-w);
   aspect-ratio: 2 / 3;
@@ -5792,6 +5817,18 @@ dd {
               opacity 0.28s ease;
   opacity: 0.6;
   contain: layout paint style;
+}
+
+.bp-card::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(115deg, transparent 0%, transparent 36%, rgba(255, 255, 255, 0.34) 48%, transparent 62%, transparent 100%);
+  transform: translateX(-135%);
+  opacity: 0;
 }
 
 .bp-card img {
@@ -5819,9 +5856,17 @@ dd {
 .bp-card.focused {
   transform: scale(var(--bp-card-scale));
   border-color: rgba(255, 255, 255, 0.85);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 6px rgba(255, 255, 255, 0.05);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.6),
+    0 0 0 6px rgba(255, 255, 255, 0.05),
+    0 0 54px color-mix(in srgb, var(--bp-bg-base) 54%, rgba(255, 255, 255, 0.2));
   opacity: 1;
   z-index: 2;
+}
+
+.bp-card.focused::after {
+  opacity: 1;
+  animation: bp-cover-sheen 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .bp-card.focused img {
@@ -5982,9 +6027,6 @@ dd {
 }
 
 .bp-grid-wrap {
-  position: relative;
-  z-index: 2;
-  grid-row: 2 / 5;
   overflow: hidden;
   padding: 12px var(--bp-pad-x) 24px;
 }
@@ -6050,6 +6092,38 @@ dd {
 }
 
 .bp-grid-card.focused .bp-grid-card-cover {
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65), 0 0 0 3px rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.65),
+    0 0 0 3px rgba(255, 255, 255, 0.08),
+    0 0 40px color-mix(in srgb, var(--bp-bg-base) 48%, rgba(255, 255, 255, 0.18));
   transform: scale(1.02);
+}
+
+@keyframes bp-cover-sheen {
+  0% {
+    transform: translateX(-135%);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.42;
+  }
+  100% {
+    transform: translateX(135%);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bp-view-stage,
+  .bp-card,
+  .bp-card img,
+  .bp-grid-card,
+  .bp-grid-card-cover {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+
+  .bp-card.focused::after {
+    animation: none;
+  }
 }
