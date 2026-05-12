@@ -76,6 +76,8 @@ type ProfileReport = {
     totalRendererFreezeMs: number;
     slowestSpans: ProfileSpanSummary[];
     topCategories: ProfileCategorySummary[];
+    totalDroppedFrames: number;
+    worstFrameMs?: number;
     warnings: string[];
   };
   freezes: FreezeReport[];
@@ -89,6 +91,7 @@ type ProfileReport = {
   detailOpen: Record<string, unknown>;
   steamSync: Record<string, unknown>;
   ipc: Record<string, unknown>;
+  runtimeFrames: Record<string, unknown>;
   renderer: Record<string, unknown>;
   main: Record<string, unknown>;
   raw: {
@@ -134,6 +137,25 @@ function timingStats(spans: ProfileSpanSummary[], label: (span: ProfileSpanSumma
       .sort((a, b) => b.durationMs - a.durationMs)
       .slice(0, MAX_SLOWEST)
       .map((span) => ({ label: label(span), durationMs: span.durationMs, details: span.details }))
+  };
+}
+
+function metricStats(metrics: ProfileMetric[], label: (metric: ProfileMetric) => string = (metric) => metric.name): TimingStats {
+  if (metrics.length === 0) return emptyTimingStats();
+  const values = metrics.map((metric) => metric.value);
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return {
+    count: metrics.length,
+    totalMs: round(total),
+    minMs: round(Math.min(...values)),
+    maxMs: round(Math.max(...values)),
+    avgMs: round(total / metrics.length),
+    p50Ms: percentile(values, 50),
+    p95Ms: percentile(values, 95),
+    slowest: [...metrics]
+      .sort((a, b) => b.value - a.value)
+      .slice(0, MAX_SLOWEST)
+      .map((metric) => ({ label: label(metric), durationMs: metric.value, details: metric.details }))
   };
 }
 
@@ -561,6 +583,8 @@ export class StartupProfileService implements ProfileSink {
       .filter((span) => !(span.name === "renderer-assets:image-load" && span.status === "cancelled"))
       .sort((a, b) => b.durationMs - a.durationMs)
       .slice(0, MAX_SLOWEST);
+    const droppedFrameMetrics = this.metrics.filter((metric) => metric.category === "runtime-frame" && metric.name === "renderer:frame-delta");
+    const totalDroppedFrames = droppedFrameMetrics.reduce((sum, metric) => sum + (typeof metric.details?.droppedFrames === "number" ? metric.details.droppedFrames : 0), 0);
     const topCategories = this.topCategories();
     const warnings: string[] = [];
     if (this.droppedEventCount > 0) warnings.push(`Dropped ${this.droppedEventCount} profile events because the async queue was full.`);
@@ -585,6 +609,8 @@ export class StartupProfileService implements ProfileSink {
         totalRendererFreezeMs: round(rendererFreezes.reduce((sum, freeze) => sum + freeze.durationMs, 0)),
         slowestSpans,
         topCategories,
+        totalDroppedFrames,
+        worstFrameMs: droppedFrameMetrics.length ? Math.max(...droppedFrameMetrics.map((metric) => metric.value)) : undefined,
         warnings
       },
       freezes: this.freezes,
@@ -593,6 +619,7 @@ export class StartupProfileService implements ProfileSink {
       detailOpen: this.detailOpenReport(),
       steamSync: this.steamSyncReport(),
       ipc: this.ipcReport(),
+      runtimeFrames: this.runtimeFrameReport(),
       renderer: this.processReport("renderer"),
       main: this.processReport("main"),
       raw: {
@@ -847,6 +874,77 @@ export class StartupProfileService implements ProfileSink {
       stats: timingStats(spans),
       channels: Object.fromEntries([...byChannel.entries()].map(([channel, channelSpans]) => [channel, timingStats(channelSpans)])),
       errors: spans.filter((span) => span.status === "error").slice(-100)
+    };
+  }
+
+  private runtimeFrameReport(): Record<string, unknown> {
+    const frameDrops = this.metrics.filter((metric) => metric.category === "runtime-frame" && metric.name === "renderer:frame-delta");
+    const colorBends = this.metrics.filter((metric) => metric.category === "runtime-frame" && metric.name === "renderer:color-bends-render");
+    const reactCommits = this.metrics.filter((metric) => metric.category === "react-render" && metric.name === "react:commit");
+    const interactions = this.completedSpans.filter((span) => span.category === "runtime-interaction");
+
+    const droppedFrames = (metric: ProfileMetric) => typeof metric.details?.droppedFrames === "number" ? metric.details.droppedFrames : 0;
+    const groupMetrics = (metrics: ProfileMetric[], keyFor: (metric: ProfileMetric) => string) => Object.fromEntries(
+      [...metrics.reduce((groups, metric) => {
+        const key = keyFor(metric);
+        const entries = groups.get(key) ?? [];
+        entries.push(metric);
+        groups.set(key, entries);
+        return groups;
+      }, new Map<string, ProfileMetric[]>()).entries()]
+        .map(([key, metricsForKey]) => [key, {
+          ...metricStats(metricsForKey, (metric) => String(metric.details?.activeInteractionName ?? metric.name)),
+          droppedFrames: metricsForKey.reduce((sum, metric) => sum + droppedFrames(metric), 0)
+        }])
+    );
+
+    const contextKey = (metric: ProfileMetric): string => {
+      const route = String(metric.details?.route ?? "unknown");
+      const area = String(metric.details?.area ?? route);
+      if (area === "big-picture") {
+        return `big-picture/${String(metric.details?.bpViewMode ?? "unknown")}/${String(metric.details?.bpTabLabel ?? metric.details?.bpTabId ?? "unknown")}`;
+      }
+      if (area === "library") {
+        return `library/${String(metric.details?.activeGroupName ?? metric.details?.activeGroupId ?? "all")}`;
+      }
+      return `${area}/${route}`;
+    };
+
+    const interactionKey = (metric: ProfileMetric): string => String(metric.details?.activeInteractionName ?? "none");
+    const reactKey = (metric: ProfileMetric): string => `${String(metric.details?.id ?? "unknown")}/${String(metric.details?.phase ?? "unknown")}`;
+
+    return {
+      frameDrops: {
+        totalEvents: frameDrops.length,
+        totalDroppedFrames: frameDrops.reduce((sum, metric) => sum + droppedFrames(metric), 0),
+        worstFrameMs: frameDrops.length ? Math.max(...frameDrops.map((metric) => metric.value)) : 0,
+        stats: metricStats(frameDrops, (metric) => contextKey(metric)),
+        byContext: groupMetrics(frameDrops, contextKey),
+        byInteraction: groupMetrics(frameDrops, interactionKey),
+        slowest: metricStats(frameDrops, (metric) => `${contextKey(metric)} ${String(metric.details?.activeInteractionName ?? "")}`.trim()).slowest
+      },
+      interactions: {
+        stats: timingStats(interactions, (span) => span.name),
+        byName: Object.fromEntries(
+          [...interactions.reduce((groups, span) => {
+            const entries = groups.get(span.name) ?? [];
+            entries.push(span);
+            groups.set(span.name, entries);
+            return groups;
+          }, new Map<string, ProfileSpanSummary[]>()).entries()]
+            .map(([name, spans]) => [name, timingStats(spans, (span) => String(span.details?.bpTabLabel ?? span.details?.activeGroupName ?? span.name))])
+        ),
+        slowest: timingStats(interactions, (span) => span.name).slowest
+      },
+      reactCommits: {
+        stats: metricStats(reactCommits, reactKey),
+        byComponent: groupMetrics(reactCommits, (metric) => String(metric.details?.id ?? "unknown")),
+        slowest: metricStats(reactCommits, reactKey).slowest
+      },
+      colorBends: {
+        stats: metricStats(colorBends, (metric) => `${String(metric.details?.canvasWidth ?? "?")}x${String(metric.details?.canvasHeight ?? "?")}`),
+        slowest: metricStats(colorBends).slowest
+      }
     };
   }
 

@@ -4,6 +4,7 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import './ColorBends.css';
+import { isProfileEnabled, profileMetric } from './startupProfile';
 
 type ColorBendsProps = {
   className?: string;
@@ -246,7 +247,19 @@ export default function ColorBends({
       const amt = Math.min(1, dt * pointerSmoothRef.current);
       cur.lerp(tgt, amt);
       (material.uniforms.uPointer.value as THREE.Vector2).copy(cur);
+      const renderStartedAt = performance.now();
       renderer.render(scene, camera);
+      const renderMs = performance.now() - renderStartedAt;
+      if (isProfileEnabled() && renderMs >= 8) {
+        profileMetric('runtime-frame', 'renderer:color-bends-render', renderMs, {
+          canvasWidth: renderer.domElement.width,
+          canvasHeight: renderer.domElement.height,
+          colors: (colors || []).length,
+          iterations,
+          noise,
+          warpStrength
+        });
+      }
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);

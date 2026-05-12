@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Profiler, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import { Play, X, Download, Info, SlidersHorizontal, Plus, Star } from "lucide-react";
 import type { AppSettings, ControllerActionId, ControllerSettings, Game, GameGroup } from "@hynite/core";
@@ -6,6 +6,8 @@ import { expandPaletteToSlots, extractPalette, fallbackPalette, getCachedPalette
 import { soundEngine } from "./sound";
 import ColorBends from "./ColorBends";
 import { bindingLabel, bindingPressed, normalizeControllerSettings, readGamepadState } from "./controllerInput";
+import { isProfileEnabled } from "./startupProfile";
+import { profileReactRender, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 
 type BigPictureTab = {
   id: string;
@@ -92,6 +94,17 @@ const DIGITAL_CONTROLLER_ACTIONS: ControllerActionId[] = [
   "exitBigPicture",
   "favoriteTab"
 ];
+
+function ProfileScope({ id, children }: { id: string; children: ReactNode }) {
+  if (!isProfileEnabled()) {
+    return <>{children}</>;
+  }
+  return (
+    <Profiler id={id} onRender={profileReactRender}>
+      {children}
+    </Profiler>
+  );
+}
 
 function gameCoverUrl(game: Game): string | undefined {
   return game.libraryCapsuleUrl ?? (isVerifiedVerticalCoverUrl(game.coverUrl) ? game.coverUrl : undefined);
@@ -247,6 +260,35 @@ export function BigPictureScreen({
   const controller = useMemo<ControllerSettings>(() => normalizeControllerSettings(settings), [settings]);
   const binding = useCallback((action: ControllerActionId) => controller.bindings[action], [controller]);
   const reduceMotion = useReducedMotion();
+  const finishInteractionAfterTransition = useCallback((span: ReturnType<typeof startRuntimeInteraction>, details?: Record<string, unknown>) => {
+    window.setTimeout(() => span.end("ok", details), Math.round(VIEW_TRANSITION.duration * 1000) + 80);
+  }, []);
+  const profileFocusMove = useCallback((direction: "up" | "down" | "left" | "right") => {
+    const span = startRuntimeInteraction("bp:focus-move", {
+      direction,
+      viewMode,
+      tabId: currentTab?.id,
+      tabLabel: currentTab?.label,
+      fromIndex: focusedIndex,
+      gameCount: currentTab?.games.length ?? 0
+    });
+    window.setTimeout(() => span.end("ok"), 140);
+  }, [currentTab?.games.length, currentTab?.id, currentTab?.label, focusedIndex, viewMode]);
+
+  useEffect(() => {
+    updateRuntimeProfileContext({
+      bigPicture: true,
+      area: "big-picture",
+      totalGames: currentTab?.games.length ?? 0,
+      visibleGames: currentTab?.games.length ?? 0,
+      bpViewMode: viewMode,
+      bpTabId: currentTab?.id,
+      bpTabLabel: currentTab?.label,
+      bpFocusedIndex: focusedIndex,
+      bpFocusedTitle: focusedGame?.title,
+      bpGridColumns: gridColumns
+    });
+  }, [currentTab?.games.length, currentTab?.id, currentTab?.label, focusedGame?.title, focusedIndex, gridColumns, viewMode]);
 
   useEffect(() => {
     setFocusedIndex(0);
@@ -271,46 +313,83 @@ export function BigPictureScreen({
     setTabIndex((current) => {
       const next = Math.max(0, Math.min(nextIndex, tabs.length - 1));
       if (next !== current) {
+        const fromTab = tabs[current];
+        const toTab = tabs[next];
+        finishInteractionAfterTransition(startRuntimeInteraction("bp:switch-folder", {
+          fromTabId: fromTab?.id,
+          fromTabLabel: fromTab?.label,
+          toTabId: toTab?.id,
+          toTabLabel: toTab?.label,
+          toGameCount: toTab?.games.length ?? 0,
+          viewMode
+        }), { toTabId: toTab?.id, toGameCount: toTab?.games.length ?? 0 });
         setTransitionDirection(next > current ? "right" : "left");
       }
       return next;
     });
-  }, [tabs.length]);
+  }, [finishInteractionAfterTransition, tabs, viewMode]);
 
   const shiftTab = useCallback((delta: -1 | 1) => {
     setTabIndex((current) => {
       const next = Math.max(0, Math.min(current + delta, tabs.length - 1));
       if (next !== current) {
+        const fromTab = tabs[current];
+        const toTab = tabs[next];
+        finishInteractionAfterTransition(startRuntimeInteraction("bp:switch-folder", {
+          fromTabId: fromTab?.id,
+          fromTabLabel: fromTab?.label,
+          toTabId: toTab?.id,
+          toTabLabel: toTab?.label,
+          toGameCount: toTab?.games.length ?? 0,
+          viewMode
+        }), { toTabId: toTab?.id, toGameCount: toTab?.games.length ?? 0 });
         setTransitionDirection(delta > 0 ? "right" : "left");
       }
       return next;
     });
-  }, [tabs.length]);
+  }, [finishInteractionAfterTransition, tabs, viewMode]);
 
   const enterGrid = useCallback(() => {
     setViewMode((mode) => {
       if (mode !== "grid") {
+        finishInteractionAfterTransition(startRuntimeInteraction("bp:enter-grid", {
+          tabId: currentTabIdRef.current,
+          gameCount: currentTab?.games.length ?? 0,
+          focusedIndex
+        }), { gameCount: currentTab?.games.length ?? 0 });
         setTransitionDirection("down");
       }
       return "grid";
     });
-  }, []);
+  }, [currentTab?.games.length, finishInteractionAfterTransition, focusedIndex]);
 
   const exitGrid = useCallback(() => {
     setViewMode((mode) => {
       if (mode !== "shelf") {
+        finishInteractionAfterTransition(startRuntimeInteraction("bp:exit-grid", {
+          tabId: currentTabIdRef.current,
+          gameCount: currentTab?.games.length ?? 0,
+          focusedIndex
+        }), { gameCount: currentTab?.games.length ?? 0 });
         setTransitionDirection("up");
       }
       return "shelf";
     });
-  }, []);
+  }, [currentTab?.games.length, finishInteractionAfterTransition, focusedIndex]);
 
   const toggleGrid = useCallback(() => {
     setViewMode((mode) => {
+      const enteringGrid = mode !== "grid";
+      finishInteractionAfterTransition(startRuntimeInteraction(enteringGrid ? "bp:enter-grid" : "bp:exit-grid", {
+        tabId: currentTabIdRef.current,
+        gameCount: currentTab?.games.length ?? 0,
+        focusedIndex,
+        source: "toggle"
+      }), { gameCount: currentTab?.games.length ?? 0 });
       setTransitionDirection(mode === "grid" ? "up" : "down");
       return mode === "grid" ? "shelf" : "grid";
     });
-  }, []);
+  }, [currentTab?.games.length, finishInteractionAfterTransition, focusedIndex]);
 
   // ── Palette: cover extraction is debounced and tweened toward over
   // PALETTE_TWEEN_MS via rAF. We tween across fixed COLOR_SLOTS so dominant
@@ -393,16 +472,29 @@ export function BigPictureScreen({
     if (!url) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      void extractPalette(url, (info) => logPaletteDebug(focusedGame, info)).then((next) => {
-        if (cancelled) return;
-        logPaletteDebug(focusedGame, {
-          url,
-          source: next ? "extracted" : "failed",
-          palette: next,
-          error: next ? undefined : "using neutral fallback"
-        });
-        setTargetPalette(next ?? fallbackPalette());
+      const span = startRuntimeInteraction("bp:palette-extract", {
+        gameId: focusedGame.id,
+        title: focusedGame.title,
+        source: cached ? "cache-refresh" : "uncached"
       });
+      void extractPalette(url, (info) => logPaletteDebug(focusedGame, info))
+        .then((next) => {
+          if (cancelled) {
+            span.end("cancelled", { gameId: focusedGame.id, title: focusedGame.title });
+            return;
+          }
+          logPaletteDebug(focusedGame, {
+            url,
+            source: next ? "extracted" : "failed",
+            palette: next,
+            error: next ? undefined : "using neutral fallback"
+          });
+          setTargetPalette(next ?? fallbackPalette());
+          span.end(next ? "ok" : "error", { gameId: focusedGame.id, title: focusedGame.title, extracted: Boolean(next) });
+        })
+        .catch((error: unknown) => {
+          span.end("error", { gameId: focusedGame.id, title: focusedGame.title, error: error instanceof Error ? error.message : String(error) });
+        });
     }, PALETTE_DEBOUNCE_MS);
     return () => {
       cancelled = true;
@@ -456,12 +548,14 @@ export function BigPictureScreen({
       if (viewMode === "shelf") {
         if (event.key === "ArrowRight") {
           event.preventDefault();
+          profileFocusMove("right");
           setTransitionDirection("right");
           setFocusedIndex((i) => Math.min(i + 1, count - 1));
           return;
         }
         if (event.key === "ArrowLeft") {
           event.preventDefault();
+          profileFocusMove("left");
           setTransitionDirection("left");
           setFocusedIndex((i) => Math.max(i - 1, 0));
           return;
@@ -474,24 +568,28 @@ export function BigPictureScreen({
       } else {
         if (event.key === "ArrowRight") {
           event.preventDefault();
+          profileFocusMove("right");
           setTransitionDirection("right");
           setFocusedIndex((i) => Math.min(i + 1, count - 1));
           return;
         }
         if (event.key === "ArrowLeft") {
           event.preventDefault();
+          profileFocusMove("left");
           setTransitionDirection("left");
           setFocusedIndex((i) => Math.max(i - 1, 0));
           return;
         }
         if (event.key === "ArrowDown") {
           event.preventDefault();
+          profileFocusMove("down");
           setTransitionDirection("down");
           setFocusedIndex((i) => Math.min(i + gridColumns, count - 1));
           return;
         }
         if (event.key === "ArrowUp") {
           event.preventDefault();
+          profileFocusMove("up");
           setTransitionDirection("up");
           setFocusedIndex((i) => {
             if (i < gridColumns) {
@@ -506,36 +604,45 @@ export function BigPictureScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentTab, enterGrid, exitGrid, focusedGame, shiftTab, viewMode, gridColumns, onExit, onLaunch, onSelect]);
+  }, [currentTab, enterGrid, exitGrid, focusedGame, profileFocusMove, shiftTab, viewMode, gridColumns, onExit, onLaunch, onSelect]);
 
   const moveFocus = useCallback((direction: "up" | "down" | "left" | "right") => {
     const count = currentTab?.games.length ?? 0;
     if (count <= 0) return;
     if (viewMode === "shelf") {
       if (direction === "right") {
+        profileFocusMove("right");
         setTransitionDirection("right");
         setFocusedIndex((i) => Math.min(i + 1, count - 1));
       }
       if (direction === "left") {
+        profileFocusMove("left");
         setTransitionDirection("left");
         setFocusedIndex((i) => Math.max(i - 1, 0));
       }
-      if (direction === "down") enterGrid();
+      if (direction === "down") {
+        profileFocusMove("down");
+        enterGrid();
+      }
       return;
     }
     if (direction === "right") {
+      profileFocusMove("right");
       setTransitionDirection("right");
       setFocusedIndex((i) => Math.min(i + 1, count - 1));
     }
     if (direction === "left") {
+      profileFocusMove("left");
       setTransitionDirection("left");
       setFocusedIndex((i) => Math.max(i - 1, 0));
     }
     if (direction === "down") {
+      profileFocusMove("down");
       setTransitionDirection("down");
       setFocusedIndex((i) => Math.min(i + gridColumns, count - 1));
     }
     if (direction === "up") {
+      profileFocusMove("up");
       setTransitionDirection("up");
       setFocusedIndex((i) => {
         if (i < gridColumns) {
@@ -545,7 +652,7 @@ export function BigPictureScreen({
         return Math.max(i - gridColumns, 0);
       });
     }
-  }, [currentTab?.games.length, enterGrid, exitGrid, gridColumns, viewMode]);
+  }, [currentTab?.games.length, enterGrid, exitGrid, gridColumns, profileFocusMove, viewMode]);
 
   const runControllerAction = useCallback((action: string) => {
     if (action === "exitBigPicture") {
@@ -681,8 +788,14 @@ export function BigPictureScreen({
     const grid = gridRef.current;
     if (!grid) return;
     const focused = grid.querySelector<HTMLElement>('[data-focused="true"]');
+    const span = startRuntimeInteraction("bp:grid-scroll-into-view", {
+      tabId: currentTab?.id,
+      focusedIndex,
+      gridColumns
+    });
     focused?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [focusedIndex, viewMode, tabIndex]);
+    requestAnimationFrame(() => span.end(focused ? "ok" : "error", { hasFocusedCell: Boolean(focused) }));
+  }, [currentTab?.id, focusedIndex, gridColumns, viewMode, tabIndex]);
 
   // ── Track grid column count via ResizeObserver on the grid
   useEffect(() => {
@@ -713,22 +826,24 @@ export function BigPictureScreen({
       style={{ "--bp-bg-base": backgroundBase } as CSSProperties}
     >
       <div className="bp-background" aria-hidden>
-        <ColorBends
-          colors={animColors}
-          speed={0.18}
-          scale={1.2}
-          frequency={1.1}
-          warpStrength={1.1}
-          mouseInfluence={1.4}
-          parallax={0.6}
-          noise={0.6}
-          iterations={3}
-          intensity={1.25}
-          bandWidth={7}
-          autoRotate={4}
-          transparent={true}
-          pointerOverrideX={groupPointerX}
-        />
+        <ProfileScope id="BigPictureColorBends">
+          <ColorBends
+            colors={animColors}
+            speed={0.18}
+            scale={1.2}
+            frequency={1.1}
+            warpStrength={1.1}
+            mouseInfluence={1.4}
+            parallax={0.6}
+            noise={0.6}
+            iterations={3}
+            intensity={1.25}
+            bandWidth={7}
+            autoRotate={4}
+            transparent={true}
+            pointerOverrideX={groupPointerX}
+          />
+        </ProfileScope>
         <div className="bp-vignette" />
       </div>
 
@@ -794,6 +909,7 @@ export function BigPictureScreen({
               animate="animate"
               exit="exit"
             >
+              <ProfileScope id="BigPictureShelf">
               <section className="bp-hero">
                 {focusedGame ? (
                   <div className="bp-hero-inner">
@@ -860,6 +976,7 @@ export function BigPictureScreen({
                   })}
                 </div>
               </section>
+              </ProfileScope>
             </motion.div>
           ) : (
             <motion.section
@@ -871,6 +988,7 @@ export function BigPictureScreen({
               animate="animate"
               exit="exit"
             >
+              <ProfileScope id="BigPictureGrid">
               <div className="bp-grid" ref={gridRef}>
                 {currentTab?.games.map((game, i) => {
                   const cover = gameCoverUrl(game);
@@ -903,6 +1021,7 @@ export function BigPictureScreen({
                   );
                 })}
               </div>
+              </ProfileScope>
             </motion.section>
           )}
         </AnimatePresence>

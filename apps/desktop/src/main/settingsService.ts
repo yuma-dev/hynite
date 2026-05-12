@@ -84,7 +84,7 @@ const defaultSettings: AppSettings = {
   cacheTtlHours: 24,
   reduceMotion: false,
   autoHideAfterLaunch: true,
-  cardsPerRow: 8,
+  cardsPerRow: 6,
   libraryView: defaultLibraryView,
   launchAccountPreferences: {},
   gameGroups: [],

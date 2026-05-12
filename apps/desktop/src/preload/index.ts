@@ -210,6 +210,7 @@ const api = {
     signalReady: (): void => ipcRenderer.send("startup:ready")
   },
   debug: {
+    profileEnabled: process.env.HYNITE_STARTUP_PROFILE === "1" || process.env.HYNITE_STARTUP_PROFILE === "true",
     seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed"),
     profile: (entry: { phase: string; message: string; details?: Record<string, unknown>; rendererElapsedMs?: number }): void =>
       ipcRenderer.send("debug:profile", entry),

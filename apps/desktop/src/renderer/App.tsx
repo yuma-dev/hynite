@@ -50,14 +50,15 @@ import {
   VolumeX,
   X
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent, RefObject } from "react";
+import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
-import { profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
+import { isProfileEnabled, profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
+import { profileReactRender, startRuntimeFrameProfiler, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
 import { BigPictureScreen } from "./BigPictureScreen";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
@@ -208,7 +209,7 @@ const HERO_AUTOPLAY_MS = 9000;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
 const LIBRARY_GRID_BATCH_SIZE = 72;
-const DEFAULT_CARDS_PER_ROW = 8;
+const DEFAULT_CARDS_PER_ROW = 6;
 const MIN_CARDS_PER_ROW = 4;
 const MAX_CARDS_PER_ROW = 12;
 const DOWNLOAD_MATCH_BATCH_SIZE = 20;
@@ -289,6 +290,17 @@ function TitleBar({ onEnterBigPicture }: { onEnterBigPicture: () => void }) {
 
 function StartupLoading() {
   return <main className="startup-screen" />;
+}
+
+function ProfileScope({ id, children }: { id: string; children: ReactNode }) {
+  if (!isProfileEnabled()) {
+    return <>{children}</>;
+  }
+  return (
+    <Profiler id={id} onRender={profileReactRender}>
+      {children}
+    </Profiler>
+  );
 }
 
 function fallbackArt(game: Game): CSSProperties {
@@ -2344,6 +2356,19 @@ function LibraryScreen({
   const hasMoreGames = visibleCount < games.length;
 
   useEffect(() => {
+    updateRuntimeProfileContext({
+      route: "library",
+      area: "library",
+      totalGames: games.length,
+      visibleGames: visibleGames.length,
+      cardsPerRow: normalizedCardsPerRow,
+      activeGroupId: activeGroup?.id,
+      activeGroupName: activeGroup?.name,
+      libraryQuery: query
+    });
+  }, [activeGroup?.id, activeGroup?.name, games.length, normalizedCardsPerRow, query, visibleGames.length]);
+
+  useEffect(() => {
     setVisibleCount(LIBRARY_GRID_BATCH_SIZE);
   }, [games]);
 
@@ -2354,12 +2379,27 @@ function LibraryScreen({
 
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) {
-        setVisibleCount((current) => Math.min(games.length, current + LIBRARY_GRID_BATCH_SIZE));
+        setVisibleCount((current) => {
+          const next = Math.min(games.length, current + LIBRARY_GRID_BATCH_SIZE);
+          if (next > current) {
+            const span = startRuntimeInteraction("library:load-more-batch", {
+              fromVisibleGames: current,
+              toVisibleGames: next,
+              totalGames: games.length,
+              activeGroupId: activeGroup?.id,
+              activeGroupName: activeGroup?.name
+            });
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => span.end("ok", { visibleGames: next }));
+            });
+          }
+          return next;
+        });
       }
     }, { rootMargin: "720px 0px" });
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [games.length, hasMoreGames]);
+  }, [activeGroup?.id, activeGroup?.name, games.length, hasMoreGames]);
 
   function setFilters(filters: LibraryFilters) {
     setView({ ...view, filters });
@@ -2427,11 +2467,13 @@ function LibraryScreen({
         </div>
       ) : (
         <>
-          <div className="library-grid" ref={gridRef} style={cardGridStyle(normalizedCardsPerRow)} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
-            {visibleGames.map((game) => (
-              <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
-            ))}
-          </div>
+          <ProfileScope id="LibraryGrid">
+            <div className="library-grid" ref={gridRef} style={cardGridStyle(normalizedCardsPerRow)} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
+              {visibleGames.map((game) => (
+                <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
+              ))}
+            </div>
+          </ProfileScope>
           {hasMoreGames ? <div ref={loadMoreRef} className="library-load-sentinel" aria-hidden="true" /> : null}
         </>
       )}
@@ -5430,6 +5472,7 @@ export function App() {
 
   useEffect(() => {
     profileStartup("app:mounted", "App component mounted");
+    startRuntimeFrameProfiler();
   }, []);
 
   useEffect(() => {
@@ -5443,6 +5486,62 @@ export function App() {
   useEffect(() => {
     routeRef.current = route;
   }, [route]);
+
+  useEffect(() => {
+    if (!isProfileEnabled()) return undefined;
+    const content = contentRef.current;
+    if (!content) return undefined;
+
+    let scrollSpan: ReturnType<typeof startRuntimeInteraction> | undefined;
+    let endTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastScrollTop = content.scrollTop;
+    let lastScrollAt = performance.now();
+
+    const endScrollSpan = (status: "ok" | "cancelled" = "ok") => {
+      if (endTimer) {
+        clearTimeout(endTimer);
+        endTimer = undefined;
+      }
+      if (!scrollSpan) return;
+      scrollSpan.end(status, {
+        scrollTop: Math.round(content.scrollTop),
+        route: routeRef.current
+      });
+      scrollSpan = undefined;
+    };
+
+    const onScroll = () => {
+      if (routeRef.current !== "library") return;
+      const now = performance.now();
+      const scrollTop = content.scrollTop;
+      const elapsedMs = Math.max(1, now - lastScrollAt);
+      const velocity = Math.abs(scrollTop - lastScrollTop) / elapsedMs;
+      lastScrollTop = scrollTop;
+      lastScrollAt = now;
+
+      updateRuntimeProfileContext({
+        route: "library",
+        area: "library",
+        scrollTop: Math.round(scrollTop),
+        scrollVelocityPxPerMs: Math.round(velocity * 100) / 100
+      });
+
+      if (!scrollSpan) {
+        scrollSpan = startRuntimeInteraction("library:scroll-session", {
+          route: "library",
+          scrollTop: Math.round(scrollTop)
+        });
+      }
+      if (endTimer) clearTimeout(endTimer);
+      endTimer = setTimeout(() => endScrollSpan("ok"), 180);
+    };
+
+    content.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      content.removeEventListener("scroll", onScroll);
+      endScrollSpan("cancelled");
+    };
+  }, []);
 
   useEffect(() => {
     void window.hynite.settings.get().then((nextSettings) => {
@@ -5771,6 +5870,20 @@ export function App() {
     () => activeGroup?.kind === "smart" ? normalizeLibraryView(activeGroup.view) : libraryView,
     [activeGroup, libraryView]
   );
+
+  useEffect(() => {
+    updateRuntimeProfileContext({
+      route,
+      bigPicture,
+      area: bigPicture ? "big-picture" : route,
+      totalGames: route === "library" ? games.length : allGames.length,
+      cardsPerRow,
+      activeGroupId: activeGroup?.id,
+      activeGroupName: activeGroup?.name,
+      libraryQuery: activeQuery
+    });
+  }, [activeGroup?.id, activeGroup?.name, activeQuery, allGames.length, bigPicture, cardsPerRow, games.length, route]);
+
   // Big Picture uses the user's library sort and stacks the Big Picture filter
   // sheet on top. "All Games" and group tabs get filtered+sorted; Recent and
   // Installed tabs are computed inside BigPictureScreen from their own pools.
@@ -6296,22 +6409,24 @@ export function App() {
     }
     if (route === "library") {
       return (
-        <LibraryScreen
-          games={games}
-          facetGames={allGames.length > 0 ? allGames : games}
-          query={activeQuery}
-          setQuery={setScopedQuery}
-          view={activeLibraryView}
-          setView={setScopedLibraryView}
-          activeGroup={activeGroup}
-          onSelect={(game) => void selectGame(game)}
-          onGameContextMenu={openGameContextMenu}
-          onCreateSmartGroup={requestSmartGroup}
-          onRenameGroup={renameGroup}
-          onDeleteGroup={deleteGroup}
-          onOpenSettings={() => setRoute("settings")}
-          cardsPerRow={cardsPerRow}
-        />
+        <ProfileScope id="LibraryScreen">
+          <LibraryScreen
+            games={games}
+            facetGames={allGames.length > 0 ? allGames : games}
+            query={activeQuery}
+            setQuery={setScopedQuery}
+            view={activeLibraryView}
+            setView={setScopedLibraryView}
+            activeGroup={activeGroup}
+            onSelect={(game) => void selectGame(game)}
+            onGameContextMenu={openGameContextMenu}
+            onCreateSmartGroup={requestSmartGroup}
+            onRenameGroup={renameGroup}
+            onDeleteGroup={deleteGroup}
+            onOpenSettings={() => setRoute("settings")}
+            cardsPerRow={cardsPerRow}
+          />
+        </ProfileScope>
       );
     }
     if (route === "search") {
@@ -6538,42 +6653,44 @@ export function App() {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.25, ease: "easeOut" }}
         >
-          <BigPictureScreen
-            games={bpSortedAll.length > 0 ? bpSortedAll : games}
-            recentGames={recentGames}
-            settings={settings}
-            groupGames={bigPictureGroupGames}
-            activeFilterCount={countActiveFilters(bpFilters)}
-            onOpenFilters={() => setBpFiltersOpen(true)}
-            onLaunch={(game) => void launchGame(game)}
-            onSelect={(game) => void selectGame(game)}
-            onBack={() => {
-              if (bpFiltersOpen) {
-                setBpFiltersOpen(false);
-                return true;
-              }
-              if (contextMenu) {
-                setContextMenu(undefined);
-                return true;
-              }
-              if (nameDialog) {
-                setNameDialog(undefined);
-                return true;
-              }
-              if (selectedRef.current) {
-                setSelected(undefined);
-                return true;
-              }
-              return false;
-            }}
-            onExit={() => setBigPicture(false)}
-            defaultTabId={settings?.bigPictureDefaultTabId}
-            onSetDefaultTab={(tabId) => {
-              void window.hynite.settings.update({ bigPictureDefaultTabId: tabId ?? undefined }).then(setSettings).catch(console.error);
-            }}
-            detailOpen={Boolean(selected)}
-            filterOpen={bpFiltersOpen}
-          />
+          <ProfileScope id="BigPictureScreen">
+            <BigPictureScreen
+              games={bpSortedAll.length > 0 ? bpSortedAll : games}
+              recentGames={recentGames}
+              settings={settings}
+              groupGames={bigPictureGroupGames}
+              activeFilterCount={countActiveFilters(bpFilters)}
+              onOpenFilters={() => setBpFiltersOpen(true)}
+              onLaunch={(game) => void launchGame(game)}
+              onSelect={(game) => void selectGame(game)}
+              onBack={() => {
+                if (bpFiltersOpen) {
+                  setBpFiltersOpen(false);
+                  return true;
+                }
+                if (contextMenu) {
+                  setContextMenu(undefined);
+                  return true;
+                }
+                if (nameDialog) {
+                  setNameDialog(undefined);
+                  return true;
+                }
+                if (selectedRef.current) {
+                  setSelected(undefined);
+                  return true;
+                }
+                return false;
+              }}
+              onExit={() => setBigPicture(false)}
+              defaultTabId={settings?.bigPictureDefaultTabId}
+              onSetDefaultTab={(tabId) => {
+                void window.hynite.settings.update({ bigPictureDefaultTabId: tabId ?? undefined }).then(setSettings).catch(console.error);
+              }}
+              detailOpen={Boolean(selected)}
+              filterOpen={bpFiltersOpen}
+            />
+          </ProfileScope>
           <LibraryFiltersPanel
             open={bpFiltersOpen}
             onClose={() => setBpFiltersOpen(false)}

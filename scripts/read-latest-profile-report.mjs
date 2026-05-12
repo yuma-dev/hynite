@@ -45,6 +45,7 @@ if (!found) {
   line("Duration", `${summary.durationMs ?? 0}ms`);
   line("Main freezes", `${summary.totalMainFreezeMs ?? 0}ms total, max ${summary.maxMainFreezeMs ?? 0}ms`);
   line("Renderer freezes", `${summary.totalRendererFreezeMs ?? 0}ms total, max ${summary.maxRendererFreezeMs ?? 0}ms`);
+  line("Dropped frames", `${summary.totalDroppedFrames ?? 0} total, worst ${summary.worstFrameMs ?? 0}ms`);
   line("Dropped events", report.raw?.droppedEventCount ?? 0);
 
   const topCategories = summary.topCategories ?? [];
@@ -78,6 +79,30 @@ if (!found) {
       console.log("- Slowest games:");
       for (const game of slowestGames.slice(0, 5)) {
         console.log(`  - ${game.title ?? game.gameId}: ${game.totalMs}ms (${game.source ?? "unknown"})`);
+      }
+    }
+  }
+
+  const runtimeFrames = report.runtimeFrames;
+  if (runtimeFrames?.frameDrops?.totalEvents) {
+    console.log("\nRuntime frames:");
+    console.log(`- Frame-drop events: ${runtimeFrames.frameDrops.totalEvents}, dropped ${runtimeFrames.frameDrops.totalDroppedFrames}, worst ${runtimeFrames.frameDrops.worstFrameMs}ms`);
+    const byInteraction = runtimeFrames.frameDrops.byInteraction ?? {};
+    const interactionRows = Object.entries(byInteraction)
+      .map(([name, stats]) => ({ name, droppedFrames: stats.droppedFrames ?? 0, p95Ms: stats.p95Ms ?? 0, maxMs: stats.maxMs ?? 0 }))
+      .sort((a, b) => b.droppedFrames - a.droppedFrames)
+      .slice(0, 6);
+    if (interactionRows.length) {
+      console.log("- By interaction:");
+      for (const row of interactionRows) {
+        console.log(`  - ${row.name}: dropped ${row.droppedFrames}, p95 ${row.p95Ms}ms, max ${row.maxMs}ms`);
+      }
+    }
+    const reactRows = runtimeFrames.reactCommits?.slowest ?? [];
+    if (reactRows.length) {
+      console.log("- Slow React commits:");
+      for (const row of reactRows.slice(0, 5)) {
+        console.log(`  - ${row.label}: ${row.durationMs}ms`);
       }
     }
   }

@@ -2,6 +2,7 @@ import type { ProfileEvent, ProfileProcess, ProfileSpanHandle, ProfileSpanStatus
 
 const rendererStartedAt = performance.now();
 let rendererHeartbeatStarted = false;
+let activeImageLoads = 0;
 
 type ProfileMetric = {
   kind: "metric";
@@ -50,6 +51,14 @@ function sourceDetails(src: string): Record<string, unknown> {
 
 function send(record: ProfileEvent | ProfileMetric): void {
   window.hynite.debug.profileRecord(record as unknown as Record<string, unknown>);
+}
+
+export function isProfileEnabled(): boolean {
+  return Boolean(window.hynite.debug.profileEnabled);
+}
+
+export function activeProfileImageLoadCount(): number {
+  return activeImageLoads;
 }
 
 export function profileStartup(phase: string, message: string, details?: Record<string, unknown>): void {
@@ -163,10 +172,21 @@ export function startRendererHeartbeat(): void {
 }
 
 export function profileImageStart(src: string, details: Record<string, unknown>): ProfileSpanHandle {
-  return profileSpan("renderer-assets", "renderer-assets:image-load", {
+  activeImageLoads += 1;
+  const span = profileSpan("renderer-assets", "renderer-assets:image-load", {
     ...sourceDetails(src),
     ...details
   });
+  let ended = false;
+  return {
+    id: span.id,
+    end(status?: ProfileSpanStatus, endDetails?: Record<string, unknown>) {
+      if (ended) return;
+      ended = true;
+      activeImageLoads = Math.max(0, activeImageLoads - 1);
+      span.end(status, endDetails);
+    }
+  };
 }
 
 export function profileImageError(src: string, details: Record<string, unknown>, error?: string): void {
