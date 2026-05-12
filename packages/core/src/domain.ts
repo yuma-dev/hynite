@@ -564,6 +564,8 @@ export type AppSettings = {
   reduceMotion: boolean;
   /** Shows a game launch handoff before minimizing Hynite after successful launches. */
   autoHideAfterLaunch: boolean;
+  /** Target number of game cards shown across Home rows and Library grid at desktop widths. */
+  cardsPerRow?: number;
   libraryView?: LibraryView;
   /** Per-game preferred paired Steam account used when launching from details/library/recent. */
   launchAccountPreferences?: Record<string, string>;

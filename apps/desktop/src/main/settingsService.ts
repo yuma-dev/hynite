@@ -61,6 +61,7 @@ const defaultSettings: AppSettings = {
   cacheTtlHours: 24,
   reduceMotion: false,
   autoHideAfterLaunch: true,
+  cardsPerRow: 8,
   libraryView: defaultLibraryView,
   launchAccountPreferences: {},
   gameGroups: [],
@@ -192,6 +193,12 @@ function sanitizeGameGroups(value: unknown): GameGroup[] {
     }
     return [];
   });
+}
+
+function sanitizeCardsPerRow(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(12, Math.max(4, Math.round(value)))
+    : defaultSettings.cardsPerRow ?? 8;
 }
 
 function clampVolume(value: unknown, fallback: number): number {
@@ -334,6 +341,7 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     ...rest,
     steamAccounts: cleanedAccounts,
     steamWebApiKey: liftedKey,
+    cardsPerRow: sanitizeCardsPerRow(raw.cardsPerRow),
     gameGroups: sanitizeGameGroups(raw.gameGroups),
     sound: sanitizeSoundSettings(raw.sound, bundledAudio),
     music: sanitizeMusicSettings(raw.music, bundledAudio),
@@ -379,6 +387,7 @@ export class SettingsService {
     if (!Array.isArray(next.steamAccounts)) {
       next.steamAccounts = [];
     }
+    next.cardsPerRow = sanitizeCardsPerRow(next.cardsPerRow);
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
     next.sound = sanitizeSoundSettings(next.sound, this.bundledAudio());
     next.music = sanitizeMusicSettings(next.music, this.bundledAudio());

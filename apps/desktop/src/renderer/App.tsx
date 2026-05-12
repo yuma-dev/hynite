@@ -205,6 +205,9 @@ const HERO_AUTOPLAY_MS = 9000;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
 const LIBRARY_GRID_BATCH_SIZE = 72;
+const DEFAULT_CARDS_PER_ROW = 8;
+const MIN_CARDS_PER_ROW = 4;
+const MAX_CARDS_PER_ROW = 12;
 const DOWNLOAD_MATCH_BATCH_SIZE = 20;
 const DOWNLOAD_MATCH_SEARCH_LIMIT = 500;
 const APP_ASSET_BASE_URL = import.meta.env.BASE_URL;
@@ -669,6 +672,26 @@ function normalizeGroups(settings?: AppSettings): GameGroup[] {
   return settings?.gameGroups ?? [];
 }
 
+function normalizeCardsPerRow(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(MAX_CARDS_PER_ROW, Math.max(MIN_CARDS_PER_ROW, Math.round(value)))
+    : DEFAULT_CARDS_PER_ROW;
+}
+
+function cardGridStyle(cardsPerRow: number): CSSProperties {
+  const normalized = normalizeCardsPerRow(cardsPerRow);
+  return {
+    "--cards-per-row": normalized,
+    "--row-card-width": `max(96px, calc((100% - ${(normalized - 1) * 14}px) / ${normalized}))`
+  } as CSSProperties;
+}
+
+function zoomSliderStyle(cardsPerRow: number): CSSProperties {
+  const normalized = normalizeCardsPerRow(cardsPerRow);
+  const percent = ((normalized - MIN_CARDS_PER_ROW) / (MAX_CARDS_PER_ROW - MIN_CARDS_PER_ROW)) * 100;
+  return { "--zoom-fill": `${percent}%` } as CSSProperties;
+}
+
 function makeGroupId(kind: GameGroup["kind"]): string {
   const random = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -1126,12 +1149,14 @@ function GameRow({
   title,
   description,
   games,
+  cardsPerRow,
   onSelect,
   onGameContextMenu
 }: {
   title: string;
   description?: string;
   games: Game[];
+  cardsPerRow: number;
   onSelect: (game: Game) => void;
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
 }) {
@@ -1219,7 +1244,7 @@ function GameRow({
             <ChevronLeft size={18} />
           </button>
         ) : null}
-        <div className="cover-strip" ref={stripRef} onScroll={onRowScroll} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
+        <div className="cover-strip" ref={stripRef} style={cardGridStyle(cardsPerRow)} onScroll={onRowScroll} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
           {visibleGames.map((game) => (
             <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
           ))}
@@ -1593,11 +1618,12 @@ function HomeScreen({
   onOpenSettings: () => void;
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
 }) {
+  const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
   return (
     <main className="page">
       <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onOpenSettings={onOpenSettings} />
-      <GameRow title="Recently played" games={home?.continuePlaying ?? []} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
-      <GameRow title="Most played" games={home?.mostPlayed ?? []} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
+      <GameRow title="Recently played" games={home?.continuePlaying ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
+      <GameRow title="Most played" games={home?.mostPlayed ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
     </main>
   );
 }
@@ -1712,7 +1738,7 @@ function TrendingScreen({
       <div className="trend-rows">
         {rows.map((row) => (
           <div key={row.id} id={`trend-row-${row.id}`} className="trend-row-anchor">
-            <GameRow title={row.title} description={row.description} games={row.games} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
+            <GameRow title={row.title} description={row.description} games={row.games} cardsPerRow={normalizeCardsPerRow(settings?.cardsPerRow)} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
           </div>
         ))}
       </div>
@@ -2185,7 +2211,8 @@ function LibraryScreen({
   onCreateSmartGroup,
   onRenameGroup,
   onDeleteGroup,
-  onOpenSettings
+  onOpenSettings,
+  cardsPerRow
 }: {
   games: Game[];
   facetGames: Game[];
@@ -2200,12 +2227,14 @@ function LibraryScreen({
   onRenameGroup: (group: GameGroup) => void;
   onDeleteGroup: (group: GameGroup) => void;
   onOpenSettings: () => void;
+  cardsPerRow: number;
 }) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(gridRef, 180);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [visibleCount, setVisibleCount] = useState(LIBRARY_GRID_BATCH_SIZE);
+  const normalizedCardsPerRow = normalizeCardsPerRow(cardsPerRow);
 
   const facets = useMemo(() => {
     const sourceSet = new Set<ProviderId>();
@@ -2314,7 +2343,7 @@ function LibraryScreen({
         </div>
       ) : (
         <>
-          <div className="library-grid" ref={gridRef} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
+          <div className="library-grid" ref={gridRef} style={cardGridStyle(normalizedCardsPerRow)} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
             {visibleGames.map((game) => (
               <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
             ))}
@@ -2751,7 +2780,7 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
   );
 }
 
-type SettingsTab = "steam" | "metadata" | "sources" | "audio" | "advanced";
+type SettingsTab = "steam" | "metadata" | "sources" | "audio" | "view" | "advanced";
 
 function soundFileName(filePath?: string): string {
   if (!filePath) {
@@ -3008,6 +3037,11 @@ function SettingsScreen({
     setSettings(next);
   }
 
+  async function setCardsPerRow(value: number) {
+    const next = await window.hynite.settings.update({ cardsPerRow: normalizeCardsPerRow(value) });
+    setSettings(next);
+  }
+
   async function updateSound(sound: SoundSettings) {
     if (soundSaveTimerRef.current) {
       clearTimeout(soundSaveTimerRef.current);
@@ -3126,6 +3160,7 @@ function SettingsScreen({
   const customMusicCount = musicTracks.length - bundledMusicCount;
   const musicCopyrights = Array.from(new Set(musicTracks.map((track) => track.copyright).filter(Boolean)));
   const musicCopyrightSummary = musicCopyrights.length > 0 ? musicCopyrights.join(" · ") : "No copyright metadata";
+  const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
 
   return (
     <main className="page settings-page">
@@ -3146,6 +3181,7 @@ function SettingsScreen({
             ["metadata", "Metadata"],
             ["sources", "Sources"],
             ["audio", "Audio"],
+            ["view", "View"],
             ["advanced", "Advanced"]
           ].map(([id, label]) => (
             <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id as SettingsTab)}>
@@ -3363,6 +3399,30 @@ function SettingsScreen({
           ) : null}
 
           {tab === "sources" ? <SourcesScreen /> : null}
+
+          {tab === "view" ? (
+            <section className="settings-section">
+              <div className="settings-section-head">
+                <div>
+                  <h2>View</h2>
+                  <p className="settings-hint">Controls shared by Home rows and the Library grid.</p>
+                </div>
+                <strong>{cardsPerRow} cards</strong>
+              </div>
+              <label className="view-slider-row settings-view-slider">
+                <span>Cards per row</span>
+                <input
+                  type="range"
+                  min={MIN_CARDS_PER_ROW}
+                  max={MAX_CARDS_PER_ROW}
+                  step={1}
+                  value={cardsPerRow}
+                  onChange={(event) => void setCardsPerRow(Number(event.currentTarget.value))}
+                />
+                <strong>{cardsPerRow}</strong>
+              </label>
+            </section>
+          ) : null}
 
           {tab === "audio" ? (
             <section className="settings-section audio-settings">
@@ -5138,6 +5198,7 @@ export function App() {
   const homeApplyTokenRef = useRef(0);
   const prefersReducedMotion = usePrefersReducedMotion();
   const reduceLaunchMotion = Boolean(settings?.reduceMotion || prefersReducedMotion);
+  const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
 
   useEffect(() => {
     profileStartup("app:mounted", "App component mounted");
@@ -5838,6 +5899,10 @@ export function App() {
     }
   }
 
+  async function setCardsPerRow(value: number) {
+    setSettings(await window.hynite.settings.update({ cardsPerRow: normalizeCardsPerRow(value) }));
+  }
+
   const routeContent = useMemo(() => {
     if (route === "home") {
       return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} />;
@@ -5861,6 +5926,7 @@ export function App() {
           onRenameGroup={renameGroup}
           onDeleteGroup={deleteGroup}
           onOpenSettings={() => setRoute("settings")}
+          cardsPerRow={cardsPerRow}
         />
       );
     }
@@ -5895,7 +5961,7 @@ export function App() {
         onSeed={() => void window.hynite.debug.seed().then(() => refresh())}
       />
     );
-  }, [route, home, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy]);
+  }, [route, home, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy, cardsPerRow]);
 
   return (
     <>
@@ -6045,6 +6111,19 @@ export function App() {
         <span className="status-dot" />
         <span>{games.length} games</span>
         <span>{home?.stale ? "cached discovery" : "online discovery"}</span>
+        <label className="status-zoom">
+          <span>Zoom</span>
+          <input
+            type="range"
+            min={MIN_CARDS_PER_ROW}
+            max={MAX_CARDS_PER_ROW}
+            step={1}
+            value={cardsPerRow}
+            style={zoomSliderStyle(cardsPerRow)}
+            onChange={(event) => void setCardsPerRow(Number(event.currentTarget.value))}
+          />
+          <strong>{cardsPerRow}</strong>
+        </label>
         <span>v0.1.0</span>
         {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.active && musicStatus.pauseReason && (
           <span className="music-pause-chip">

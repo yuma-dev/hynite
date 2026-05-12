@@ -91,6 +91,15 @@ describe("SettingsService", () => {
     });
   });
 
+  it("persists and clamps cards per row", async () => {
+    const service = createService();
+
+    await expect(service.get()).resolves.toMatchObject({ cardsPerRow: 8 });
+    await expect(service.update({ cardsPerRow: 10.6 })).resolves.toMatchObject({ cardsPerRow: 11 });
+    await expect(service.update({ cardsPerRow: 99 })).resolves.toMatchObject({ cardsPerRow: 12 });
+    await expect(service.update({ cardsPerRow: 1 })).resolves.toMatchObject({ cardsPerRow: 4 });
+  });
+
   it("persists and sanitizes window placement", async () => {
     const service = createService();
     await service.update({
