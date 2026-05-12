@@ -5,10 +5,11 @@
 // weights across shader color slots so that dominant colors actually dominate
 // the resulting blend (a mostly-red cover doesn't get equal red/blue mix).
 //
-// Approach: downsample image to 32x32, bucket pixels by coarse HSL, score each
-// bucket by (count * saturation * mid-lightness), then take up to N buckets
-// whose contribution exceeds a minimum-share threshold. Weights are
-// normalized so they sum to 1.
+// Approach: downsample image to 32x32, ignore near-black/white/grey pixels,
+// bucket chromatic pixels by coarse HSL, rank by chromatic mass, then take up
+// to N distinct hue/lightness buckets. Output weights are based on chromatic
+// pixel share, so the background reflects the actual art colors instead of UI
+// blacks/whites or a tiny saturated detail.
 
 export type WeightedColor = { hex: string; weight: number };
 
@@ -16,13 +17,38 @@ export type CoverPalette = {
   colors: WeightedColor[];
 };
 
+export type PaletteDebugInfo = {
+  url?: string;
+  source?: "cache" | "pending" | "extracted" | "failed" | "missing-url";
+  image?: { naturalWidth: number; naturalHeight: number; crossOrigin: string | null };
+  pixels?: {
+    total: number;
+    opaque: number;
+    chromatic: number;
+    buckets: number;
+    rejectedAlpha: number;
+    rejectedAchromatic: number;
+    rejectedLightness: number;
+  };
+  ranked?: Array<{ hex: string; count: number; mass: number }>;
+  picks?: Array<{ hex: string; count: number; mass: number }>;
+  palette?: CoverPalette;
+  error?: string;
+};
+
+export type PaletteDebugSink = (info: PaletteDebugInfo) => void;
+
 const PALETTE_CACHE = new Map<string, CoverPalette>();
 const PALETTE_PENDING = new Map<string, Promise<CoverPalette | undefined>>();
 
-// Minimum share (after normalization) for a color to make it into the palette.
-const MIN_COLOR_SHARE = 0.1;
+// Minimum share of chromatic pixels for a color to make it into the palette.
+const MIN_COLOR_SHARE = 0.08;
 // Hard cap on palette size. Below 8 since ColorBends shader MAX_COLORS = 8.
 const MAX_PALETTE_COLORS = 4;
+const MIN_SATURATION = 0.22;
+const MIN_LIGHTNESS = 0.09;
+const MAX_LIGHTNESS = 0.9;
+const MIN_PICK_DISTANCE = 46;
 
 export function getCachedPalette(url: string | undefined): CoverPalette | undefined {
   if (!url) return undefined;
@@ -32,9 +58,7 @@ export function getCachedPalette(url: string | undefined): CoverPalette | undefi
 export function fallbackPalette(): CoverPalette {
   return {
     colors: [
-      { hex: "#3a2f6b", weight: 0.55 },
-      { hex: "#6b2f5b", weight: 0.3 },
-      { hex: "#1a3a6b", weight: 0.15 }
+      { hex: "#19191f", weight: 1 }
     ]
   };
 }
@@ -90,6 +114,7 @@ export function expandPaletteToSlots(palette: CoverPalette, slotCount: number): 
       if (remaining === 0) break;
       allocations[r.idx]!.assigned += 1;
       remaining -= 1;
+      used += 1;
     }
   }
   // If we over-allocated (too many colors, each gets 1, exceeds slotCount),
@@ -111,13 +136,22 @@ export function expandPaletteToSlots(palette: CoverPalette, slotCount: number): 
   return slots;
 }
 
-export async function extractPalette(url: string | undefined): Promise<CoverPalette | undefined> {
-  if (!url) return undefined;
+export async function extractPalette(url: string | undefined, debug?: PaletteDebugSink): Promise<CoverPalette | undefined> {
+  if (!url) {
+    debug?.({ source: "missing-url" });
+    return undefined;
+  }
   const cached = PALETTE_CACHE.get(url);
-  if (cached) return cached;
+  if (cached) {
+    debug?.({ url, source: "cache", palette: cached });
+    return cached;
+  }
   const pending = PALETTE_PENDING.get(url);
-  if (pending) return pending;
-  const promise = doExtract(url).then((palette) => {
+  if (pending) {
+    debug?.({ url, source: "pending" });
+    return pending;
+  }
+  const promise = doExtract(url, debug).then((palette) => {
     PALETTE_PENDING.delete(url);
     if (palette) PALETTE_CACHE.set(url, palette);
     return palette;
@@ -126,101 +160,173 @@ export async function extractPalette(url: string | undefined): Promise<CoverPale
   return promise;
 }
 
-async function doExtract(url: string): Promise<CoverPalette | undefined> {
+async function doExtract(url: string, debug?: PaletteDebugSink): Promise<CoverPalette | undefined> {
   try {
     const image = await loadImage(url);
+    debug?.({
+      url,
+      image: {
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        crossOrigin: image.crossOrigin
+      }
+    });
     const size = 32;
     const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return undefined;
+    if (!ctx) {
+      debug?.({ url, source: "failed", error: "canvas context unavailable" });
+      return undefined;
+    }
     ctx.drawImage(image, 0, 0, size, size);
-    const { data } = ctx.getImageData(0, 0, size, size);
-
-    type Bucket = { r: number; g: number; b: number; count: number; score: number };
-    const buckets = new Map<number, Bucket>();
-
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i]!;
-      const g = data[i + 1]!;
-      const b = data[i + 2]!;
-      const a = data[i + 3]!;
-      if (a < 200) continue;
-
-      const [h, s, l] = rgbToHsl(r, g, b);
-      if (l < 0.05 || l > 0.96) continue;
-
-      const hueBucket = Math.floor(h * 12);
-      const satBucket = s < 0.2 ? 0 : s < 0.5 ? 1 : 2;
-      const lightBucket = Math.floor(l * 4);
-      const key = (hueBucket << 6) | (satBucket << 3) | lightBucket;
-
-      // Per-pixel weight emphasises saturated and mid-light pixels but a near-
-      // grey pixel still counts as "1" so it can't be over-weighted. This keeps
-      // raw count meaningful for dominance.
-      const midLightBoost = 1 - Math.abs(l - 0.5) * 1.4;
-      const pixelScore = (0.4 + s * 1.6) * Math.max(0.1, midLightBoost);
-      const entry = buckets.get(key);
-      if (entry) {
-        entry.r += r;
-        entry.g += g;
-        entry.b += b;
-        entry.count += 1;
-        entry.score += pixelScore;
-      } else {
-        buckets.set(key, { r, g, b, count: 1, score: pixelScore });
-      }
-    }
-
-    if (!buckets.size) return undefined;
-
-    const ranked = Array.from(buckets.values())
-      .map((b) => ({
-        r: Math.round(b.r / b.count),
-        g: Math.round(b.g / b.count),
-        b: Math.round(b.b / b.count),
-        count: b.count,
-        score: b.score
-      }))
-      .sort((a, b) => b.score - a.score);
-
-    // Greedy distinct-color pick. Each pick carries its raw score so we can
-    // normalize to weights afterwards.
-    const picks: Array<{ r: number; g: number; b: number; score: number }> = [];
-    for (const candidate of ranked) {
-      if (picks.length >= MAX_PALETTE_COLORS) break;
-      if (picks.every((p) => colorDistance(p, candidate) > 60)) {
-        picks.push(candidate);
-      }
-    }
-    if (!picks.length) return undefined;
-
-    const total = picks.reduce((sum, p) => sum + p.score, 0) || 1;
-    let weighted: WeightedColor[] = picks.map((p) => ({
-      hex: rgbToHex(p),
-      weight: p.score / total
-    }));
-
-    // Drop colors below the minimum share. Re-normalize.
-    weighted = weighted.filter((c) => c.weight >= MIN_COLOR_SHARE);
-    if (!weighted.length) {
-      // The top color was just very dominant. Fall back to taking the very top.
-      weighted = [{ hex: rgbToHex(picks[0]!), weight: 1 }];
-    }
-    const renorm = weighted.reduce((s, c) => s + c.weight, 0) || 1;
-    weighted = weighted.map((c) => ({ hex: c.hex, weight: c.weight / renorm }));
-
-    return { colors: weighted };
-  } catch {
+    const palette = extractPaletteFromPixels(ctx.getImageData(0, 0, size, size).data, (info) => debug?.({ url, ...info }));
+    debug?.({ url, source: palette ? "extracted" : "failed", palette, error: palette ? undefined : "no chromatic palette" });
+    return palette;
+  } catch (error) {
+    debug?.({ url, source: "failed", error: error instanceof Error ? error.message : String(error) });
     return undefined;
   }
+}
+
+export function extractPaletteFromPixels(data: Uint8ClampedArray, debug?: PaletteDebugSink): CoverPalette | undefined {
+  type Bucket = { r: number; g: number; b: number; count: number; mass: number; hue: number };
+  const buckets = new Map<number, Bucket>();
+  let opaque = 0;
+  let chromatic = 0;
+  let rejectedAlpha = 0;
+  let rejectedAchromatic = 0;
+  let rejectedLightness = 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i]!;
+    const g = data[i + 1]!;
+    const b = data[i + 2]!;
+    const a = data[i + 3]!;
+    if (a < 200) {
+      rejectedAlpha += 1;
+      continue;
+    }
+    opaque += 1;
+
+    const [h, s, l] = rgbToHsl(r, g, b);
+    if (s < MIN_SATURATION) {
+      rejectedAchromatic += 1;
+      continue;
+    }
+    if (l < MIN_LIGHTNESS || l > MAX_LIGHTNESS) {
+      rejectedLightness += 1;
+      continue;
+    }
+    chromatic += 1;
+
+    const hueBucket = Math.min(23, Math.floor(h * 24));
+    const satBucket = s < 0.45 ? 0 : s < 0.72 ? 1 : 2;
+    const lightBucket = Math.min(4, Math.floor(l * 5));
+    const key = (hueBucket << 6) | (satBucket << 3) | lightBucket;
+
+    const midLightBoost = 1 - Math.abs(l - 0.5) * 1.2;
+    const chromaticMass = (0.35 + s * 0.65) * Math.max(0.25, midLightBoost);
+    const entry = buckets.get(key);
+    if (entry) {
+      entry.r += r;
+      entry.g += g;
+      entry.b += b;
+      entry.count += 1;
+      entry.mass += chromaticMass;
+    } else {
+      buckets.set(key, { r, g, b, count: 1, mass: chromaticMass, hue: h });
+    }
+  }
+
+  if (!buckets.size) {
+    debug?.({
+      pixels: {
+        total: data.length / 4,
+        opaque,
+        chromatic,
+        buckets: 0,
+        rejectedAlpha,
+        rejectedAchromatic,
+        rejectedLightness
+      }
+    });
+    return undefined;
+  }
+
+  const ranked = Array.from(buckets.values())
+    .map((b) => ({
+      r: Math.round(b.r / b.count),
+      g: Math.round(b.g / b.count),
+      b: Math.round(b.b / b.count),
+      count: b.count,
+      mass: b.mass,
+      hue: b.hue
+    }))
+    .sort((a, b) => b.mass - a.mass);
+
+  const picks: Array<{ r: number; g: number; b: number; count: number; mass: number }> = [];
+  for (const candidate of ranked) {
+    if (picks.length >= MAX_PALETTE_COLORS) break;
+    if (picks.every((p) => colorDistance(p, candidate) > MIN_PICK_DISTANCE)) {
+      picks.push(candidate);
+    }
+  }
+  if (!picks.length) {
+    debug?.({
+      pixels: {
+        total: data.length / 4,
+        opaque,
+        chromatic,
+        buckets: buckets.size,
+        rejectedAlpha,
+        rejectedAchromatic,
+        rejectedLightness
+      },
+      ranked: ranked.slice(0, 8).map((p) => ({ hex: rgbToHex(p), count: p.count, mass: Number(p.mass.toFixed(2)) }))
+    });
+    return undefined;
+  }
+
+  const total = picks.reduce((sum, p) => sum + p.mass, 0) || 1;
+  let weighted: WeightedColor[] = picks.map((p) => ({
+    hex: rgbToHex(toneForAmbient(p)),
+    weight: p.mass / total
+  }));
+
+  weighted = weighted.filter((c) => c.weight >= MIN_COLOR_SHARE);
+  if (!weighted.length) {
+    weighted = [{ hex: rgbToHex(picks[0]!), weight: 1 }];
+  }
+  const renorm = weighted.reduce((s, c) => s + c.weight, 0) || 1;
+  weighted = weighted.map((c) => ({ hex: c.hex, weight: c.weight / renorm }));
+
+  const palette = { colors: weighted };
+  debug?.({
+    pixels: {
+      total: data.length / 4,
+      opaque,
+      chromatic,
+      buckets: buckets.size,
+      rejectedAlpha,
+      rejectedAchromatic,
+      rejectedLightness
+    },
+    ranked: ranked.slice(0, 8).map((p) => ({ hex: rgbToHex(p), count: p.count, mass: Number(p.mass.toFixed(2)) })),
+    picks: picks.map((p) => ({ hex: rgbToHex(p), count: p.count, mass: Number(p.mass.toFixed(2)) })),
+    palette
+  });
+
+  return palette;
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.crossOrigin = "anonymous";
+    if (/^(?:https?|hynite-asset):\/\//i.test(url)) {
+      image.crossOrigin = "anonymous";
+    }
     image.decoding = "async";
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error("image load failed"));
@@ -267,7 +373,12 @@ function rgbToHex({ r, g, b }: { r: number; g: number; b: number }): string {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
-function hslToHex(h: number, s: number, l: number): string {
+function toneForAmbient(color: { r: number; g: number; b: number }): { r: number; g: number; b: number } {
+  const [h, s, l] = rgbToHsl(color.r, color.g, color.b);
+  return hslToRgb(h * 360, Math.min(0.86, Math.max(0.42, s)), Math.min(0.58, Math.max(0.34, l)));
+}
+
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const hp = h / 60;
   const x = c * (1 - Math.abs((hp % 2) - 1));
@@ -281,9 +392,13 @@ function hslToHex(h: number, s: number, l: number): string {
   else if (hp < 5) { r1 = x; b1 = c; }
   else { r1 = c; b1 = x; }
   const m = l - c / 2;
-  return rgbToHex({
+  return {
     r: (r1 + m) * 255,
     g: (g1 + m) * 255,
     b: (b1 + m) * 255
-  });
+  };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  return rgbToHex(hslToRgb(h, s, l));
 }

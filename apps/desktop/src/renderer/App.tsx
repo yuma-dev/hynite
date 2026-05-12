@@ -56,12 +56,13 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
 import { BigPictureScreen } from "./BigPictureScreen";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
+import { bindingLabel, bindingPressed, controllerBindingOrder, CONTROLLER_ACTION_HELP, CONTROLLER_ACTION_LABELS, firstPressedBinding, normalizeControllerSettings, pressedButtonIndexes, readGamepadState } from "./controllerInput";
 
 type SteamSwitchPrompt = {
   gameId: string;
@@ -1940,6 +1941,47 @@ function LibraryFiltersPanel({
   onRequestSmartGroup: (defaultName: string) => void;
 }) {
   const [tagSearch, setTagSearch] = useState("");
+  const filterBodyRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { action } = (e as CustomEvent<{ action: string }>).detail;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const chips = Array.from(panel.querySelectorAll<HTMLElement>(".filter-chip"));
+      if (!chips.length) return;
+      const current = document.activeElement as HTMLElement;
+      const idx = chips.indexOf(current);
+
+      if (action === "play") {
+        const target = idx >= 0 ? chips[idx] : chips[0];
+        target?.click();
+        return;
+      }
+      let next = idx;
+      if (action === "moveDown" || action === "moveRight") {
+        next = idx < chips.length - 1 ? idx + 1 : idx;
+        if (idx === -1) next = 0;
+      } else if (action === "moveUp" || action === "moveLeft") {
+        next = idx > 0 ? idx - 1 : 0;
+        if (idx === -1) next = 0;
+      }
+      chips[next]?.focus();
+      chips[next]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+    window.addEventListener("bp-filter-action", handler);
+    return () => window.removeEventListener("bp-filter-action", handler);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => {
+      panelRef.current?.querySelector<HTMLElement>(".filter-chip")?.focus();
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [open]);
+
   const visibleTags = useMemo(() => {
     const needle = tagSearch.trim().toLocaleLowerCase();
     const list = needle ? facets.tags.filter((tag) => tag.toLocaleLowerCase().includes(needle)) : facets.tags;
@@ -1968,6 +2010,7 @@ function LibraryFiltersPanel({
           <motion.aside
             key="filter-panel"
             className="filter-panel"
+            ref={panelRef}
             initial={{ x: 380 }}
             animate={{ x: 0 }}
             exit={{ x: 380 }}
@@ -1986,7 +2029,7 @@ function LibraryFiltersPanel({
                 </button>
               </div>
             </div>
-            <div className="filter-panel-body">
+            <div className="filter-panel-body" ref={filterBodyRef}>
               <FilterSection title="Status">
                 {INSTALL_STATE_OPTIONS.map((option) => (
                   <FilterChip
@@ -2821,7 +2864,7 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
   );
 }
 
-type SettingsTab = "steam" | "metadata" | "sources" | "audio" | "view" | "advanced";
+type SettingsTab = "steam" | "metadata" | "sources" | "audio" | "view" | "controller" | "advanced";
 
 function soundFileName(filePath?: string): string {
   if (!filePath) {
@@ -2967,6 +3010,8 @@ function SettingsScreen({
   const soundSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const [musicDraft, setMusicDraft] = useState<MusicSettings>(() => normalizeMusicSettings(settings?.music));
   const musicSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const [controllerCapture, setControllerCapture] = useState<ControllerActionId | undefined>();
+  const controllerCaptureRef = useRef<ControllerActionId | undefined>();
 
   useEffect(() => {
     void window.hynite.steam.listLocalAccounts().then(setLocalAccounts).catch(() => undefined);
@@ -2980,6 +3025,27 @@ function SettingsScreen({
   useEffect(() => {
     setMusicDraft(normalizeMusicSettings(settings?.music));
   }, [settings?.music]);
+
+  useEffect(() => {
+    controllerCaptureRef.current = controllerCapture;
+  }, [controllerCapture]);
+
+  useEffect(() => {
+    if (!controllerCapture) return;
+    let raf = 0;
+    const poll = () => {
+      const action = controllerCaptureRef.current;
+      const nextBinding = firstPressedBinding(pressedButtonIndexes(navigator.getGamepads ? [...navigator.getGamepads()] : []));
+      if (action && nextBinding) {
+        void updateControllerBinding(action, nextBinding);
+        setControllerCapture(undefined);
+        return;
+      }
+      raf = requestAnimationFrame(poll);
+    };
+    raf = requestAnimationFrame(poll);
+    return () => cancelAnimationFrame(raf);
+  }, [controllerCapture]);
 
   useEffect(() => {
     return () => {
@@ -3081,6 +3147,22 @@ function SettingsScreen({
   async function setCardsPerRow(value: number) {
     const next = await window.hynite.settings.update({ cardsPerRow: normalizeCardsPerRow(value) });
     setSettings(next);
+  }
+
+  async function updateController(controller: ControllerSettings) {
+    const next = await window.hynite.settings.update({ controller });
+    setSettings(next);
+  }
+
+  async function updateControllerBinding(action: ControllerActionId, binding: ControllerButtonBinding) {
+    const controller = normalizeControllerSettings(settings);
+    await updateController({
+      ...controller,
+      bindings: {
+        ...controller.bindings,
+        [action]: binding
+      }
+    });
   }
 
   async function updateSound(sound: SoundSettings) {
@@ -3196,6 +3278,7 @@ function SettingsScreen({
 
   const soundSettings = soundDraft;
   const musicSettings = musicDraft;
+  const controllerSettings = normalizeControllerSettings(settings);
   const musicTracks = musicSettings.tracks ?? [];
   const bundledMusicCount = musicTracks.filter((track) => track.source === "bundled").length;
   const customMusicCount = musicTracks.length - bundledMusicCount;
@@ -3223,6 +3306,7 @@ function SettingsScreen({
             ["sources", "Sources"],
             ["audio", "Audio"],
             ["view", "View"],
+            ["controller", "Controller"],
             ["advanced", "Advanced"]
           ].map(([id, label]) => (
             <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id as SettingsTab)}>
@@ -3788,6 +3872,54 @@ function SettingsScreen({
             </section>
           ) : null}
 
+          {tab === "controller" ? (
+            <section className="settings-section controller-settings">
+              <div className="settings-section-head">
+                <div>
+                  <h2>Controller</h2>
+                  <p className="settings-hint">Button bindings are used by Big Picture, including extra controller buttons exposed by the system.</p>
+                </div>
+                <label className="settings-toggle-row compact-toggle">
+                  <input
+                    type="checkbox"
+                    checked={controllerSettings.enabled}
+                    onChange={(event) => void updateController({ ...controllerSettings, enabled: event.currentTarget.checked })}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>On</strong>
+                  </span>
+                </label>
+              </div>
+              <label className="settings-toggle-row">
+                <input
+                  type="checkbox"
+                  checked={controllerSettings.backgroundInput}
+                  onChange={(event) => void updateController({ ...controllerSettings, backgroundInput: event.currentTarget.checked })}
+                />
+                <span className="settings-toggle-control" aria-hidden="true" />
+                <span>
+                  <strong>Use controller while Hynite is not focused</strong>
+                  <em>Allows Big Picture navigation and the focus shortcut while another window is active.</em>
+                </span>
+              </label>
+              <div className="controller-binding-list">
+                {controllerBindingOrder.map((action) => (
+                  <div key={action} className="controller-binding-row">
+                    <div className="controller-binding-copy">
+                      <strong>{CONTROLLER_ACTION_LABELS[action]}</strong>
+                      <span>{CONTROLLER_ACTION_HELP[action]}</span>
+                    </div>
+                    <code>{bindingLabel(controllerSettings.bindings[action])}</code>
+                    <button className="secondary-action" type="button" onClick={() => setControllerCapture(action)}>
+                      {controllerCapture === action ? "Press button..." : "Rebind"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {tab === "advanced" ? (
             <>
               <section className="settings-section">
@@ -4289,6 +4421,17 @@ function DetailOverlay({
   const [downloadError, setDownloadError] = useState<string | undefined>();
   const [expandedSourceIds, setExpandedSourceIds] = useState<Set<string>>(() => new Set());
   const [visibleBySource, setVisibleBySource] = useState<Record<string, number>>({});
+  const mainScrollRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { direction } = (e as CustomEvent<{ direction: string }>).detail;
+      mainScrollRef.current?.scrollBy({ top: direction === "down" ? 240 : -240, behavior: "smooth" });
+    };
+    window.addEventListener("bp-scroll", handler);
+    return () => window.removeEventListener("bp-scroll", handler);
+  }, []);
+
   const launchOptions = useMemo(
     () => resolveLaunchableSteamAccounts(game, settings?.steamAccounts ?? []),
     [game, settings?.steamAccounts]
@@ -4460,7 +4603,7 @@ function DetailOverlay({
           </>
         ) : null}
         <div className="detail-modal-body">
-          <main className="detail-main">
+          <main className="detail-main" ref={mainScrollRef}>
             {activeMedia ? (
               <section className="detail-block media-carousel-block">
                 <div className="detail-block-head">
@@ -5213,6 +5356,7 @@ function GameContextMenu({
 
 export function App() {
   const [route, setRoute] = useState<Route>("home");
+  const routeRef = useRef<Route>("home");
   const [home, setHome] = useState<HomeModel | undefined>();
   const [games, setGames] = useState<Game[]>([]);
   const [recentGames, setRecentGames] = useState<Game[]>([]);
@@ -5271,6 +5415,8 @@ export function App() {
   const [bigPicture, setBigPicture] = useState(false);
   const [bpFiltersOpen, setBpFiltersOpen] = useState(false);
   const [bpFilters, setBpFilters] = useState<LibraryFilters>({});
+  const bigPictureRef = useRef(false);
+  const focusComboPressedRef = useRef(false);
   const contentRef = useRef<HTMLElement | null>(null);
   const handledSyncSuccessAtRef = useRef<string | undefined>();
   const initialLoadStartedRef = useRef(false);
@@ -5292,6 +5438,10 @@ export function App() {
       return;
     }
     soundEngine.play("navigation");
+  }, [route]);
+
+  useEffect(() => {
+    routeRef.current = route;
   }, [route]);
 
   useEffect(() => {
@@ -5319,7 +5469,61 @@ export function App() {
   useEffect(() => {
     musicEngine.setForcedOverrides({ forceEnabled: bigPicture, forceContinuous: bigPicture });
     void window.hynite.window.setFullScreen(bigPicture).catch(() => undefined);
+    bigPictureRef.current = bigPicture;
+    document.body.classList.toggle("bp-active", bigPicture);
   }, [bigPicture]);
+
+  useEffect(() => {
+    let raf = 0;
+    const poll = () => {
+      const controller = normalizeControllerSettings(settingsRef.current);
+      if (!controller.backgroundInput && !document.hasFocus()) {
+        focusComboPressedRef.current = false;
+        raf = requestAnimationFrame(poll);
+        return;
+      }
+      const { pressed, connected } = readGamepadState();
+      if (!connected) {
+        focusComboPressedRef.current = false;
+        raf = requestAnimationFrame(poll);
+        return;
+      }
+      const comboPressed = controller.enabled && bindingPressed(controller.bindings.focusBigPicture, pressed);
+      if (comboPressed && !focusComboPressedRef.current && !bigPictureRef.current && !(document.hasFocus() && routeRef.current === "settings")) {
+        setBigPicture(true);
+        void window.hynite.window.focusBigPicture().catch(() => undefined);
+      }
+      focusComboPressedRef.current = comboPressed;
+      raf = requestAnimationFrame(poll);
+    };
+    raf = requestAnimationFrame(poll);
+    // setInterval fallback: on Windows, XInput stops delivering gamepad data to
+    // unfocused windows even when backgroundThrottling=false. A separate interval
+    // loop runs only when the window is NOT focused to catch the enter-BP combo.
+    const intervalPoll = () => {
+      if (document.hasFocus()) return; // rAF handles focused case
+      const controller = normalizeControllerSettings(settingsRef.current);
+      if (!controller.enabled || !controller.backgroundInput) return;
+      const { pressed, connected } = readGamepadState();
+      if (!connected) { focusComboPressedRef.current = false; return; }
+      const comboPressed = bindingPressed(controller.bindings.focusBigPicture, pressed);
+      if (comboPressed && !focusComboPressedRef.current && !bigPictureRef.current) {
+        setBigPicture(true);
+        void window.hynite.window.focusBigPicture().catch(() => undefined);
+      }
+      focusComboPressedRef.current = comboPressed;
+    };
+    const intervalId = window.setInterval(intervalPoll, 50);
+    return () => { cancelAnimationFrame(raf); clearInterval(intervalId); };
+  }, []);
+
+  useEffect(() => {
+    return window.hynite.controller.onBgBpCombo(() => {
+      if (!bigPictureRef.current) {
+        setBigPicture(true);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -6343,7 +6547,32 @@ export function App() {
             onOpenFilters={() => setBpFiltersOpen(true)}
             onLaunch={(game) => void launchGame(game)}
             onSelect={(game) => void selectGame(game)}
+            onBack={() => {
+              if (bpFiltersOpen) {
+                setBpFiltersOpen(false);
+                return true;
+              }
+              if (contextMenu) {
+                setContextMenu(undefined);
+                return true;
+              }
+              if (nameDialog) {
+                setNameDialog(undefined);
+                return true;
+              }
+              if (selectedRef.current) {
+                setSelected(undefined);
+                return true;
+              }
+              return false;
+            }}
             onExit={() => setBigPicture(false)}
+            defaultTabId={settings?.bigPictureDefaultTabId}
+            onSetDefaultTab={(tabId) => {
+              void window.hynite.settings.update({ bigPictureDefaultTabId: tabId ?? undefined }).then(setSettings).catch(console.error);
+            }}
+            detailOpen={Boolean(selected)}
+            filterOpen={bpFiltersOpen}
           />
           <LibraryFiltersPanel
             open={bpFiltersOpen}

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
+import { controllerActionIds, defaultLibraryView, soundEffectIds, type AppSettings, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
 import { readAudioMetadata } from "./audioMetadata";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
@@ -41,6 +41,29 @@ const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
   gapMaxMs: 120_000
 };
 
+const DEFAULT_CONTROLLER_BINDINGS: Record<ControllerActionId, ControllerButtonBinding> = {
+  focusBigPicture: { buttons: [8, 9] },
+  exitBigPicture: { buttons: [8, 9] },
+  moveUp: { buttons: [12] },
+  moveDown: { buttons: [13] },
+  moveLeft: { buttons: [14] },
+  moveRight: { buttons: [15] },
+  previousGroup: { buttons: [4] },
+  nextGroup: { buttons: [5] },
+  play: { buttons: [0] },
+  details: { buttons: [2] },
+  filters: { buttons: [3] },
+  back: { buttons: [1] },
+  toggleGrid: { buttons: [10] },
+  favoriteTab: { buttons: [9] }
+};
+
+const DEFAULT_CONTROLLER_SETTINGS: ControllerSettings = {
+  enabled: true,
+  backgroundInput: true,
+  bindings: DEFAULT_CONTROLLER_BINDINGS
+};
+
 const AUDIO_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"]);
 const BUNDLED_SOUND_FILES: Record<SoundEffectId, string> = {
   startup: "startup.mp3",
@@ -69,6 +92,7 @@ const defaultSettings: AppSettings = {
   localExcludePatterns: DEFAULT_LOCAL_EXCLUDE_PATTERNS,
   sound: DEFAULT_SOUND_SETTINGS,
   music: DEFAULT_MUSIC_SETTINGS,
+  controller: DEFAULT_CONTROLLER_SETTINGS,
   windowState: undefined
 };
 
@@ -318,6 +342,35 @@ function sanitizeWindowState(value: unknown): WindowState | undefined {
   };
 }
 
+function sanitizeControllerButtonBinding(value: unknown): ControllerButtonBinding | undefined {
+  const candidate = value && typeof value === "object" ? value as Partial<ControllerButtonBinding> : {};
+  if (!Array.isArray(candidate.buttons)) {
+    return undefined;
+  }
+  const buttons = [...new Set(candidate.buttons
+    .filter((button): button is number => Number.isInteger(button) && button >= 0 && button <= 255)
+    .map((button) => Math.round(button)))]
+    .slice(0, 4);
+  return buttons.length ? { buttons } : undefined;
+}
+
+function sanitizeControllerSettings(value: unknown): ControllerSettings {
+  const candidate = value && typeof value === "object" ? value as Partial<ControllerSettings> : {};
+  const rawBindings = candidate.bindings && typeof candidate.bindings === "object" ? candidate.bindings : {};
+  const bindings: Partial<Record<ControllerActionId, ControllerButtonBinding>> = { ...DEFAULT_CONTROLLER_BINDINGS };
+  for (const action of controllerActionIds) {
+    const binding = sanitizeControllerButtonBinding((rawBindings as Partial<Record<ControllerActionId, unknown>>)[action]);
+    if (binding) {
+      bindings[action] = binding;
+    }
+  }
+  return {
+    enabled: candidate.enabled !== false,
+    backgroundInput: candidate.backgroundInput !== false,
+    bindings
+  };
+}
+
 function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSettings {
   const rawAccounts: LegacyAccount[] = Array.isArray(raw.steamAccounts)
     ? raw.steamAccounts
@@ -345,6 +398,7 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     gameGroups: sanitizeGameGroups(raw.gameGroups),
     sound: sanitizeSoundSettings(raw.sound, bundledAudio),
     music: sanitizeMusicSettings(raw.music, bundledAudio),
+    controller: sanitizeControllerSettings(raw.controller),
     windowState: sanitizeWindowState(raw.windowState)
   };
 }
@@ -396,7 +450,8 @@ export class SettingsService {
         ...defaultSettings,
         steamAccounts: [],
         sound: sanitizeSoundSettings(defaultSettings.sound, this.bundledAudio()),
-        music: sanitizeMusicSettings(defaultSettings.music, this.bundledAudio())
+        music: sanitizeMusicSettings(defaultSettings.music, this.bundledAudio()),
+        controller: sanitizeControllerSettings(defaultSettings.controller)
       };
     }
     return migrate(raw, this.bundledAudio());
@@ -415,6 +470,7 @@ export class SettingsService {
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
     next.sound = sanitizeSoundSettings(next.sound, this.bundledAudio());
     next.music = sanitizeMusicSettings(next.music, this.bundledAudio());
+    next.controller = sanitizeControllerSettings(next.controller);
     next.windowState = sanitizeWindowState(next.windowState);
     await this.writeSettings(next);
     return next;

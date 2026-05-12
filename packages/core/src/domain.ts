@@ -555,6 +555,35 @@ export type WindowState = {
   isMaximized?: boolean;
 };
 
+export const controllerActionIds = [
+  "focusBigPicture",
+  "exitBigPicture",
+  "moveUp",
+  "moveDown",
+  "moveLeft",
+  "moveRight",
+  "previousGroup",
+  "nextGroup",
+  "play",
+  "details",
+  "filters",
+  "back",
+  "toggleGrid",
+  "favoriteTab"
+] as const;
+
+export type ControllerActionId = typeof controllerActionIds[number];
+
+export type ControllerButtonBinding = {
+  buttons: number[];
+};
+
+export type ControllerSettings = {
+  enabled: boolean;
+  backgroundInput: boolean;
+  bindings: Partial<Record<ControllerActionId, ControllerButtonBinding>>;
+};
+
 export type AppSettings = {
   steamAccounts: SteamAccountSettings[];
   /** Single Steam Web API key shared by every paired account (one key fetches any public profile). */
@@ -585,6 +614,10 @@ export type AppSettings = {
   music?: MusicSettings;
   /** Last normal window placement restored by the Electron main process on startup. */
   windowState?: WindowState;
+  /** Big Picture controller navigation and background focus shortcut bindings. */
+  controller?: ControllerSettings;
+  /** Tab ID to open by default when entering Big Picture mode. */
+  bigPictureDefaultTabId?: string;
 };
 
 export type ExecutableInfo = {

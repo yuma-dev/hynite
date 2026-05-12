@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -36,6 +37,7 @@ while (await Console.In.ReadLineAsync() is { } line)
             "steamGetAppInfo" => await SteamAppInfoClient.GetAppInfo(request.Params),
             "getFileVersionInfo" => GetFileVersionInfo(request.Params),
             "watchProcess" => new { accepted = true },
+            "pollGamepad" => PollGamepad(),
             _ => throw new InvalidOperationException($"Unknown method {request.Method}.")
         };
 
@@ -161,6 +163,8 @@ static object GetFileVersionInfo(JsonElement parameters)
     return new { results };
 }
 
+static object PollGamepad() => XInputReader.Poll();
+
 static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
 static object DecryptSecret(JsonElement parameters)
@@ -171,6 +175,75 @@ static object DecryptSecret(JsonElement parameters)
 }
 
 public sealed record RpcRequest(string? Id, string Method, JsonElement Params);
+
+// XInput P/Invoke — works regardless of window focus, unlike the Chromium Gamepad API.
+internal static class XInputReader
+{
+    [DllImport("xinput1_4.dll", EntryPoint = "XInputGetState")]
+    private static extern uint XInputGetState(uint dwUserIndex, out XInputState pState);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XInputState
+    {
+        public uint dwPacketNumber;
+        public XInputGamepad Gamepad;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct XInputGamepad
+    {
+        [FieldOffset(0)] public ushort wButtons;
+        [FieldOffset(2)] public byte bLeftTrigger;
+        [FieldOffset(3)] public byte bRightTrigger;
+        [FieldOffset(4)] public short sThumbLX;
+        [FieldOffset(6)] public short sThumbLY;
+        [FieldOffset(8)] public short sThumbRX;
+        [FieldOffset(10)] public short sThumbRY;
+    }
+
+    // XInput button bitmasks → Chromium Gamepad API button indices
+    private static readonly (ushort mask, int index)[] ButtonMap =
+    [
+        (0x1000, 0),  // A
+        (0x2000, 1),  // B
+        (0x4000, 2),  // X
+        (0x8000, 3),  // Y
+        (0x0100, 4),  // LB
+        (0x0200, 5),  // RB
+        (0x0020, 8),  // Back / View (−)
+        (0x0010, 9),  // Start / Menu (+)
+        (0x0040, 10), // Left thumb
+        (0x0080, 11), // Right thumb
+        (0x0001, 12), // D-Up
+        (0x0002, 13), // D-Down
+        (0x0004, 14), // D-Left
+        (0x0008, 15), // D-Right
+    ];
+
+    public static object Poll()
+    {
+        const uint ERROR_SUCCESS = 0;
+        const byte TRIGGER_THRESHOLD = 128;
+
+        var allPressed = new HashSet<int>();
+        var anyConnected = false;
+
+        for (uint i = 0; i < 4; i++)
+        {
+            if (XInputGetState(i, out var state) != ERROR_SUCCESS) continue;
+            anyConnected = true;
+            var buttons = state.Gamepad.wButtons;
+            foreach (var (mask, index) in ButtonMap)
+            {
+                if ((buttons & mask) != 0) allPressed.Add(index);
+            }
+            if (state.Gamepad.bLeftTrigger >= TRIGGER_THRESHOLD) allPressed.Add(6);
+            if (state.Gamepad.bRightTrigger >= TRIGGER_THRESHOLD) allPressed.Add(7);
+        }
+
+        return new { connected = anyConnected, pressed = allPressed.OrderBy(x => x).ToArray() };
+    }
+}
 
 public sealed record RpcResponse(string? Id, object? Result, RpcError? Error);
 

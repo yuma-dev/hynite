@@ -64,7 +64,7 @@ const STARTUP_LOCAL_SCAN_DELAY_MS = 3_000;
 const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
 const STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL = 5;
 protocol.registerSchemesAsPrivileged([
-  { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "hynite-music", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
 ]);
@@ -1320,6 +1320,50 @@ function scheduleWindowStateSave(window: Electron.BrowserWindow | undefined = ma
   windowStateSaveTimer.unref?.();
 }
 
+function startBackgroundControllerPolling(): void {
+  if (process.platform !== "win32") return;
+
+  let focusComboPressedPrev = false;
+  let polling = false;
+  const COMBO_BUTTONS = [8, 9];
+
+  const poll = async (): Promise<void> => {
+    if (polling) return;
+    polling = true;
+    try {
+      const win = mainWindow;
+      if (!win || win.isDestroyed() || win.isFocused()) {
+        focusComboPressedPrev = false;
+        return;
+      }
+      const settings = await settingsService.get();
+      if (settings.controller?.enabled === false || settings.controller?.backgroundInput === false) return;
+
+      const { connected, pressed } = await nativeBridge.pollGamepad();
+      if (!connected) { focusComboPressedPrev = false; return; }
+
+      const pressedSet = new Set(pressed);
+      const comboActive = COMBO_BUTTONS.every((b) => pressedSet.has(b));
+      if (comboActive && !focusComboPressedPrev) {
+        if (!win.isDestroyed()) {
+          if (win.isMinimized()) win.restore();
+          if (!win.isVisible()) win.show();
+          win.focus();
+          win.webContents.send("controller:bg-bp-combo");
+        }
+      }
+      focusComboPressedPrev = comboActive;
+    } catch {
+      // ignore
+    } finally {
+      polling = false;
+    }
+  };
+
+  const intervalId = setInterval(() => { void poll(); }, 100);
+  (intervalId as NodeJS.Timeout).unref?.();
+}
+
 function createWindow(windowState: WindowState | undefined): void {
   const restoredBounds = resolveWindowBounds(windowState);
   profile("window:create:start", "Creating BrowserWindow");
@@ -1336,7 +1380,8 @@ function createWindow(windowState: WindowState | undefined): void {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false
     }
   });
   if (windowState?.isMaximized) {
@@ -2688,6 +2733,12 @@ function registerIpc(): void {
     mainWindow.setFullScreen(fullscreen);
   });
   handleIpc("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
+  handleIpc("window:focusBigPicture", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  });
   handleIpc("music:system-audio-active", () => getSystemAudioActive());
   handleIpc("music:system-audio-debug", async () => {
     if (process.platform !== "win32") return "not win32";
@@ -2757,6 +2808,7 @@ app.whenReady().then(async () => {
   startSystemAudioMonitor();
   const windowState = await settingsService.getWindowState();
   createWindow(windowState);
+  startBackgroundControllerPolling();
   createSplashWindow();
   startupReadyTimeout = setTimeout(() => {
     profile("startup:ready-timeout", "Startup ready timeout — showing main window");

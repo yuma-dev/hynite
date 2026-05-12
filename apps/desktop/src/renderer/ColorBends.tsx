@@ -19,6 +19,7 @@ type ColorBendsProps = {
   mouseInfluence?: number;
   parallax?: number;
   noise?: number;
+  pointerOverrideX?: number;
   iterations?: number;
   intensity?: number;
   bandWidth?: number;
@@ -145,7 +146,8 @@ export default function ColorBends({
   noise = 0.15,
   iterations = 1,
   intensity = 1.5,
-  bandWidth = 6
+  bandWidth = 6,
+  pointerOverrideX
 }: ColorBendsProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -316,6 +318,11 @@ export default function ColorBends({
     colors,
     transparent
   ]);
+
+  useEffect(() => {
+    if (pointerOverrideX === undefined) return;
+    pointerTargetRef.current.setX(pointerOverrideX);
+  }, [pointerOverrideX]);
 
   useEffect(() => {
     const material = materialRef.current;

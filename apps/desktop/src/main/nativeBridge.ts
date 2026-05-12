@@ -120,6 +120,14 @@ export class NativeBridge {
     }
   }
 
+  async pollGamepad(): Promise<{ connected: boolean; pressed: number[] }> {
+    try {
+      return await this.request<{ connected: boolean; pressed: number[] }>("pollGamepad", {});
+    } catch {
+      return { connected: false, pressed: [] };
+    }
+  }
+
   async getFileVersionInfo(paths: string[]): Promise<NativeFileVersionInfo[]> {
     if (paths.length === 0) {
       return [];
@@ -231,9 +239,9 @@ export class NativeBridge {
   }
 
   private findBridgeLaunchTarget(): BridgeLaunchTarget {
+    // Only look for a pre-built exe when packaged; in dev the SDK is used via dotnet run.
     const executableCandidates = [
-      join(process.resourcesPath ?? "", "native/Hynite.NativeBridge/Hynite.NativeBridge.exe"),
-      resolve(process.cwd(), "dist/native/Hynite.NativeBridge/Hynite.NativeBridge.exe")
+      join(process.resourcesPath ?? "", "native/Hynite.NativeBridge/Hynite.NativeBridge.exe")
     ];
 
     const executablePath = executableCandidates.find((candidate) => existsSync(candidate));

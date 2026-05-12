@@ -218,6 +218,13 @@ const api = {
     profileMetric: (entry: Record<string, unknown>): void => ipcRenderer.send("debug:profile-record", entry),
     profileRecord: (entry: Record<string, unknown>): void => ipcRenderer.send("debug:profile-record", entry)
   },
+  controller: {
+    onBgBpCombo: (callback: () => void): (() => void) => {
+      const listener = () => callback();
+      ipcRenderer.on("controller:bg-bp-combo", listener);
+      return () => ipcRenderer.removeListener("controller:bg-bp-combo", listener);
+    }
+  },
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke("window:minimize"),
     maximize: (): Promise<void> => ipcRenderer.invoke("window:maximize"),
@@ -230,6 +237,7 @@ const api = {
     },
     setFullScreen: (fullscreen: boolean): Promise<void> => ipcRenderer.invoke("window:setFullScreen", fullscreen),
     isFullScreen: (): Promise<boolean> => ipcRenderer.invoke("window:isFullScreen"),
+    focusBigPicture: (): Promise<void> => ipcRenderer.invoke("window:focusBigPicture"),
     onFullScreenChanged: (callback: (isFullScreen: boolean) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, value: boolean) => callback(value);
       ipcRenderer.on("window:fullScreenChanged", listener);

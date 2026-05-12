@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Play, X, Download, Info, SlidersHorizontal } from "lucide-react";
-import type { AppSettings, Game, GameGroup } from "@hynite/core";
-import { expandPaletteToSlots, extractPalette, getCachedPalette, paletteFromSeed, type CoverPalette } from "./colorExtract";
+import { Play, X, Download, Info, SlidersHorizontal, Plus, Star } from "lucide-react";
+import type { AppSettings, ControllerActionId, ControllerSettings, Game, GameGroup } from "@hynite/core";
+import { expandPaletteToSlots, extractPalette, fallbackPalette, getCachedPalette, type CoverPalette, type PaletteDebugInfo } from "./colorExtract";
 import { soundEngine } from "./sound";
 import ColorBends from "./ColorBends";
+import { bindingLabel, bindingPressed, normalizeControllerSettings, readGamepadState } from "./controllerInput";
 
 type BigPictureTab = {
   id: string;
@@ -21,7 +22,12 @@ type Props = {
   onOpenFilters: () => void;
   onLaunch: (game: Game) => void;
   onSelect: (game: Game) => void;
+  onBack: () => boolean;
   onExit: () => void;
+  defaultTabId?: string;
+  onSetDefaultTab?: (tabId: string | undefined) => void;
+  detailOpen?: boolean;
+  filterOpen?: boolean;
 };
 
 type ViewMode = "shelf" | "grid";
@@ -31,13 +37,31 @@ const PALETTE_TWEEN_MS = 700;
 // Total color slots passed to the ColorBends shader. Dominant colors fill
 // more slots, giving them proportionally more visual weight.
 const COLOR_SLOTS = 8;
+const GAMEPAD_REPEAT_INITIAL_MS = 280;
+const GAMEPAD_REPEAT_MS = 110;
+const STICK_THRESHOLD = 0.55;
+const DIGITAL_CONTROLLER_ACTIONS: ControllerActionId[] = [
+  "moveUp",
+  "moveDown",
+  "moveLeft",
+  "moveRight",
+  "previousGroup",
+  "nextGroup",
+  "play",
+  "details",
+  "filters",
+  "back",
+  "toggleGrid",
+  "exitBigPicture",
+  "favoriteTab"
+];
 
 function gameCoverUrl(game: Game): string | undefined {
-  return game.libraryCapsuleUrl ?? game.coverUrl ?? game.headerUrl;
+  return game.libraryCapsuleUrl ?? (isVerifiedVerticalCoverUrl(game.coverUrl) ? game.coverUrl : undefined);
 }
 
-function gameHeroUrl(game: Game): string | undefined {
-  return game.backgroundUrl ?? game.headerUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.fullUrl;
+function isVerifiedVerticalCoverUrl(value: string | undefined): boolean {
+  return Boolean(value && (/(?:\/|%2f)library_(?:600x900|capsule)(?:_2x)?\.(?:jpg|png|webp)(?:\?|$)/i.test(value) || /steamgriddb\.com\/grid\//i.test(value)));
 }
 
 function canLaunch(game: Game): boolean {
@@ -48,9 +72,24 @@ function buildTabs(
   games: Game[],
   recentGames: Game[],
   groups: GameGroup[],
-  groupGames: Map<string, Game[]>
+  groupGames: Map<string, Game[]>,
+  defaultTabId?: string
 ): BigPictureTab[] {
+  const groupTabs: BigPictureTab[] = [];
+  for (const group of groups) {
+    const list = groupGames.get(group.id);
+    if (!list || list.length === 0) continue;
+    groupTabs.push({ id: `group:${group.id}`, label: group.name, games: list });
+  }
+
   const tabs: BigPictureTab[] = [];
+
+  // Favorited group tab goes first if set
+  if (defaultTabId) {
+    const favIdx = groupTabs.findIndex((t) => t.id === defaultTabId);
+    if (favIdx >= 0) tabs.push(...groupTabs.splice(favIdx, 1));
+  }
+
   if (recentGames.length) {
     tabs.push({ id: "recent", label: "Recent", games: recentGames.slice(0, 30) });
   }
@@ -59,11 +98,8 @@ function buildTabs(
     tabs.push({ id: "installed", label: "Installed", games: installed });
   }
   tabs.push({ id: "all", label: "All Games", games });
-  for (const group of groups) {
-    const list = groupGames.get(group.id);
-    if (!list || list.length === 0) continue;
-    tabs.push({ id: `group:${group.id}`, label: group.name, games: list });
-  }
+  tabs.push(...groupTabs);
+
   return tabs.filter((t) => t.games.length > 0 || t.id === "all");
 }
 
@@ -93,6 +129,38 @@ function paletteToSlots(p: CoverPalette): Rgb[] {
   return expandPaletteToSlots(p, COLOR_SLOTS).map(hexToRgb);
 }
 
+function backgroundBaseFromColor(hex: string | undefined): string {
+  if (!hex) return "#08080b";
+  const { r, g, b } = hexToRgb(hex);
+  const mix = 0.2;
+  return rgbToHex({
+    r: r * mix + 6,
+    g: g * mix + 6,
+    b: b * mix + 9
+  });
+}
+
+function paletteDebugEnabled(): boolean {
+  try {
+    return localStorage.getItem("hynite:paletteDebug") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function logPaletteDebug(game: Game, info: PaletteDebugInfo): void {
+  if (!paletteDebugEnabled()) return;
+  const payload = {
+    game: { id: game.id, title: game.title },
+    ...info
+  };
+  if (info.source === "failed" || info.source === "missing-url") {
+    console.warn("[hynite:palette]", payload);
+  } else {
+    console.debug("[hynite:palette]", payload);
+  }
+}
+
 // ── component ───────────────────────────────────────────────────────────────
 
 export function BigPictureScreen({
@@ -104,12 +172,17 @@ export function BigPictureScreen({
   onOpenFilters,
   onLaunch,
   onSelect,
-  onExit
+  onBack,
+  onExit,
+  defaultTabId,
+  onSetDefaultTab,
+  detailOpen,
+  filterOpen
 }: Props) {
   const groups = useMemo<GameGroup[]>(() => settings?.gameGroups ?? [], [settings]);
   const tabs = useMemo(
-    () => buildTabs(games, recentGames, groups, groupGames),
-    [games, recentGames, groups, groupGames]
+    () => buildTabs(games, recentGames, groups, groupGames, defaultTabId),
+    [games, recentGames, groups, groupGames, defaultTabId]
   );
 
   const [tabIndex, setTabIndex] = useState(0);
@@ -120,23 +193,50 @@ export function BigPictureScreen({
   const rowRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
   const navSoundReadyRef = useRef(false);
+  const gamepadRepeatRef = useRef<Record<string, { pressed: boolean; lastAt: number; nextDelay: number }>>({});
+  const paletteTweenVersionRef = useRef(0);
+  const [paletteTweenVersion, setPaletteTweenVersion] = useState(0);
+  // Block exitBigPicture for 500ms after mount so the enter combo doesn't immediately exit.
+  const exitBlockedRef = useRef(true);
+  const defaultTabAppliedRef = useRef(false);
+  const currentTabIdRef = useRef<string | undefined>(undefined);
+  const defaultTabIdRef = useRef<string | undefined>(defaultTabId);
 
   const currentTab = tabs[Math.min(tabIndex, tabs.length - 1)];
   const focusedGame: Game | undefined = currentTab?.games[Math.min(focusedIndex, (currentTab?.games.length ?? 1) - 1)];
+  currentTabIdRef.current = currentTab?.id;
+  defaultTabIdRef.current = defaultTabId;
+  const controller = useMemo<ControllerSettings>(() => normalizeControllerSettings(settings), [settings]);
+  const binding = useCallback((action: ControllerActionId) => controller.bindings[action], [controller]);
 
   useEffect(() => {
     setFocusedIndex(0);
   }, [tabIndex, viewMode]);
 
-  // ── Palette: hash-based fallback is instant. Real extraction is debounced
-  // and tweened toward over PALETTE_TWEEN_MS via rAF. We tween across a fixed
-  // COLOR_SLOTS so dominant colors keep their proportional share.
-  const targetPaletteRef = useRef<CoverPalette>(paletteFromSeed("hynite"));
+  useEffect(() => {
+    const timer = setTimeout(() => { exitBlockedRef.current = false; }, 500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (defaultTabAppliedRef.current || !defaultTabId) return;
+    const idx = tabs.findIndex((t) => t.id === defaultTabId);
+    if (idx >= 0) {
+      defaultTabAppliedRef.current = true;
+      setTabIndex(idx);
+    }
+  }, [defaultTabId, tabs]);
+
+  // ── Palette: cover extraction is debounced and tweened toward over
+  // PALETTE_TWEEN_MS via rAF. We tween across fixed COLOR_SLOTS so dominant
+  // colors keep their proportional share.
+  const targetPaletteRef = useRef<CoverPalette>(fallbackPalette());
   const tweenFromRef = useRef<Rgb[]>(paletteToSlots(targetPaletteRef.current));
   const tweenToRef = useRef<Rgb[]>(paletteToSlots(targetPaletteRef.current));
   const tweenStartRef = useRef<number>(performance.now());
   const initialSlots = paletteToSlots(targetPaletteRef.current).map(rgbToHex);
   const [animColors, setAnimColors] = useState<string[]>(initialSlots);
+  const backgroundBase = backgroundBaseFromColor(animColors[0]);
 
   const palettesEqual = useCallback((a: CoverPalette, b: CoverPalette): boolean => {
     if (a.colors.length !== b.colors.length) return false;
@@ -158,12 +258,16 @@ export function BigPictureScreen({
     targetPaletteRef.current = next;
     tweenToRef.current = paletteToSlots(next);
     tweenStartRef.current = performance.now();
+    paletteTweenVersionRef.current += 1;
+    setPaletteTweenVersion(paletteTweenVersionRef.current);
   }, [palettesEqual]);
 
   useEffect(() => {
     let raf = 0;
+    let stopped = false;
     let lastKey: string | undefined;
     const loop = () => {
+      if (stopped) return;
       const t = Math.min(1, (performance.now() - tweenStartRef.current) / PALETTE_TWEEN_MS);
       const e = t * t * (3 - 2 * t);
       const hex: string[] = tweenFromRef.current.map((from, i) =>
@@ -174,35 +278,45 @@ export function BigPictureScreen({
         lastKey = key;
         setAnimColors(hex);
       }
-      raf = requestAnimationFrame(loop);
+      if (t < 1) {
+        raf = requestAnimationFrame(loop);
+      }
     };
     raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [paletteTweenVersion]);
 
   useEffect(() => {
     if (!focusedGame) return;
-    // 1. Instant hash-based palette so something always changes.
-    const seed = `${focusedGame.id}::${focusedGame.title}`;
-    const seeded = paletteFromSeed(seed);
-
-    // 2. If the cover already has an extracted palette cached, use it now.
-    const url = gameCoverUrl(focusedGame) ?? gameHeroUrl(focusedGame);
+    // Big Picture color is cover-art only. No hero/header fallback, because
+    // wide store art often has unrelated marketing colors.
+    const url = gameCoverUrl(focusedGame);
     const cached = url ? getCachedPalette(url) : undefined;
+    logPaletteDebug(focusedGame, url
+      ? { url, source: cached ? "cache" : undefined, palette: cached }
+      : { source: "missing-url", error: "no verified cover url" });
     if (cached) {
       setTargetPalette(cached);
     } else {
-      setTargetPalette(seeded);
+      setTargetPalette(fallbackPalette());
     }
 
-    // 3. Debounce real extraction so quick flicks don't churn.
+    // Debounce extraction so quick flicks don't churn.
     if (!url) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      void extractPalette(url).then((next) => {
+      void extractPalette(url, (info) => logPaletteDebug(focusedGame, info)).then((next) => {
         if (cancelled) return;
-        if (next) setTargetPalette(next);
-        // If extraction returns undefined the seeded palette stays — already set above.
+        logPaletteDebug(focusedGame, {
+          url,
+          source: next ? "extracted" : "failed",
+          palette: next,
+          error: next ? undefined : "using neutral fallback"
+        });
+        setTargetPalette(next ?? fallbackPalette());
       });
     }, PALETTE_DEBOUNCE_MS);
     return () => {
@@ -303,7 +417,145 @@ export function BigPictureScreen({
     return () => window.removeEventListener("keydown", onKey);
   }, [currentTab, focusedGame, tabs.length, viewMode, gridColumns, onExit, onLaunch, onSelect]);
 
-  // ── Scroll focused card flush to the left edge of the carousel
+  const moveFocus = useCallback((direction: "up" | "down" | "left" | "right") => {
+    const count = currentTab?.games.length ?? 0;
+    if (count <= 0) return;
+    if (viewMode === "shelf") {
+      if (direction === "right") setFocusedIndex((i) => Math.min(i + 1, count - 1));
+      if (direction === "left") setFocusedIndex((i) => Math.max(i - 1, 0));
+      if (direction === "down") setViewMode("grid");
+      return;
+    }
+    if (direction === "right") setFocusedIndex((i) => Math.min(i + 1, count - 1));
+    if (direction === "left") setFocusedIndex((i) => Math.max(i - 1, 0));
+    if (direction === "down") setFocusedIndex((i) => Math.min(i + gridColumns, count - 1));
+    if (direction === "up") {
+      setFocusedIndex((i) => {
+        if (i < gridColumns) {
+          setViewMode("shelf");
+          return i;
+        }
+        return Math.max(i - gridColumns, 0);
+      });
+    }
+  }, [currentTab?.games.length, gridColumns, viewMode]);
+
+  const runControllerAction = useCallback((action: string) => {
+    if (action === "exitBigPicture") {
+      if (exitBlockedRef.current) return;
+      onExit();
+      return;
+    }
+    // When a submenu is open, redirect navigation into it and suppress main list movement.
+    if (filterOpen) {
+      if (action === "back") { onBack(); return; }
+      if (["moveUp", "moveDown", "moveLeft", "moveRight", "play"].includes(action)) {
+        window.dispatchEvent(new CustomEvent("bp-filter-action", { detail: { action } }));
+      }
+      return;
+    }
+    if (detailOpen) {
+      if (action === "back") { onBack(); return; }
+      if (action === "moveUp" || action === "moveDown") {
+        window.dispatchEvent(new CustomEvent("bp-scroll", { detail: { direction: action === "moveUp" ? "up" : "down" } }));
+      }
+      return;
+    }
+    if (action === "favoriteTab") {
+      const tabId = currentTabIdRef.current;
+      if (tabId?.startsWith("group:") && onSetDefaultTab) {
+        const wasDef = tabId === defaultTabIdRef.current;
+        onSetDefaultTab(wasDef ? undefined : tabId);
+      }
+      return;
+    }
+    if (action === "moveUp" || action === "moveDown" || action === "moveLeft" || action === "moveRight") {
+      moveFocus(action === "moveUp" ? "up" : action === "moveDown" ? "down" : action === "moveLeft" ? "left" : "right");
+      return;
+    }
+    if (action === "previousGroup") {
+      setTabIndex((i) => Math.max(i - 1, 0));
+      return;
+    }
+    if (action === "nextGroup") {
+      setTabIndex((i) => Math.min(i + 1, tabs.length - 1));
+      return;
+    }
+    if (action === "play" && focusedGame) {
+      if (canLaunch(focusedGame)) onLaunch(focusedGame);
+      else onSelect(focusedGame);
+      return;
+    }
+    if (action === "details" && focusedGame) {
+      onSelect(focusedGame);
+      return;
+    }
+    if (action === "filters") {
+      onOpenFilters();
+      return;
+    }
+    if (action === "toggleGrid") {
+      setViewMode((mode) => mode === "grid" ? "shelf" : "grid");
+      return;
+    }
+    if (action === "back") {
+      if (onBack()) return;
+      if (viewMode === "grid") setViewMode("shelf");
+    }
+  }, [detailOpen, filterOpen, focusedGame, moveFocus, onBack, onExit, onLaunch, onOpenFilters, onSelect, onSetDefaultTab, tabs.length, viewMode]);
+
+  useEffect(() => {
+    if (!controller.enabled) return;
+    let raf = 0;
+    const poll = () => {
+      if (!controller.backgroundInput && !document.hasFocus()) {
+        gamepadRepeatRef.current = {};
+        raf = requestAnimationFrame(poll);
+        return;
+      }
+      const { pressed, axes, connected } = readGamepadState();
+      if (!connected) {
+        gamepadRepeatRef.current = {};
+        raf = requestAnimationFrame(poll);
+        return;
+      }
+
+      const now = performance.now();
+      const activeActions: string[] = [];
+      const axisX = Math.abs(axes[0] ?? 0) > Math.abs(axes[2] ?? 0) ? axes[0] ?? 0 : axes[2] ?? 0;
+      const axisY = Math.abs(axes[1] ?? 0) > Math.abs(axes[3] ?? 0) ? axes[1] ?? 0 : axes[3] ?? 0;
+      if (axisX <= -STICK_THRESHOLD) activeActions.push("moveLeft");
+      if (axisX >= STICK_THRESHOLD) activeActions.push("moveRight");
+      if (axisY <= -STICK_THRESHOLD) activeActions.push("moveUp");
+      if (axisY >= STICK_THRESHOLD) activeActions.push("moveDown");
+      for (const action of DIGITAL_CONTROLLER_ACTIONS) {
+        if (bindingPressed(controller.bindings[action], pressed)) {
+          activeActions.push(action);
+        }
+      }
+
+      const repeatState = gamepadRepeatRef.current;
+      const uniqueActions = [...new Set(activeActions)];
+      for (const action of uniqueActions) {
+        const state = repeatState[action] ?? { pressed: false, lastAt: 0, nextDelay: GAMEPAD_REPEAT_INITIAL_MS };
+        if (!state.pressed || now - state.lastAt >= state.nextDelay) {
+          runControllerAction(action);
+          repeatState[action] = { pressed: true, lastAt: now, nextDelay: state.pressed ? GAMEPAD_REPEAT_MS : GAMEPAD_REPEAT_INITIAL_MS };
+        }
+      }
+      for (const action of Object.keys(repeatState)) {
+        if (!uniqueActions.includes(action)) {
+          repeatState[action] = { pressed: false, lastAt: 0, nextDelay: GAMEPAD_REPEAT_INITIAL_MS };
+        }
+      }
+      raf = requestAnimationFrame(poll);
+    };
+    raf = requestAnimationFrame(poll);
+    return () => cancelAnimationFrame(raf);
+  }, [controller, runControllerAction]);
+
+  // ── Scroll focused card flush to the left edge of the carousel.
+  // Focus styling must not change row layout; otherwise scroll targets drift.
   useEffect(() => {
     if (viewMode !== "shelf") return;
     const row = rowRef.current;
@@ -343,8 +595,15 @@ export function BigPictureScreen({
     return () => ro.disconnect();
   }, [viewMode, currentTab]);
 
+  const groupPointerX = tabs.length > 1 ? (tabIndex / (tabs.length - 1)) * 1.6 - 0.8 : 0;
+  const currentTabIsGroup = currentTab?.id?.startsWith("group:");
+  const isDefaultTab = currentTab?.id === defaultTabId;
+
   return (
-    <div className={viewMode === "grid" ? "big-picture grid-view" : "big-picture"}>
+    <div
+      className={viewMode === "grid" ? "big-picture grid-view" : "big-picture"}
+      style={{ "--bp-bg-base": backgroundBase } as CSSProperties}
+    >
       <div className="bp-background" aria-hidden>
         <ColorBends
           colors={animColors}
@@ -354,18 +613,20 @@ export function BigPictureScreen({
           warpStrength={1.1}
           mouseInfluence={1.4}
           parallax={0.6}
-          noise={0.08}
+          noise={0.6}
           iterations={3}
-          intensity={1.4}
+          intensity={1.25}
           bandWidth={7}
           autoRotate={4}
-          transparent={false}
+          transparent={true}
+          pointerOverrideX={groupPointerX}
         />
         <div className="bp-vignette" />
       </div>
 
       <header className="bp-top">
         <div className="bp-tabs" role="tablist">
+          <span className="bp-group-cue left">{bindingLabel(binding("previousGroup"))}</span>
           {tabs.map((tab, i) => (
             <button
               key={tab.id}
@@ -379,8 +640,21 @@ export function BigPictureScreen({
               <span className="bp-tab-count">{tab.games.length}</span>
             </button>
           ))}
+          <span className="bp-group-cue right">{bindingLabel(binding("nextGroup"))}</span>
         </div>
         <div className="bp-top-actions">
+          {currentTabIsGroup && onSetDefaultTab ? (
+            <button
+              type="button"
+              className={isDefaultTab ? "bp-favorite-tab active" : "bp-favorite-tab"}
+              onClick={() => onSetDefaultTab(isDefaultTab ? undefined : currentTab!.id)}
+              aria-label={isDefaultTab ? "Remove default startup tab" : "Set as default startup tab"}
+              title={isDefaultTab ? "Remove as default startup tab" : "Set as default startup tab"}
+            >
+              {isDefaultTab ? <Star size={14} fill="currentColor" /> : <Plus size={14} />}
+              <kbd>{bindingLabel(binding("favoriteTab"))}</kbd>
+            </button>
+          ) : null}
           <button
             type="button"
             className={activeFilterCount > 0 ? "bp-filter active" : "bp-filter"}
@@ -389,11 +663,13 @@ export function BigPictureScreen({
           >
             <SlidersHorizontal size={16} />
             <span>Filter</span>
+            <kbd>{bindingLabel(binding("filters"))}</kbd>
             {activeFilterCount > 0 ? <span className="bp-filter-badge">{activeFilterCount}</span> : null}
           </button>
           <button type="button" className="bp-exit" onClick={onExit} aria-label="Exit Big Picture (Esc)">
             <X size={18} />
             <span>Exit</span>
+            <kbd>{bindingLabel(binding("exitBigPicture"))}</kbd>
           </button>
         </div>
       </header>
@@ -424,15 +700,18 @@ export function BigPictureScreen({
                       <button type="button" className="bp-play" onClick={() => onLaunch(focusedGame)}>
                         <Play size={20} fill="currentColor" />
                         <span>Play</span>
+                        <kbd>{bindingLabel(binding("play"))}</kbd>
                       </button>
                     ) : (
                       <button type="button" className="bp-play secondary" onClick={() => onSelect(focusedGame)}>
-                        <Download size={20} />
+                        <Info size={20} />
                         <span>View</span>
+                        <kbd>{bindingLabel(binding("play"))}</kbd>
                       </button>
                     )}
-                    <button type="button" className="bp-info" onClick={() => onSelect(focusedGame)} aria-label="Details">
-                      <Info size={18} />
+                    <button type="button" className="bp-info" onClick={() => onSelect(focusedGame)} aria-label={canLaunch(focusedGame) ? "Details" : "Download / Install"}>
+                      {canLaunch(focusedGame) ? <Info size={18} /> : <Download size={18} />}
+                      <kbd>{bindingLabel(binding("details"))}</kbd>
                     </button>
                   </div>
                 </motion.div>
@@ -508,16 +787,6 @@ export function BigPictureScreen({
         </section>
       )}
 
-      <footer className="bp-footer">
-        <span className="bp-hint">
-          ← → games · [ ] tabs · {viewMode === "shelf" ? "↓ grid" : "↑ shelf"} · Enter play · Esc {viewMode === "grid" ? "back" : "exit"}
-        </span>
-        <span className="bp-position">
-          {currentTab && currentTab.games.length > 0
-            ? `${Math.min(focusedIndex, currentTab.games.length - 1) + 1} / ${currentTab.games.length}`
-            : "—"}
-        </span>
-      </footer>
     </div>
   );
 }

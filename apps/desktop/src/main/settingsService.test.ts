@@ -113,6 +113,46 @@ describe("SettingsService", () => {
     await expect(service.update({ cardsPerRow: 1 })).resolves.toMatchObject({ cardsPerRow: 4 });
   });
 
+  it("persists and sanitizes controller bindings", async () => {
+    const service = createService();
+
+    await expect(service.get()).resolves.toMatchObject({
+      controller: {
+        enabled: true,
+        backgroundInput: true,
+        bindings: {
+          focusBigPicture: { buttons: [8, 9] },
+          exitBigPicture: { buttons: [8, 9] },
+          play: { buttons: [0] }
+        }
+      }
+    });
+
+    await expect(service.update({
+      controller: {
+        enabled: false,
+        backgroundInput: false,
+        bindings: {
+          focusBigPicture: { buttons: [19, 20, 19, -1, 300] },
+          exitBigPicture: { buttons: [8, 9] },
+          play: { buttons: [31] },
+          details: { buttons: [] }
+        }
+      }
+    })).resolves.toMatchObject({
+      controller: {
+        enabled: false,
+        backgroundInput: false,
+        bindings: {
+          focusBigPicture: { buttons: [19, 20] },
+          exitBigPicture: { buttons: [8, 9] },
+          play: { buttons: [31] },
+          details: { buttons: [2] }
+        }
+      }
+    });
+  });
+
   it("persists and sanitizes window placement", async () => {
     const service = createService();
     await service.update({

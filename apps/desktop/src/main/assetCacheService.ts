@@ -92,7 +92,8 @@ export class AssetCacheService {
         return new Response(Readable.toWeb(createReadStream(filePath)) as ReadableStream, {
           headers: {
             "content-type": contentType,
-            "cache-control": "public, max-age=315360000, immutable"
+            "cache-control": "public, max-age=315360000, immutable",
+            "access-control-allow-origin": "*"
           }
         });
       } catch (error) {

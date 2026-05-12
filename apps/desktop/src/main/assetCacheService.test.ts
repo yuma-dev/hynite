@@ -55,6 +55,7 @@ describe("AssetCacheService profiling", () => {
     const miss = await handler(new Request("hynite-asset://cache/missing.png"));
 
     expect(hit.status).toBe(200);
+    expect(hit.headers.get("access-control-allow-origin")).toBe("*");
     expect(await hit.text()).toBe("png");
     expect(miss.status).toBe(404);
     expect(spans.find((span) => span.details?.status === "hit")?.name).toBe("asset-cache:protocol-read");
