@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
-import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings } from "@hynite/core";
+import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
   "^_redist$",
@@ -68,7 +68,8 @@ const defaultSettings: AppSettings = {
   localRoots: [],
   localExcludePatterns: DEFAULT_LOCAL_EXCLUDE_PATTERNS,
   sound: DEFAULT_SOUND_SETTINGS,
-  music: DEFAULT_MUSIC_SETTINGS
+  music: DEFAULT_MUSIC_SETTINGS,
+  windowState: undefined
 };
 
 function synchsafeToInt(bytes: Buffer, offset: number): number {
@@ -353,6 +354,37 @@ function sanitizeMusicSettings(value: unknown, bundledAudio: BundledAudioDefault
   };
 }
 
+function sanitizeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.round(value) : undefined;
+}
+
+function sanitizeWindowBounds(value: unknown): WindowBounds | undefined {
+  const candidate = value && typeof value === "object" ? value as Partial<WindowBounds> : {};
+  const x = sanitizeFiniteNumber(candidate.x);
+  const y = sanitizeFiniteNumber(candidate.y);
+  const width = sanitizeFiniteNumber(candidate.width);
+  const height = sanitizeFiniteNumber(candidate.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined || width <= 0 || height <= 0) {
+    return undefined;
+  }
+  return { x, y, width, height };
+}
+
+function sanitizeWindowState(value: unknown): WindowState | undefined {
+  const candidate = value && typeof value === "object" ? value as Partial<WindowState> : {};
+  const bounds = sanitizeWindowBounds(candidate.bounds);
+  const displayId = sanitizeFiniteNumber(candidate.displayId);
+  const isMaximized = candidate.isMaximized === true;
+  if (!bounds && displayId === undefined && !isMaximized) {
+    return undefined;
+  }
+  return {
+    ...(bounds ? { bounds } : {}),
+    ...(displayId !== undefined ? { displayId } : {}),
+    isMaximized
+  };
+}
+
 function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSettings {
   const rawAccounts: LegacyAccount[] = Array.isArray(raw.steamAccounts)
     ? raw.steamAccounts
@@ -378,7 +410,8 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     steamWebApiKey: liftedKey,
     gameGroups: sanitizeGameGroups(raw.gameGroups),
     sound: sanitizeSoundSettings(raw.sound, bundledAudio),
-    music: sanitizeMusicSettings(raw.music, bundledAudio)
+    music: sanitizeMusicSettings(raw.music, bundledAudio),
+    windowState: sanitizeWindowState(raw.windowState)
   };
 }
 
@@ -406,6 +439,15 @@ export class SettingsService {
     }
   }
 
+  async getWindowState(): Promise<WindowState | undefined> {
+    try {
+      const raw = await readFile(this.filePath, "utf8");
+      return sanitizeWindowState((JSON.parse(raw) as LegacySettings).windowState);
+    } catch {
+      return undefined;
+    }
+  }
+
   async update(patch: Partial<AppSettings>): Promise<AppSettings> {
     const next: AppSettings = { ...(await this.get()), ...patch };
     if (!Array.isArray(next.steamAccounts)) {
@@ -414,6 +456,7 @@ export class SettingsService {
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
     next.sound = sanitizeSoundSettings(next.sound, this.bundledAudio());
     next.music = sanitizeMusicSettings(next.music, this.bundledAudio());
+    next.windowState = sanitizeWindowState(next.windowState);
     await mkdir(dirname(this.filePath), { recursive: true });
     await writeFile(this.filePath, JSON.stringify(next, null, 2));
     return next;

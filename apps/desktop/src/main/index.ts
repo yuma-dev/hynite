@@ -9,7 +9,7 @@ import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider, type
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -47,8 +47,15 @@ let activeLocalScan: { promise: Promise<unknown>; controller: AbortController } 
 let startupProfileService: StartupProfileService | undefined;
 let startupHeartbeatTimer: NodeJS.Timeout | undefined;
 let rendererUnresponsiveAt: number | undefined;
+let windowStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let windowStateSaveChain: Promise<unknown> = Promise.resolve();
 
 const windowIconPath = join(__dirname, "../../assets/icons/app.ico");
+const DEFAULT_WINDOW_WIDTH = 1440;
+const DEFAULT_WINDOW_HEIGHT = 900;
+const MIN_WINDOW_WIDTH = 980;
+const MIN_WINDOW_HEIGHT = 680;
+const MIN_VISIBLE_WINDOW_PX = 80;
 const METADATA_REFRESH_CONCURRENCY = 4;
 const RICH_METADATA_CONCURRENCY = 1;
 const RICH_METADATA_STARTUP_LIMIT = Number.POSITIVE_INFINITY;
@@ -1170,13 +1177,103 @@ async function refreshRichMetadata(id: string): Promise<void> {
   }
 }
 
-function createWindow(): void {
+function centerInWorkArea(display: Electron.Display, width: number, height: number): WindowBounds {
+  const { workArea } = display;
+  return {
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    width,
+    height
+  };
+}
+
+function clampWindowBoundsToDisplay(bounds: WindowBounds, display: Electron.Display): WindowBounds {
+  const { workArea } = display;
+  const width = Math.min(Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width)), Math.max(MIN_WINDOW_WIDTH, workArea.width));
+  const height = Math.min(Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height)), Math.max(MIN_WINDOW_HEIGHT, workArea.height));
+  const minX = workArea.x;
+  const minY = workArea.y;
+  const maxX = workArea.x + workArea.width - Math.min(width, MIN_VISIBLE_WINDOW_PX);
+  const maxY = workArea.y + workArea.height - Math.min(height, MIN_VISIBLE_WINDOW_PX);
+  return {
+    x: Math.min(Math.max(Math.round(bounds.x), minX - width + MIN_VISIBLE_WINDOW_PX), Math.max(minX, maxX)),
+    y: Math.min(Math.max(Math.round(bounds.y), minY), Math.max(minY, maxY)),
+    width,
+    height
+  };
+}
+
+function resolveWindowBounds(state: WindowState | undefined): WindowBounds {
+  const displays = screen.getAllDisplays();
+  const savedDisplay = state?.displayId !== undefined
+    ? displays.find((display) => display.id === state.displayId)
+    : undefined;
+  const display = savedDisplay
+    ?? (state?.bounds ? screen.getDisplayMatching(state.bounds) : screen.getPrimaryDisplay());
+  const fallback = centerInWorkArea(display, DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
+  return clampWindowBoundsToDisplay(state?.bounds ?? fallback, display);
+}
+
+function currentWindowState(window: Electron.BrowserWindow): WindowState | undefined {
+  if (window.isDestroyed() || window.isMinimized()) {
+    return undefined;
+  }
+  const rawBounds = window.isMaximized() ? window.getNormalBounds() : window.getBounds();
+  const bounds: WindowBounds = {
+    x: Math.round(rawBounds.x),
+    y: Math.round(rawBounds.y),
+    width: Math.round(rawBounds.width),
+    height: Math.round(rawBounds.height)
+  };
+  return {
+    bounds,
+    displayId: screen.getDisplayMatching(bounds).id,
+    isMaximized: window.isMaximized()
+  };
+}
+
+function persistWindowState(state: WindowState): void {
+  const write = () => settingsService.update({ windowState: state }).then(() => undefined);
+  windowStateSaveChain = windowStateSaveChain.then(write, write).catch((err) => {
+    console.error("Failed to persist window state", err);
+  });
+}
+
+function saveWindowStateNow(window: Electron.BrowserWindow | undefined = mainWindow): void {
+  if (windowStateSaveTimer) {
+    clearTimeout(windowStateSaveTimer);
+    windowStateSaveTimer = undefined;
+  }
+  if (!window) {
+    return;
+  }
+  const state = currentWindowState(window);
+  if (state) {
+    persistWindowState(state);
+  }
+}
+
+function scheduleWindowStateSave(window: Electron.BrowserWindow | undefined = mainWindow): void {
+  if (!window || window.isDestroyed() || window.isMinimized()) {
+    return;
+  }
+  if (windowStateSaveTimer) {
+    clearTimeout(windowStateSaveTimer);
+  }
+  windowStateSaveTimer = setTimeout(() => {
+    windowStateSaveTimer = undefined;
+    saveWindowStateNow(window);
+  }, 500);
+  windowStateSaveTimer.unref?.();
+}
+
+function createWindow(windowState: WindowState | undefined): void {
+  const restoredBounds = resolveWindowBounds(windowState);
   profile("window:create:start", "Creating BrowserWindow");
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 980,
-    minHeight: 680,
+    ...restoredBounds,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     frame: false,
     autoHideMenuBar: true,
@@ -1189,6 +1286,9 @@ function createWindow(): void {
       nodeIntegration: false
     }
   });
+  if (windowState?.isMaximized) {
+    mainWindow.maximize();
+  }
   profile("window:create:end", "BrowserWindow created");
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -1231,8 +1331,17 @@ function createWindow(): void {
     }
   });
 
-  mainWindow.on("maximize", () => mainWindow?.webContents.send("window:maximizeChanged", true));
-  mainWindow.on("unmaximize", () => mainWindow?.webContents.send("window:maximizeChanged", false));
+  mainWindow.on("move", () => scheduleWindowStateSave());
+  mainWindow.on("resize", () => scheduleWindowStateSave());
+  mainWindow.on("maximize", () => {
+    mainWindow?.webContents.send("window:maximizeChanged", true);
+    saveWindowStateNow();
+  });
+  mainWindow.on("unmaximize", () => {
+    mainWindow?.webContents.send("window:maximizeChanged", false);
+    saveWindowStateNow();
+  });
+  mainWindow.on("close", () => saveWindowStateNow());
   mainWindow.on("closed", () => {
     profile("window:closed", "BrowserWindow closed");
     mainWindow = undefined;
@@ -2522,7 +2631,7 @@ function registerIpc(): void {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const userData = app.getPath("userData");
   startupProfileService = new StartupProfileService(userData, app.getVersion());
   profile("app:ready", "Electron app ready", {
@@ -2553,7 +2662,8 @@ app.whenReady().then(() => {
   registerIpc();
   profile("ipc:registered", "IPC handlers registered");
   startSystemAudioMonitor();
-  createWindow();
+  const windowState = await settingsService.getWindowState();
+  createWindow(windowState);
   createSplashWindow();
   startupReadyTimeout = setTimeout(() => {
     profile("startup:ready-timeout", "Startup ready timeout — showing main window");
@@ -2620,6 +2730,6 @@ app.on("window-all-closed", () => {
 app.on("activate", () => {
   profile("app:activate", "Electron app activated");
   if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
+    void settingsService.getWindowState().then((windowState) => createWindow(windowState));
   }
 });

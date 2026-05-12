@@ -75,6 +75,47 @@ describe("SettingsService", () => {
     });
   });
 
+  it("persists and sanitizes window placement", async () => {
+    const service = createService();
+    await service.update({
+      cacheTtlHours: 6,
+      windowState: {
+        bounds: { x: 120.4, y: 80.6, width: 1280.2, height: 720.7 },
+        displayId: 42.8,
+        isMaximized: true
+      }
+    });
+
+    await expect(service.get()).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      windowState: {
+        bounds: { x: 120, y: 81, width: 1280, height: 721 },
+        displayId: 43,
+        isMaximized: true
+      }
+    });
+    await expect(service.getWindowState()).resolves.toMatchObject({
+      bounds: { x: 120, y: 81, width: 1280, height: 721 },
+      displayId: 43,
+      isMaximized: true
+    });
+  });
+
+  it("drops invalid window placement while preserving maximized state", async () => {
+    const service = createService();
+    writeFileSync(join(tempDir!, "settings.json"), JSON.stringify({
+      windowState: {
+        bounds: { x: 0, y: 0, width: -1, height: 720 },
+        displayId: "primary",
+        isMaximized: true
+      }
+    }));
+
+    await expect(service.get()).resolves.toMatchObject({
+      windowState: { isMaximized: true }
+    });
+  });
+
   it("persists and sanitizes sound settings", async () => {
     const service = createService();
     await service.update({

@@ -542,6 +542,19 @@ export type MusicSettings = {
   gapMaxMs?: number;
 };
 
+export type WindowBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type WindowState = {
+  bounds?: WindowBounds;
+  displayId?: number;
+  isMaximized?: boolean;
+};
+
 export type AppSettings = {
   steamAccounts: SteamAccountSettings[];
   /** Single Steam Web API key shared by every paired account (one key fetches any public profile). */
@@ -568,6 +581,8 @@ export type AppSettings = {
   sound?: SoundSettings;
   /** Background music tracks played during launcher use. */
   music?: MusicSettings;
+  /** Last normal window placement restored by the Electron main process on startup. */
+  windowState?: WindowState;
 };
 
 export type ExecutableInfo = {
