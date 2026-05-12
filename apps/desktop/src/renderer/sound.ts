@@ -84,12 +84,13 @@ export function normalizeSoundSettings(settings?: SoundSettings): SoundSettings 
       filePath: typeof raw.filePath === "string" && raw.filePath.trim() ? raw.filePath.trim() : undefined,
       volume: clampVolume(raw.volume, 1),
       enabled: raw.enabled !== false,
-      playback: raw.playback ?? DEFAULT_PLAYBACK.get(id)
+      playback: raw.playback ?? DEFAULT_PLAYBACK.get(id),
+      source: raw.source === "bundled" ? "bundled" : raw.source === "custom" ? "custom" : undefined
     };
   }
 
   return {
-    masterVolume: clampVolume(settings?.masterVolume, 0.8),
+    masterVolume: clampVolume(settings?.masterVolume, 0.1),
     muted: settings?.muted === true,
     effects
   };

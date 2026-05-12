@@ -2,7 +2,7 @@ import type { AppSettings, MusicSettings } from "@hynite/core";
 
 const DEFAULT_MUSIC_SETTINGS: Required<Omit<MusicSettings, "tracks">> & { tracks: NonNullable<MusicSettings["tracks"]> } = {
   enabled: true,
-  volume: 0.4,
+  volume: 0.04,
   tracks: [],
   startupDelayEnabled: true,
   startupDelayMs: 5_000,
@@ -33,6 +33,8 @@ export type MusicStatus = {
   queueIndex: number;
   prevQueueTail: number[];
   currentTrackIndex: number | null;
+  currentTrackTitle: string | null;
+  currentTrackCopyright: string | null;
 };
 
 type TrackCache = { filePath: string; buffer: AudioBuffer };
@@ -160,6 +162,8 @@ export class MusicEngine {
       queueIndex: this.queueIndex,
       prevQueueTail: [...this.prevQueueTail],
       currentTrackIndex: this.currentTrackIndex,
+      currentTrackTitle: this.currentTrackIndex === null ? null : this.settings.tracks?.[this.currentTrackIndex]?.title ?? null,
+      currentTrackCopyright: this.currentTrackIndex === null ? null : this.settings.tracks?.[this.currentTrackIndex]?.copyright ?? null
     };
   }
 
@@ -616,7 +620,7 @@ export class MusicEngine {
   }
 
   private setMasterToVolume(fadeMs: number): void {
-    const vol = clampVol(this.settings.volume, 0.4);
+    const vol = clampVol(this.settings.volume, DEFAULT_MUSIC_SETTINGS.volume);
     if (fadeMs > 0) {
       this.fadeGainTo(vol, fadeMs);
     } else {
@@ -634,7 +638,7 @@ export class MusicEngine {
     const gain = this.masterGain;
     if (!ctx || !gain) return;
     if (this.audible) {
-      gain.gain.setTargetAtTime(clampVol(this.settings.volume, 0.4), ctx.currentTime, 0.015);
+      gain.gain.setTargetAtTime(clampVol(this.settings.volume, DEFAULT_MUSIC_SETTINGS.volume), ctx.currentTime, 0.015);
     }
   }
 

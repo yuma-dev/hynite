@@ -32,6 +32,10 @@
     ],
     "extraResources": [
       {
+        "from": "assets/audio",
+        "to": "audio"
+      },
+      {
         "from": "dist/native/Hynite.NativeBridge",
         "to": "native/Hynite.NativeBridge"
       }

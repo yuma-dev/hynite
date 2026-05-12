@@ -505,6 +505,7 @@ export type SoundEffectSettings = {
   volume?: number;
   enabled?: boolean;
   playback?: SoundEffectPlayback;
+  source?: "bundled" | "custom";
 };
 
 export type SoundSettings = {
@@ -515,6 +516,11 @@ export type SoundSettings = {
 
 export type MusicTrack = {
   filePath: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  copyright?: string;
+  source?: "bundled" | "custom";
 };
 
 export type MusicSettings = {

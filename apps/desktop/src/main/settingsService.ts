@@ -1,6 +1,7 @@
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings } from "@hynite/core";
+import { dirname, extname, join } from "node:path";
+import { defaultLibraryView, soundEffectIds, type AppSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings } from "@hynite/core";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
   "^_redist$",
@@ -15,14 +16,14 @@ export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
 ];
 
 const DEFAULT_SOUND_SETTINGS: SoundSettings = {
-  masterVolume: 0.8,
+  masterVolume: 0.1,
   muted: false,
   effects: {}
 };
 
 const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
   enabled: true,
-  volume: 0.4,
+  volume: 0.04,
   tracks: [],
   startupDelayEnabled: true,
   startupDelayMs: 5_000,
@@ -37,6 +38,21 @@ const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
   continuousPlay: false,
   gapMinMs: 30_000,
   gapMaxMs: 120_000
+};
+
+const AUDIO_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"]);
+const BUNDLED_SOUND_FILES: Record<SoundEffectId, string> = {
+  startup: "startup.mp3",
+  gameSelect: "selection.mp3",
+  gameLaunch: "gamestart.mp3",
+  navigation: "selection.mp3"
+};
+
+type AudioMetadata = Pick<MusicTrack, "title" | "artist" | "album" | "copyright">;
+
+type BundledAudioDefaults = {
+  soundEffects: Partial<Record<SoundEffectId, NonNullable<SoundSettings["effects"]>[SoundEffectId]>>;
+  musicTracks: MusicTrack[];
 };
 
 const defaultSettings: AppSettings = {
@@ -54,6 +70,142 @@ const defaultSettings: AppSettings = {
   sound: DEFAULT_SOUND_SETTINGS,
   music: DEFAULT_MUSIC_SETTINGS
 };
+
+function synchsafeToInt(bytes: Buffer, offset: number): number {
+  return ((bytes[offset] ?? 0) & 0x7f) << 21
+    | ((bytes[offset + 1] ?? 0) & 0x7f) << 14
+    | ((bytes[offset + 2] ?? 0) & 0x7f) << 7
+    | ((bytes[offset + 3] ?? 0) & 0x7f);
+}
+
+function decodeId3TextFrame(bytes: Buffer): string | undefined {
+  if (bytes.length < 2) return undefined;
+  const encoding = bytes[0];
+  const data = bytes.subarray(1);
+  let text: string;
+  if (encoding === 1 || encoding === 2) {
+    text = data.toString("utf16le");
+  } else if (encoding === 3) {
+    text = data.toString("utf8");
+  } else {
+    text = data.toString("latin1");
+  }
+  const cleaned = text.replace(/^\uFEFF/, "").replace(/\0/g, "").trim();
+  return cleaned || undefined;
+}
+
+function readMp3Metadata(filePath: string): AudioMetadata {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, "r");
+    const header = Buffer.alloc(10);
+    if (readSync(fd, header, 0, header.length, 0) !== header.length) return {};
+    if (header.subarray(0, 3).toString("latin1") !== "ID3") return {};
+    const version = header[3];
+    const tagSize = synchsafeToInt(header, 6);
+    const bytes = Buffer.alloc(10 + tagSize);
+    header.copy(bytes, 0);
+    readSync(fd, bytes, 10, tagSize, 10);
+    const end = bytes.length;
+    const metadata: AudioMetadata = {};
+    let offset = 10;
+
+    while (offset + 10 <= end) {
+      const frameId = bytes.subarray(offset, offset + 4).toString("latin1");
+      if (!/^[A-Z0-9]{4}$/.test(frameId)) break;
+      const frameSize = version === 4 ? synchsafeToInt(bytes, offset + 4) : bytes.readUInt32BE(offset + 4);
+      offset += 10;
+      if (frameSize <= 0 || offset + frameSize > end) break;
+      const value = decodeId3TextFrame(bytes.subarray(offset, offset + frameSize));
+      if (value) {
+        if (frameId === "TIT2") metadata.title = value;
+        if (frameId === "TPE1") metadata.artist = value;
+        if (frameId === "TALB") metadata.album = value;
+        if (frameId === "TCOP") metadata.copyright = value;
+      }
+      offset += frameSize;
+    }
+
+    return metadata;
+  } catch {
+    return {};
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Ignore close failure after metadata best-effort read.
+      }
+    }
+  }
+}
+
+function readAudioMetadata(filePath: string): AudioMetadata {
+  return extname(filePath).toLowerCase() === ".mp3" ? readMp3Metadata(filePath) : {};
+}
+
+function sanitizeTrackMetadata(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function mergeTrackMetadata(filePath: string, raw: Partial<MusicTrack> = {}, source: MusicTrack["source"]): MusicTrack {
+  const metadata = readAudioMetadata(filePath);
+  return {
+    filePath,
+    title: sanitizeTrackMetadata(raw.title) ?? metadata.title,
+    artist: sanitizeTrackMetadata(raw.artist) ?? metadata.artist,
+    album: sanitizeTrackMetadata(raw.album) ?? metadata.album,
+    copyright: sanitizeTrackMetadata(raw.copyright) ?? metadata.copyright,
+    source
+  };
+}
+
+function pathKey(filePath: string): string {
+  return process.platform === "win32" ? filePath.toLowerCase() : filePath;
+}
+
+function loadBundledAudioDefaults(audioRoot?: string): BundledAudioDefaults {
+  const defaults: BundledAudioDefaults = { soundEffects: {}, musicTracks: [] };
+  if (!audioRoot || !existsSync(audioRoot)) {
+    return defaults;
+  }
+
+  const soundRoot = join(audioRoot, "soundeffects");
+  for (const effectId of soundEffectIds) {
+    const filePath = join(soundRoot, BUNDLED_SOUND_FILES[effectId]);
+    try {
+      if (statSync(filePath).isFile()) {
+        defaults.soundEffects[effectId] = {
+          filePath,
+          volume: 1,
+          enabled: true,
+          source: "bundled"
+        };
+      }
+    } catch {
+      // Missing bundled sounds fail silently; the effect becomes a no-op.
+    }
+  }
+
+  const musicRoot = join(audioRoot, "music");
+  try {
+    defaults.musicTracks = readdirSync(musicRoot)
+      .filter((name) => AUDIO_EXTENSIONS.has(extname(name).toLowerCase()))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .flatMap((name) => {
+        const filePath = join(musicRoot, name);
+        try {
+          return statSync(filePath).isFile() ? [mergeTrackMetadata(filePath, {}, "bundled")] : [];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    defaults.musicTracks = [];
+  }
+
+  return defaults;
+}
 
 type LegacyAccount = SteamAccountSettings & { webApiKey?: EncryptedSecret };
 type LegacySettings = Partial<Omit<AppSettings, "steamAccounts">> & {
@@ -125,23 +277,33 @@ function sanitizePlayback(value: unknown): SoundEffectPlayback | undefined {
   return value === "overlap" || value === "restart" || value === "fade" ? value : undefined;
 }
 
-function sanitizeSoundSettings(value: unknown): SoundSettings {
+function sanitizeSoundSettings(value: unknown, bundledAudio: BundledAudioDefaults = { soundEffects: {}, musicTracks: [] }): SoundSettings {
   const candidate = value && typeof value === "object" ? value as Partial<SoundSettings> : {};
   const rawEffects = candidate.effects && typeof candidate.effects === "object" ? candidate.effects : {};
   const effects: SoundSettings["effects"] = {};
 
   for (const id of soundEffectIds) {
     const raw = rawEffects[id];
-    if (!raw || typeof raw !== "object") {
-      continue;
-    }
-    const effect = raw as { filePath?: unknown; volume?: unknown; enabled?: unknown; playback?: unknown };
-    const filePath = typeof effect.filePath === "string" ? effect.filePath.trim() : "";
+    const fallback = bundledAudio.soundEffects[id];
+    const effect = raw && typeof raw === "object"
+      ? raw as { filePath?: unknown; volume?: unknown; enabled?: unknown; playback?: unknown; source?: unknown }
+      : {};
+    const rawFilePath = typeof effect.filePath === "string" && effect.filePath.trim()
+      ? effect.filePath.trim()
+      : undefined;
+    const filePath = effect.source === "bundled"
+      ? fallback?.filePath
+      : rawFilePath ?? fallback?.filePath;
+    if (!filePath) continue;
+    const source = fallback?.filePath && effect.source !== "custom" && pathKey(filePath) === pathKey(fallback.filePath)
+      ? "bundled"
+      : "custom";
     effects[id] = {
-      filePath: filePath || undefined,
+      filePath,
       volume: clampVolume(effect.volume, 1),
       enabled: effect.enabled !== false,
-      playback: sanitizePlayback(effect.playback)
+      playback: sanitizePlayback(effect.playback),
+      source
     };
   }
 
@@ -158,12 +320,14 @@ function clampMs(value: unknown, fallback: number, min: number, max: number): nu
     : fallback;
 }
 
-function sanitizeMusicSettings(value: unknown): MusicSettings {
+function sanitizeMusicSettings(value: unknown, bundledAudio: BundledAudioDefaults = { soundEffects: {}, musicTracks: [] }): MusicSettings {
   const candidate = value && typeof value === "object" ? value as Partial<MusicSettings> : {};
+  const bundledPathKeys = new Set(bundledAudio.musicTracks.map((track) => pathKey(track.filePath)));
   const tracks = Array.isArray(candidate.tracks)
     ? candidate.tracks.flatMap((track) => {
       const filePath = typeof track?.filePath === "string" ? track.filePath.trim() : "";
-      return filePath ? [{ filePath }] : [];
+      if (!filePath || track?.source === "bundled" || bundledPathKeys.has(pathKey(filePath))) return [];
+      return [mergeTrackMetadata(filePath, track as Partial<MusicTrack>, "custom")];
     })
     : [];
   const gapMinMs = clampMs(candidate.gapMinMs, DEFAULT_MUSIC_SETTINGS.gapMinMs!, 0, 600_000);
@@ -172,7 +336,7 @@ function sanitizeMusicSettings(value: unknown): MusicSettings {
   return {
     enabled: candidate.enabled !== false,
     volume: clampVolume(candidate.volume, DEFAULT_MUSIC_SETTINGS.volume!),
-    tracks,
+    tracks: [...bundledAudio.musicTracks, ...tracks],
     startupDelayEnabled: candidate.startupDelayEnabled !== false,
     startupDelayMs: clampMs(candidate.startupDelayMs, DEFAULT_MUSIC_SETTINGS.startupDelayMs!, 0, 60_000),
     fadesEnabled: candidate.fadesEnabled !== false,
@@ -189,7 +353,7 @@ function sanitizeMusicSettings(value: unknown): MusicSettings {
   };
 }
 
-function migrate(raw: LegacySettings): AppSettings {
+function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSettings {
   const rawAccounts: LegacyAccount[] = Array.isArray(raw.steamAccounts)
     ? raw.steamAccounts
     : raw.steamAccount
@@ -213,20 +377,32 @@ function migrate(raw: LegacySettings): AppSettings {
     steamAccounts: cleanedAccounts,
     steamWebApiKey: liftedKey,
     gameGroups: sanitizeGameGroups(raw.gameGroups),
-    sound: sanitizeSoundSettings(raw.sound),
-    music: sanitizeMusicSettings(raw.music)
+    sound: sanitizeSoundSettings(raw.sound, bundledAudio),
+    music: sanitizeMusicSettings(raw.music, bundledAudio)
   };
 }
 
 export class SettingsService {
-  constructor(private readonly filePath: string) {}
+  private bundledAudioCache: BundledAudioDefaults | undefined;
+
+  constructor(private readonly filePath: string, private readonly audioRoot?: string) {}
+
+  private bundledAudio(): BundledAudioDefaults {
+    this.bundledAudioCache ??= loadBundledAudioDefaults(this.audioRoot);
+    return this.bundledAudioCache;
+  }
 
   async get(): Promise<AppSettings> {
     try {
       const raw = await readFile(this.filePath, "utf8");
-      return migrate(JSON.parse(raw) as LegacySettings);
+      return migrate(JSON.parse(raw) as LegacySettings, this.bundledAudio());
     } catch {
-      return { ...defaultSettings, steamAccounts: [] };
+      return {
+        ...defaultSettings,
+        steamAccounts: [],
+        sound: sanitizeSoundSettings(defaultSettings.sound, this.bundledAudio()),
+        music: sanitizeMusicSettings(defaultSettings.music, this.bundledAudio())
+      };
     }
   }
 
@@ -236,8 +412,8 @@ export class SettingsService {
       next.steamAccounts = [];
     }
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
-    next.sound = sanitizeSoundSettings(next.sound);
-    next.music = sanitizeMusicSettings(next.music);
+    next.sound = sanitizeSoundSettings(next.sound, this.bundledAudio());
+    next.music = sanitizeMusicSettings(next.music, this.bundledAudio());
     await mkdir(dirname(this.filePath), { recursive: true });
     await writeFile(this.filePath, JSON.stringify(next, null, 2));
     return next;

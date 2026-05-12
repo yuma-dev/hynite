@@ -36,6 +36,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
   Settings,
@@ -2750,7 +2751,7 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
   );
 }
 
-type SettingsTab = "steam" | "metadata" | "sources" | "sound" | "music" | "advanced";
+type SettingsTab = "steam" | "metadata" | "sources" | "audio" | "advanced";
 
 function soundFileName(filePath?: string): string {
   if (!filePath) {
@@ -2758,6 +2759,10 @@ function soundFileName(filePath?: string): string {
   }
   const parts = filePath.split(/[\\/]/);
   return parts[parts.length - 1] || filePath;
+}
+
+function musicTrackLabel(track: NonNullable<MusicSettings["tracks"]>[number]): string {
+  return track.title || soundFileName(track.filePath);
 }
 
 function soundSettingsPatch(settings: SoundSettings | undefined, patch: Partial<SoundSettings>): SoundSettings {
@@ -3012,7 +3017,7 @@ function SettingsScreen({
     if (!filePath) {
       return;
     }
-    await setEffectSound(effectId, { filePath, enabled: true });
+    await setEffectSound(effectId, { filePath, enabled: true, source: "custom" });
   }
 
   async function updateMusic(music: MusicSettings) {
@@ -3055,7 +3060,7 @@ function SettingsScreen({
     if (!filePaths.length) return;
     const current = normalizeMusicSettings(musicDraft);
     const existing = new Set((current.tracks ?? []).map((t) => t.filePath));
-    const newTracks = filePaths.filter((p) => !existing.has(p)).map((filePath) => ({ filePath }));
+    const newTracks = filePaths.filter((p) => !existing.has(p)).map((filePath) => ({ filePath, source: "custom" as const }));
     if (!newTracks.length) return;
     await updateMusic({ ...current, tracks: [...(current.tracks ?? []), ...newTracks] });
   }
@@ -3069,6 +3074,11 @@ function SettingsScreen({
 
   const soundSettings = soundDraft;
   const musicSettings = musicDraft;
+  const musicTracks = musicSettings.tracks ?? [];
+  const bundledMusicCount = musicTracks.filter((track) => track.source === "bundled").length;
+  const customMusicCount = musicTracks.length - bundledMusicCount;
+  const musicCopyrights = Array.from(new Set(musicTracks.map((track) => track.copyright).filter(Boolean)));
+  const musicCopyrightSummary = musicCopyrights.length > 0 ? musicCopyrights.join(" · ") : "No copyright metadata";
 
   return (
     <main className="page settings-page">
@@ -3088,8 +3098,7 @@ function SettingsScreen({
             ["steam", "Steam"],
             ["metadata", "Metadata"],
             ["sources", "Sources"],
-            ["sound", "Sound"],
-            ["music", "Music"],
+            ["audio", "Audio"],
             ["advanced", "Advanced"]
           ].map(([id, label]) => (
             <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id as SettingsTab)}>
@@ -3308,45 +3317,77 @@ function SettingsScreen({
 
           {tab === "sources" ? <SourcesScreen /> : null}
 
-          {tab === "sound" ? (
-            <section className="settings-section sound-settings">
+          {tab === "audio" ? (
+            <section className="settings-section audio-settings">
               <div className="settings-section-head">
                 <div>
-                  <h2>Sound</h2>
-                  <p className="settings-hint">Local UI effects are decoded once and mixed in the renderer for low-latency playback.</p>
+                  <h2>Audio</h2>
+                  <p className="settings-hint">Bundled defaults are used automatically; custom files override or extend them.</p>
                 </div>
-                <button className="secondary-action" onClick={() => void setSoundMuted(!soundSettings.muted)}>
-                  {soundSettings.muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                  {soundSettings.muted ? "Muted" : "Mute"}
-                </button>
+                <div className="audio-head-actions">
+                  <button className="secondary-action" onClick={() => void setSoundMuted(!soundSettings.muted)}>
+                    {soundSettings.muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                    {soundSettings.muted ? "Effects muted" : "Effects on"}
+                  </button>
+                  <button
+                    className="secondary-action"
+                    onClick={() => void updateMusic(musicSettingsPatch(musicSettings, { enabled: musicSettings.enabled === false }))}
+                  >
+                    {musicSettings.enabled === false ? <VolumeX size={16} /> : <Music2 size={16} />}
+                    {musicSettings.enabled === false ? "Music off" : "Music on"}
+                  </button>
+                </div>
               </div>
-              <label className="sound-volume-row">
-                <span>Master volume</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={soundSettings.masterVolume}
-                  onChange={(event) => void setMasterSoundVolume(Number(event.currentTarget.value))}
-                  onPointerUp={(event) => void updateSound(soundSettingsPatch(soundDraft, { masterVolume: Number(event.currentTarget.value) }))}
-                  onKeyUp={(event) => void updateSound(soundSettingsPatch(soundDraft, { masterVolume: Number(event.currentTarget.value) }))}
-                />
-                <strong>{Math.round(soundSettings.masterVolume * 100)}%</strong>
-              </label>
 
-              <div className="sound-effect-list">
-                {SOUND_EFFECT_DEFINITIONS.map((definition) => {
-                  const effect = soundSettings.effects?.[definition.id];
-                  const enabled = effect?.enabled !== false;
-                  return (
-                    <div key={definition.id} className="sound-effect-row">
-                      <div className="sound-effect-main">
-                        <strong>{definition.label}</strong>
-                        <span>{definition.description}</span>
-                        <code title={effect?.filePath}>{soundFileName(effect?.filePath)}</code>
-                      </div>
-                      <div className="sound-effect-controls">
+              <div className="audio-volume-grid">
+                <label className="sound-volume-row">
+                  <span>Effects</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={soundSettings.masterVolume}
+                    onChange={(event) => void setMasterSoundVolume(Number(event.currentTarget.value))}
+                    onPointerUp={(event) => void updateSound(soundSettingsPatch(soundDraft, { masterVolume: Number(event.currentTarget.value) }))}
+                    onKeyUp={(event) => void updateSound(soundSettingsPatch(soundDraft, { masterVolume: Number(event.currentTarget.value) }))}
+                  />
+                  <strong>{Math.round(soundSettings.masterVolume * 100)}%</strong>
+                </label>
+                <label className="sound-volume-row">
+                  <span>Music</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={musicSettings.volume ?? 0.04}
+                    onChange={(e) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
+                    onPointerUp={(e) => void updateMusic(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
+                    onKeyUp={(e) => void updateMusic(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
+                  />
+                  <strong>{Math.round((musicSettings.volume ?? 0.04) * 100)}%</strong>
+                </label>
+              </div>
+
+              <details className="settings-disclosure audio-disclosure">
+                <summary>
+                  <span>Sound effects</span>
+                  <em>{SOUND_EFFECT_DEFINITIONS.length} predefined sounds</em>
+                </summary>
+                <div className="audio-effect-list">
+                  {SOUND_EFFECT_DEFINITIONS.map((definition) => {
+                    const effect = soundSettings.effects?.[definition.id];
+                    const enabled = effect?.enabled !== false;
+                    const isCustom = effect?.source === "custom";
+                    return (
+                      <div key={definition.id} className="audio-effect-row">
+                        <div className="audio-effect-title">
+                          <strong>{definition.label}</strong>
+                          <code title={effect?.filePath}>
+                            {isCustom ? soundFileName(effect?.filePath) : `Default: ${soundFileName(effect?.filePath)}`}
+                          </code>
+                        </div>
                         <label className="settings-toggle-row compact-toggle">
                           <input
                             type="checkbox"
@@ -3355,11 +3396,11 @@ function SettingsScreen({
                           />
                           <span className="settings-toggle-control" aria-hidden="true" />
                           <span>
-                            <strong>Enabled</strong>
+                            <strong>On</strong>
                           </span>
                         </label>
                         <label className="sound-volume-row effect-volume">
-                          <span>Volume</span>
+                          <span>Vol</span>
                           <input
                             type="range"
                             min="0"
@@ -3383,66 +3424,76 @@ function SettingsScreen({
                           <option value="fade">Fade</option>
                         </select>
                         <div className="sound-effect-actions">
-                          <button className="secondary-action" type="button" onClick={() => void chooseSoundFile(definition.id)}>
+                          <button className="secondary-action icon-only-action" type="button" onClick={() => void chooseSoundFile(definition.id)} title="Choose custom file" aria-label={`Choose custom ${definition.label} file`}>
                             <FolderOpen size={14} />
-                            Choose
                           </button>
-                          <button className="secondary-action" type="button" disabled={!effect?.filePath} onClick={() => soundEngine.play(definition.id)}>
+                          <button className="secondary-action icon-only-action" type="button" disabled={!effect?.filePath} onClick={() => soundEngine.play(definition.id)} title="Test sound" aria-label={`Test ${definition.label}`}>
                             <Play size={14} fill="currentColor" />
-                            Test
                           </button>
                           <button
                             className="secondary-action"
                             type="button"
-                            disabled={!effect?.filePath}
-                            onClick={() => void setEffectSound(definition.id, { filePath: undefined })}
+                            onClick={() => void setEffectSound(definition.id, { filePath: undefined, source: undefined })}
+                            title="Reset to default"
+                            aria-label={`Reset ${definition.label} to default`}
                           >
-                            <X size={14} />
-                            Clear
+                            <RotateCcw size={14} />
+                            Reset
                           </button>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          ) : null}
-
-          {tab === "music" ? (
-            <section className="settings-section music-settings">
-              <div className="settings-section-head">
-                <div>
-                  <h2>Background music</h2>
-                  <p className="settings-hint">
-                    Plays local tracks while you browse. Dynamic behavior is controlled here and saved with the launcher settings.
-                  </p>
+                    );
+                  })}
                 </div>
-                <button
-                  className="secondary-action"
-                  onClick={() => void updateMusic(musicSettingsPatch(musicSettings, { enabled: musicSettings.enabled === false }))}
-                >
-                  {musicSettings.enabled === false ? <VolumeX size={16} /> : <Music2 size={16} />}
-                  {musicSettings.enabled === false ? "Disabled" : "Enabled"}
-                </button>
-              </div>
+              </details>
 
-              <label className="sound-volume-row">
-                <span>Volume</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={musicSettings.volume ?? 0.4}
-                  onChange={(e) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
-                  onPointerUp={(e) => void updateMusic(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
-                  onKeyUp={(e) => void updateMusic(musicSettingsPatch(musicSettings, { volume: Number(e.currentTarget.value) }))}
-                />
-                <strong>{Math.round((musicSettings.volume ?? 0.4) * 100)}%</strong>
-              </label>
+              <details className="settings-disclosure audio-disclosure">
+                <summary>
+                  <span>Music library</span>
+                  <em>{bundledMusicCount} bundled · {customMusicCount} custom · {musicCopyrightSummary}</em>
+                </summary>
+                <div className="music-track-list compact-track-list">
+                  {musicTracks.length === 0 ? (
+                    <p className="settings-hint music-no-tracks">No tracks available.</p>
+                  ) : (
+                    musicTracks.map((track, i) => (
+                      <div key={`${track.filePath}-${i}`} className="music-track-row">
+                        <div className="music-track-meta">
+                          <strong title={track.filePath}>{musicTrackLabel(track)}</strong>
+                          <span>{track.copyright ?? "No copyright metadata"}</span>
+                        </div>
+                        {track.source === "custom" ? (
+                          <button
+                            className="secondary-action icon-only-action"
+                            type="button"
+                            onClick={() => void removeMusicTrack(i)}
+                            title="Remove custom track"
+                            aria-label={`Remove ${musicTrackLabel(track)}`}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        ) : (
+                          <span className="audio-source-pill">Default</span>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
 
-              <div className="music-control-grid">
+                <div className="music-track-add">
+                  <button className="secondary-action" type="button" onClick={() => void addMusicTrack()}>
+                    <Plus size={14} />
+                    Add custom tracks
+                  </button>
+                </div>
+              </details>
+
+              <details className="settings-disclosure audio-disclosure">
+                <summary>
+                  <span>Playback behavior</span>
+                  <em>{musicSettings.continuousPlay === true ? "continuous" : `${msToSeconds(musicSettings.gapMinMs)}-${msToSeconds(musicSettings.gapMaxMs)}s gaps`}</em>
+                </summary>
+                <div className="music-control-grid">
                 <label className="settings-toggle-row">
                   <input
                     type="checkbox"
@@ -3584,36 +3635,8 @@ function SettingsScreen({
                     <strong>s</strong>
                   </label>
                 </div>
-              </div>
-
-              <div className="music-track-list">
-                {(musicSettings.tracks ?? []).length === 0 ? (
-                  <p className="settings-hint music-no-tracks">No tracks added yet. Add audio files below.</p>
-                ) : (
-                  (musicSettings.tracks ?? []).map((track, i) => (
-                    <div key={i} className="music-track-row">
-                      <code className="music-track-name" title={track.filePath}>
-                        {soundFileName(track.filePath)}
-                      </code>
-                      <button
-                        className="secondary-action"
-                        type="button"
-                        onClick={() => void removeMusicTrack(i)}
-                      >
-                        <Trash2 size={13} />
-                        Remove
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="music-track-add">
-                <button className="secondary-action" type="button" onClick={() => void addMusicTrack()}>
-                  <Plus size={14} />
-                  Add track
-                </button>
-              </div>
+                </div>
+              </details>
             </section>
           ) : null}
 
@@ -5982,6 +6005,12 @@ export function App() {
             {musicStatus.pauseReason}
           </span>
         )}
+        {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.audible && musicStatus.currentTrackCopyright ? (
+          <span className="music-copyright-chip" title={musicStatus.currentTrackTitle ?? undefined}>
+            <Music2 size={10} />
+            {musicStatus.currentTrackCopyright}
+          </span>
+        ) : null}
       </footer>
     </div>
     {!startupDone && (

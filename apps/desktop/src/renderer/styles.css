@@ -3235,6 +3235,20 @@ dd {
   opacity: 0.6;
 }
 
+.music-copyright-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: min(360px, 42vw);
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-3);
+  opacity: 0.62;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -3391,6 +3405,146 @@ dd {
 
 .compact-toggle strong {
   font-size: 12px;
+}
+
+.audio-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.audio-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.audio-volume-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px 18px;
+}
+
+.settings-disclosure {
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-disclosure summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 12px;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-disclosure summary span {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.settings-disclosure summary em {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-style: normal;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-disclosure[open] summary {
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.08);
+}
+
+.audio-effect-list {
+  display: grid;
+}
+
+.audio-effect-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 82px minmax(180px, 0.9fr) 124px auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.audio-effect-row + .audio-effect-row {
+  border-top: 0.5px solid rgba(255, 255, 255, 0.065);
+}
+
+.audio-effect-title {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.audio-effect-title strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.audio-effect-title code {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-only-action {
+  width: 32px;
+  min-width: 32px;
+  min-height: 30px;
+  justify-content: center;
+  padding: 0;
+}
+
+.compact-track-list {
+  padding: 8px;
+}
+
+.music-track-meta {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+}
+
+.music-track-meta strong,
+.music-track-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-track-meta strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.music-track-meta span {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.audio-source-pill {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgba(143, 240, 179, 0.12);
+  color: rgba(213, 255, 225, 0.82);
+  font-size: 10.5px;
+  font-weight: 650;
 }
 
 .sound-settings {
@@ -4249,6 +4403,10 @@ dd {
     grid-template-columns: 1fr;
   }
 
+  .audio-effect-row {
+    grid-template-columns: minmax(150px, 1fr) 78px minmax(170px, 0.9fr) 120px auto;
+  }
+
   .detail-modal {
     width: 60vw;
   }
@@ -4344,8 +4502,24 @@ dd {
   }
 
   .settings-section-head,
+  .audio-head-actions,
   .sound-effect-actions {
     display: grid;
+  }
+
+  .audio-volume-grid,
+  .audio-effect-row {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-disclosure summary {
+    display: grid;
+    justify-content: stretch;
+    padding: 10px 12px;
+  }
+
+  .settings-disclosure summary em {
+    text-align: left;
   }
 
   .music-control-grid,

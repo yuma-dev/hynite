@@ -2533,7 +2533,10 @@ app.whenReady().then(() => {
   startStartupHeartbeat();
   repository = new HyniteRepository(join(userData, "hynite.db"));
   profile("services:repository", "Repository opened");
-  settingsService = new SettingsService(join(userData, "settings.json"));
+  const audioAssetsRoot = app.isPackaged
+    ? join(process.resourcesPath, "audio")
+    : join(__dirname, "../../assets/audio");
+  settingsService = new SettingsService(join(userData, "settings.json"), audioAssetsRoot);
   diagnosticLogService = new DiagnosticLogService(join(userData, "metadata-diagnostics.ndjson"));
   homeService = new HomeService(join(userData, "home-cache.json"), diagnosticLogService);
   sourceService = new SourceService(repository);

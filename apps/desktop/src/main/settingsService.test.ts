@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,27 @@ let tempDir: string | undefined;
 function createService(): SettingsService {
   tempDir = mkdtempSync(join(tmpdir(), "hynite-settings-"));
   return new SettingsService(join(tempDir, "settings.json"));
+}
+
+function synchsafe(size: number): Buffer {
+  return Buffer.from([
+    (size >> 21) & 0x7f,
+    (size >> 14) & 0x7f,
+    (size >> 7) & 0x7f,
+    size & 0x7f
+  ]);
+}
+
+function textFrame(id: string, value: string): Buffer {
+  const payload = Buffer.concat([Buffer.from([3]), Buffer.from(value, "utf8")]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(payload.length);
+  return Buffer.concat([Buffer.from(id, "latin1"), size, Buffer.alloc(2), payload]);
+}
+
+function taggedMp3(tags: Record<string, string>): Buffer {
+  const frames = Buffer.concat(Object.entries(tags).map(([id, value]) => textFrame(id, value)));
+  return Buffer.concat([Buffer.from("ID3", "latin1"), Buffer.from([3, 0, 0]), synchsafe(frames.length), frames, Buffer.from([0xff, 0xfb])]);
 }
 
 afterEach(() => {
@@ -79,6 +100,47 @@ describe("SettingsService", () => {
         }
       }
     });
+  });
+
+  it("applies bundled audio defaults and reads track copyright", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "hynite-settings-"));
+    const audioRoot = join(tempDir, "audio");
+    mkdirSync(join(audioRoot, "soundeffects"), { recursive: true });
+    mkdirSync(join(audioRoot, "music"), { recursive: true });
+    writeFileSync(join(audioRoot, "soundeffects", "startup.mp3"), "startup");
+    writeFileSync(join(audioRoot, "soundeffects", "selection.mp3"), "selection");
+    writeFileSync(join(audioRoot, "soundeffects", "gamestart.mp3"), "gamestart");
+    writeFileSync(join(audioRoot, "music", "01. Theme.mp3"), taggedMp3({
+      TIT2: "Theme",
+      TPE1: "Artist",
+      TALB: "Album",
+      TCOP: "Copyright Holder 2026"
+    }));
+
+    const service = new SettingsService(join(tempDir, "settings.json"), audioRoot);
+    await expect(service.get()).resolves.toMatchObject({
+      sound: {
+        masterVolume: 0.1,
+        effects: {
+          startup: { source: "bundled", filePath: join(audioRoot, "soundeffects", "startup.mp3") },
+          gameSelect: { source: "bundled", filePath: join(audioRoot, "soundeffects", "selection.mp3") },
+          gameLaunch: { source: "bundled", filePath: join(audioRoot, "soundeffects", "gamestart.mp3") },
+          navigation: { source: "bundled", filePath: join(audioRoot, "soundeffects", "selection.mp3") }
+        }
+      },
+      music: {
+        volume: 0.04,
+        tracks: [{
+          source: "bundled",
+          filePath: join(audioRoot, "music", "01. Theme.mp3"),
+          title: "Theme",
+          artist: "Artist",
+          album: "Album",
+          copyright: "Copyright Holder 2026"
+        }]
+      }
+    });
+
   });
 
   it("persists and sanitizes music settings", async () => {
