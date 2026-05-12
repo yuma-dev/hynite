@@ -529,6 +529,8 @@ export type MusicSettings = {
   tracks?: MusicTrack[];
   startupDelayEnabled?: boolean;
   startupDelayMs?: number;
+  startupWithSoundEnabled?: boolean;
+  startupWithSoundFadeInMs?: number;
   fadesEnabled?: boolean;
   trackFadeInMs?: number;
   pauseFadeOutMs?: number;

@@ -6,6 +6,8 @@ const DEFAULT_MUSIC_SETTINGS: Required<Omit<MusicSettings, "tracks">> & { tracks
   tracks: [],
   startupDelayEnabled: true,
   startupDelayMs: 5_000,
+  startupWithSoundEnabled: false,
+  startupWithSoundFadeInMs: 8_000,
   fadesEnabled: true,
   trackFadeInMs: 5_000,
   pauseFadeOutMs: 2_000,
@@ -70,6 +72,8 @@ function normalizeMusicSettings(settings?: MusicSettings): MusicSettings {
       : [],
     startupDelayEnabled: settings?.startupDelayEnabled !== false,
     startupDelayMs: clampMs(settings?.startupDelayMs, DEFAULT_MUSIC_SETTINGS.startupDelayMs, 0, 60_000),
+    startupWithSoundEnabled: settings?.startupWithSoundEnabled === true,
+    startupWithSoundFadeInMs: clampMs(settings?.startupWithSoundFadeInMs, DEFAULT_MUSIC_SETTINGS.startupWithSoundFadeInMs, 0, 60_000),
     fadesEnabled: settings?.fadesEnabled !== false,
     trackFadeInMs: clampMs(settings?.trackFadeInMs, DEFAULT_MUSIC_SETTINGS.trackFadeInMs, 0, 30_000),
     pauseFadeOutMs: clampMs(settings?.pauseFadeOutMs, DEFAULT_MUSIC_SETTINGS.pauseFadeOutMs, 0, 30_000),
@@ -290,6 +294,14 @@ export class MusicEngine {
     this.active = true;
     this.startSystemPoll();
     if (!this.canPlay()) { this.emit(); return; }
+    if (this.settings.startupWithSoundEnabled === true) {
+      if (this.shouldBeAudible()) {
+        this.audible = true;
+        this.doResume(this.fadeMs("startupWithSoundFadeInMs"));
+      }
+      this.emit();
+      return;
+    }
     if (!this.settings.startupDelayEnabled || !this.settings.startupDelayMs) {
       if (this.shouldBeAudible()) {
         this.audible = true;
@@ -413,7 +425,7 @@ export class MusicEngine {
   }
 
   // Restore playback from virtual state, fading gain back in.
-  private doResume(): void {
+  private doResume(trackFadeInMs?: number): void {
     const state = this.pausedState ?? { kind: "none" };
     const pausedAt = this.pausedAt;
     this.pausedState = undefined;
@@ -436,7 +448,7 @@ export class MusicEngine {
       if (trackEndedMsAgo >= gapMs) {
         // Gap also elapsed — start next track immediately.
         this.setMasterToVolume(this.fadeMs("resumeFadeInMs"));
-        this.beginPlayback();
+        this.beginPlayback(trackFadeInMs);
       } else {
         // Still in the gap — wait for the remainder.
         const remainingMs = gapMs - trackEndedMsAgo;
@@ -480,11 +492,11 @@ export class MusicEngine {
     if (!this.playing && !this.inGap) {
       this.getContext(); // create context+masterGain BEFORE setting volume, otherwise the set is a no-op and playback stays silent
       this.setMasterToVolume(0);
-      this.beginPlayback();
+      this.beginPlayback(trackFadeInMs);
     }
   }
 
-  private beginPlayback(): void {
+  private beginPlayback(trackFadeInMs?: number): void {
     if (this.playing) return;
     const tracks = this.settings.tracks ?? [];
     if (!tracks.length) return;
@@ -497,7 +509,7 @@ export class MusicEngine {
       `[MusicEngine] starting track #${next} (${trackName}). queue=[${this.queue.join(",")}] pos=${this.queueIndex}/${this.queue.length}`
     );
 
-    void this.loadAndPlay(next).catch((err: unknown) => {
+    void this.loadAndPlay(next, trackFadeInMs).catch((err: unknown) => {
       console.warn("[MusicEngine] load failed", next, err);
     });
   }
@@ -541,16 +553,16 @@ export class MusicEngine {
     return indices;
   }
 
-  private async loadAndPlay(index: number): Promise<void> {
+  private async loadAndPlay(index: number, trackFadeInMs?: number): Promise<void> {
     const track = (this.settings.tracks ?? [])[index];
     if (!track) return;
     const buffer = await this.loadTrack(index, track.filePath);
     if (!buffer || !this.audible) return;
-    this.playBuffer(buffer, 0, /* newTrack */ true);
+    this.playBuffer(buffer, 0, /* newTrack */ true, trackFadeInMs);
   }
 
   // newTrack=true fades trackGain up using settings; resumed tracks use masterGain fade only.
-  private playBuffer(buffer: AudioBuffer, offsetS: number, newTrack: boolean): void {
+  private playBuffer(buffer: AudioBuffer, offsetS: number, newTrack: boolean, trackFadeInMs?: number): void {
     const ctx = this.getContext();
     const master = this.masterGain;
     if (!ctx || !master) return;
@@ -570,7 +582,7 @@ export class MusicEngine {
     const tg = this.trackGain;
     tg.gain.cancelScheduledValues(ctx.currentTime);
     if (newTrack) {
-      const fadeMs = this.fadeMs("trackFadeInMs");
+      const fadeMs = Math.max(0, trackFadeInMs ?? this.fadeMs("trackFadeInMs"));
       if (fadeMs > 0) {
         tg.gain.setValueAtTime(0, ctx.currentTime);
         tg.gain.linearRampToValueAtTime(1, ctx.currentTime + fadeMs / 1000);
@@ -630,7 +642,7 @@ export class MusicEngine {
     this.inGap = false;
   }
 
-  private fadeMs(key: "trackFadeInMs" | "pauseFadeOutMs" | "resumeFadeInMs" | "gameLaunchFadeOutMs"): number {
+  private fadeMs(key: "startupWithSoundFadeInMs" | "trackFadeInMs" | "pauseFadeOutMs" | "resumeFadeInMs" | "gameLaunchFadeOutMs"): number {
     return this.settings.fadesEnabled === false ? 0 : Math.max(0, this.settings[key] ?? DEFAULT_MUSIC_SETTINGS[key]);
   }
 

@@ -3770,35 +3770,63 @@ function SettingsScreen({
                   <em>{musicSettings.continuousPlay === true ? "continuous" : `${msToSeconds(musicSettings.gapMinMs)}-${msToSeconds(musicSettings.gapMaxMs)}s gaps`}</em>
                 </summary>
                 <div className="music-control-grid">
-                <label className="settings-toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={musicSettings.startupDelayEnabled !== false}
-                    onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { startupDelayEnabled: event.currentTarget.checked }))}
-                  />
-                  <span className="settings-toggle-control" aria-hidden="true" />
-                  <span>
-                    <strong>Startup delay</strong>
-                    <em>Wait before music starts after Hynite opens.</em>
-                  </span>
-                </label>
-                <label className="music-number-row">
-                  <span>Delay</span>
-                  <input
-                    className="plain-input"
-                    type="number"
-                    min="0"
-                    max="60"
-                    step="0.5"
-                    disabled={musicSettings.startupDelayEnabled === false}
-                    value={msToSeconds(musicSettings.startupDelayMs)}
-                    onChange={(event) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { startupDelayMs: secondsToMs(event.currentTarget.value) }))}
-                    onBlur={(event) => void updateMusic(musicSettingsPatch(musicSettings, { startupDelayMs: secondsToMs(event.currentTarget.value) }))}
-                  />
-                  <strong>s</strong>
-                </label>
+                  <label className="settings-toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={musicSettings.startupWithSoundEnabled === true}
+                      onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { startupWithSoundEnabled: event.currentTarget.checked }))}
+                    />
+                    <span className="settings-toggle-control" aria-hidden="true" />
+                    <span>
+                      <strong>Start with startup sound</strong>
+                      <em>Begin music when the startup melody begins.</em>
+                    </span>
+                  </label>
+                  <label className="music-number-row">
+                    <span>Fade</span>
+                    <input
+                      className="plain-input"
+                      type="number"
+                      min="0"
+                      max="60"
+                      step="0.5"
+                      disabled={musicSettings.startupWithSoundEnabled !== true}
+                      value={msToSeconds(musicSettings.startupWithSoundFadeInMs)}
+                      onChange={(event) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { startupWithSoundFadeInMs: secondsToMs(event.currentTarget.value) }))}
+                      onBlur={(event) => void updateMusic(musicSettingsPatch(musicSettings, { startupWithSoundFadeInMs: secondsToMs(event.currentTarget.value) }))}
+                    />
+                    <strong>s</strong>
+                  </label>
 
-                <label className="settings-toggle-row">
+                  <label className="settings-toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={musicSettings.startupDelayEnabled !== false}
+                      onChange={(event) => void updateMusic(musicSettingsPatch(musicSettings, { startupDelayEnabled: event.currentTarget.checked }))}
+                    />
+                    <span className="settings-toggle-control" aria-hidden="true" />
+                    <span>
+                      <strong>Startup delay</strong>
+                      <em>Wait before music starts after Hynite opens.</em>
+                    </span>
+                  </label>
+                  <label className="music-number-row">
+                    <span>Delay</span>
+                    <input
+                      className="plain-input"
+                      type="number"
+                      min="0"
+                      max="60"
+                      step="0.5"
+                      disabled={musicSettings.startupDelayEnabled === false || musicSettings.startupWithSoundEnabled === true}
+                      value={msToSeconds(musicSettings.startupDelayMs)}
+                      onChange={(event) => scheduleMusicUpdate(musicSettingsPatch(musicSettings, { startupDelayMs: secondsToMs(event.currentTarget.value) }))}
+                      onBlur={(event) => void updateMusic(musicSettingsPatch(musicSettings, { startupDelayMs: secondsToMs(event.currentTarget.value) }))}
+                    />
+                    <strong>s</strong>
+                  </label>
+
+                  <label className="settings-toggle-row">
                   <input
                     type="checkbox"
                     checked={musicSettings.fadesEnabled !== false}
@@ -5568,6 +5596,10 @@ export function App() {
   useEffect(() => musicEngine.subscribe(setMusicStatus), []);
 
   useEffect(() => {
+    const wasBigPicture = bigPictureRef.current;
+    if (bigPicture && !wasBigPicture) {
+      soundEngine.play("gameLaunch");
+    }
     musicEngine.setForcedOverrides({ forceEnabled: bigPicture, forceContinuous: bigPicture });
     void window.hynite.window.setFullScreen(bigPicture).catch(() => undefined);
     bigPictureRef.current = bigPicture;
