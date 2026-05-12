@@ -1819,6 +1819,11 @@ button {
   min-width: 0;
 }
 
+.library-grid .game-cover {
+  content-visibility: auto;
+  contain-intrinsic-size: 220px 330px;
+}
+
 .cover-strip .game-cover {
   flex: 0 0 var(--row-card-width, 150px);
 }

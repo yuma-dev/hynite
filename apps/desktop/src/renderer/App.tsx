@@ -50,7 +50,7 @@ import {
   VolumeX,
   X
 } from "lucide-react";
-import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
@@ -208,7 +208,8 @@ const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
 const HERO_AUTOPLAY_MS = 9000;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
-const LIBRARY_GRID_BATCH_SIZE = 72;
+const LIBRARY_GRID_INITIAL_SIZE = 48;
+const LIBRARY_GRID_BATCH_SIZE = 24;
 const DEFAULT_CARDS_PER_ROW = 6;
 const MIN_CARDS_PER_ROW = 4;
 const MAX_CARDS_PER_ROW = 12;
@@ -1001,7 +1002,7 @@ function familySharedOwners(game: Game): string[] {
   return [...owners];
 }
 
-function GameCover({
+const GameCover = memo(function GameCover({
   game,
   onSelect,
   onContextMenu,
@@ -1168,7 +1169,7 @@ function GameCover({
       ) : null}
     </div>
   );
-}
+});
 
 function GameRow({
   title,
@@ -2329,8 +2330,9 @@ function LibraryScreen({
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(gridRef, 180);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(LIBRARY_GRID_BATCH_SIZE);
+  const [visibleCount, setVisibleCount] = useState(LIBRARY_GRID_INITIAL_SIZE);
   const normalizedCardsPerRow = normalizeCardsPerRow(cardsPerRow);
+  const gridStyle = useMemo(() => cardGridStyle(normalizedCardsPerRow), [normalizedCardsPerRow]);
 
   const facets = useMemo(() => {
     const sourceSet = new Set<ProviderId>();
@@ -2352,7 +2354,7 @@ function LibraryScreen({
   }, [facetGames]);
 
   const activeCount = countActiveFilters(view.filters);
-  const visibleGames = games.slice(0, visibleCount);
+  const visibleGames = useMemo(() => games.slice(0, visibleCount), [games, visibleCount]);
   const hasMoreGames = visibleCount < games.length;
 
   useEffect(() => {
@@ -2369,7 +2371,7 @@ function LibraryScreen({
   }, [activeGroup?.id, activeGroup?.name, games.length, normalizedCardsPerRow, query, visibleGames.length]);
 
   useEffect(() => {
-    setVisibleCount(LIBRARY_GRID_BATCH_SIZE);
+    setVisibleCount(LIBRARY_GRID_INITIAL_SIZE);
   }, [games]);
 
   useEffect(() => {
@@ -2396,7 +2398,7 @@ function LibraryScreen({
           return next;
         });
       }
-    }, { rootMargin: "720px 0px" });
+    }, { rootMargin: "540px 0px" });
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [activeGroup?.id, activeGroup?.name, games.length, hasMoreGames]);
@@ -2468,7 +2470,7 @@ function LibraryScreen({
       ) : (
         <>
           <ProfileScope id="LibraryGrid">
-            <div className="library-grid" ref={gridRef} style={cardGridStyle(normalizedCardsPerRow)} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
+            <div className="library-grid" ref={gridRef} style={gridStyle} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
               {visibleGames.map((game) => (
                 <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
               ))}
