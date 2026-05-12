@@ -592,6 +592,19 @@ export class HyniteRepository {
     return row ? this.mapGameRows([row])[0] : undefined;
   }
 
+  getLocalGamesWithoutAddedAt(): Array<{ id: string; installDirectory: string | null; executablePath: string | null }> {
+    const rows = this.db
+      .prepare("SELECT id, install_directory, executable_path FROM games WHERE id LIKE 'local:%' AND added_at IS NULL")
+      .all() as Array<{ id: string; install_directory: string | null; executable_path: string | null }>;
+    return rows.map((row) => ({ id: row.id, installDirectory: row.install_directory, executablePath: row.executable_path }));
+  }
+
+  setAddedAt(gameId: string, addedAt: string): void {
+    this.db
+      .prepare("UPDATE games SET added_at = ?, updated_at = ? WHERE id = ? AND added_at IS NULL")
+      .run(addedAt, new Date().toISOString(), gameId);
+  }
+
   addPlaytime(gameId: string, minutesToAdd: number, lastPlayedAt = new Date().toISOString()): void {
     if (!Number.isFinite(minutesToAdd) || minutesToAdd <= 0) {
       this.db

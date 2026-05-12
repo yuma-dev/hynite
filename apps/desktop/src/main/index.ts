@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, screen, shell } from "electron";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
@@ -257,6 +258,24 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => {
     setImmediate(resolve);
   });
+}
+
+async function backfillLocalAddedAt(repo: HyniteRepository): Promise<void> {
+  const games = repo.getLocalGamesWithoutAddedAt();
+  if (games.length === 0) return;
+  for (const game of games) {
+    const pathToStat = game.installDirectory ?? game.executablePath;
+    if (!pathToStat) continue;
+    try {
+      const s = await stat(pathToStat);
+      if (typeof s.birthtimeMs === "number" && Number.isFinite(s.birthtimeMs) && s.birthtimeMs > 0) {
+        repo.setAddedAt(game.id, new Date(s.birthtimeMs).toISOString());
+      }
+    } catch {
+      // path inaccessible — skip
+    }
+    await yieldToEventLoop();
+  }
 }
 
 function profileIpc<T>(channel: string, task: () => T | Promise<T>): T | Promise<T> {
@@ -2803,6 +2822,7 @@ app.whenReady().then(async () => {
   startStartupHeartbeat();
   repository = new HyniteRepository(join(userData, "hynite.db"));
   profile("services:repository", "Repository opened");
+  void backfillLocalAddedAt(repository);
   const audioAssetsRoot = app.isPackaged
     ? join(process.resourcesPath, "audio")
     : join(__dirname, "../../assets/audio");
