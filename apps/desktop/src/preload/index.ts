@@ -227,6 +227,13 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, value: boolean) => callback(value);
       ipcRenderer.on("window:maximizeChanged", listener);
       return () => ipcRenderer.removeListener("window:maximizeChanged", listener);
+    },
+    setFullScreen: (fullscreen: boolean): Promise<void> => ipcRenderer.invoke("window:setFullScreen", fullscreen),
+    isFullScreen: (): Promise<boolean> => ipcRenderer.invoke("window:isFullScreen"),
+    onFullScreenChanged: (callback: (isFullScreen: boolean) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: boolean) => callback(value);
+      ipcRenderer.on("window:fullScreenChanged", listener);
+      return () => ipcRenderer.removeListener("window:fullScreenChanged", listener);
     }
   }
 };

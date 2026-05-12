@@ -44,6 +44,7 @@ import {
   Trash2,
   TrendingUp,
   Trophy,
+  Tv,
   Users,
   Volume2,
   VolumeX,
@@ -58,6 +59,7 @@ import remarkGfm from "remark-gfm";
 import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
+import { BigPictureScreen } from "./BigPictureScreen";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
 
@@ -230,7 +232,7 @@ function BrandLogo({ className, sizes }: { className?: string; sizes: string }) 
   );
 }
 
-function TitleBar() {
+function TitleBar({ onEnterBigPicture }: { onEnterBigPicture: () => void }) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -242,6 +244,16 @@ function TitleBar() {
     <header className="titlebar">
       <span className="titlebar-drag" />
       <div className="titlebar-controls">
+        <button
+          type="button"
+          className="titlebar-btn"
+          tabIndex={-1}
+          onClick={onEnterBigPicture}
+          aria-label="Big Picture mode (F11)"
+          title="Big Picture (F11)"
+        >
+          <Tv size={13} />
+        </button>
         <button
           type="button"
           className="titlebar-btn"
@@ -1806,6 +1818,35 @@ function countActiveFilters(filters: LibraryFilters): number {
 function toggleInArray<T>(arr: T[] | undefined, value: T): T[] {
   const next = arr ?? [];
   return next.includes(value) ? next.filter((item) => item !== value) : [...next, value];
+}
+
+function sortGamesByField(games: Game[], field: LibrarySortField, direction: LibrarySortDirection): Game[] {
+  const dir = direction === "asc" ? 1 : -1;
+  const sorted = [...games];
+  sorted.sort((a, b) => {
+    let cmp = 0;
+    switch (field) {
+      case "title":
+        cmp = (a.sortTitle ?? a.title).localeCompare(b.sortTitle ?? b.title);
+        break;
+      case "playtime":
+        cmp = (a.playtimeMinutes ?? 0) - (b.playtimeMinutes ?? 0);
+        break;
+      case "release":
+        cmp = (Date.parse(a.releaseDate ?? "") || 0) - (Date.parse(b.releaseDate ?? "") || 0);
+        break;
+      case "added":
+        cmp = (Date.parse(a.addedAt ?? a.importedAt ?? "") || 0) - (Date.parse(b.addedAt ?? b.importedAt ?? "") || 0);
+        break;
+      case "recent":
+      default:
+        cmp = (Date.parse(a.lastPlayedAt ?? a.addedAt ?? "") || 0) - (Date.parse(b.lastPlayedAt ?? b.addedAt ?? "") || 0);
+        break;
+    }
+    if (cmp === 0) cmp = a.title.localeCompare(b.title);
+    return cmp * dir;
+  });
+  return sorted;
 }
 
 function applyLibraryFilters(games: Game[], filters: LibraryFilters): Game[] {
@@ -5227,6 +5268,9 @@ export function App() {
   const homeFirstLoadedRef = useRef(false);
   const [startupDone, setStartupDone] = useState(false);
   const [musicStatus, setMusicStatus] = useState<MusicStatus>(() => musicEngine.getStatus());
+  const [bigPicture, setBigPicture] = useState(false);
+  const [bpFiltersOpen, setBpFiltersOpen] = useState(false);
+  const [bpFilters, setBpFilters] = useState<LibraryFilters>({});
   const contentRef = useRef<HTMLElement | null>(null);
   const handledSyncSuccessAtRef = useRef<string | undefined>();
   const initialLoadStartedRef = useRef(false);
@@ -5271,6 +5315,22 @@ export function App() {
   }, []);
 
   useEffect(() => musicEngine.subscribe(setMusicStatus), []);
+
+  useEffect(() => {
+    musicEngine.setForcedOverrides({ forceEnabled: bigPicture, forceContinuous: bigPicture });
+    void window.hynite.window.setFullScreen(bigPicture).catch(() => undefined);
+  }, [bigPicture]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "F11") {
+        event.preventDefault();
+        setBigPicture((current) => !current);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     (window as unknown as Record<string, unknown>).__hyniteMusic = {
@@ -5507,6 +5567,56 @@ export function App() {
     () => activeGroup?.kind === "smart" ? normalizeLibraryView(activeGroup.view) : libraryView,
     [activeGroup, libraryView]
   );
+  // Big Picture uses the user's library sort and stacks the Big Picture filter
+  // sheet on top. "All Games" and group tabs get filtered+sorted; Recent and
+  // Installed tabs are computed inside BigPictureScreen from their own pools.
+  const bpSortedAll = useMemo(() => {
+    const filtered = applyLibraryFilters(allGames, bpFilters);
+    return sortGamesByField(filtered, libraryView.sort.field, libraryView.sort.direction);
+  }, [allGames, bpFilters, libraryView.sort.field, libraryView.sort.direction]);
+
+  const bigPictureGroupGames = useMemo(() => {
+    const map = new Map<string, Game[]>();
+    const currentGroups = normalizeGroups(settings);
+    const baseSort = libraryView.sort;
+    for (const group of currentGroups) {
+      let scoped: Game[];
+      if (group.kind === "manual") {
+        const ids = new Set(group.gameIds);
+        scoped = allGames.filter((game) => ids.has(game.id));
+      } else {
+        const normalized = normalizeLibraryView(group.view);
+        scoped = [...allGames];
+        const scopedSearch = (group.search ?? "").trim().toLocaleLowerCase();
+        if (scopedSearch) scoped = scoped.filter((game) => game.title.toLocaleLowerCase().includes(scopedSearch));
+        scoped = applyLibraryFilters(scoped, normalized.filters);
+      }
+      scoped = applyLibraryFilters(scoped, bpFilters);
+      scoped = sortGamesByField(scoped, baseSort.field, baseSort.direction);
+      map.set(group.id, scoped);
+    }
+    return map;
+  }, [settings, allGames, bpFilters, libraryView.sort]);
+
+  const bpFacets = useMemo(() => {
+    const sourceSet = new Set<ProviderId>();
+    const genreSet = new Set<string>();
+    const tagSet = new Set<string>();
+    const playerModeSet = new Set<PlayerMode>();
+    for (const game of allGames) {
+      for (const source of game.sourceIds) sourceSet.add(source.provider);
+      for (const genre of game.genres) genreSet.add(genre);
+      for (const tag of game.tags) tagSet.add(tag);
+      for (const mode of game.playerModes) playerModeSet.add(mode);
+    }
+    return {
+      sources: [...sourceSet].sort(),
+      genres: [...genreSet].sort((a, b) => a.localeCompare(b)),
+      tags: [...tagSet].sort((a, b) => a.localeCompare(b)),
+      playerModes: [...playerModeSet]
+    };
+  }, [allGames]);
+
   const groupCounts = useMemo(() => {
     const counts = new Map<string, number>();
     const currentGroups = normalizeGroups(settings);
@@ -6036,7 +6146,7 @@ export function App() {
   return (
     <>
     <div className="app-shell">
-      <TitleBar />
+      <TitleBar onEnterBigPicture={() => setBigPicture(true)} />
       <div className="app-body">
         <aside className="rail">
           <div className="rail-brand">
@@ -6213,6 +6323,40 @@ export function App() {
     )}
     <AnimatePresence>
       {launchHandoff ? <LaunchHandoffOverlay key={launchHandoff.token} state={launchHandoff} /> : null}
+    </AnimatePresence>
+    <AnimatePresence>
+      {bigPicture ? (
+        <motion.div
+          key="big-picture-overlay"
+          className="big-picture-overlay"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
+        >
+          <BigPictureScreen
+            games={bpSortedAll.length > 0 ? bpSortedAll : games}
+            recentGames={recentGames}
+            settings={settings}
+            groupGames={bigPictureGroupGames}
+            activeFilterCount={countActiveFilters(bpFilters)}
+            onOpenFilters={() => setBpFiltersOpen(true)}
+            onLaunch={(game) => void launchGame(game)}
+            onSelect={(game) => void selectGame(game)}
+            onExit={() => setBigPicture(false)}
+          />
+          <LibraryFiltersPanel
+            open={bpFiltersOpen}
+            onClose={() => setBpFiltersOpen(false)}
+            filters={bpFilters}
+            onChange={setBpFilters}
+            onReset={() => setBpFilters({})}
+            facets={bpFacets}
+            query=""
+            onRequestSmartGroup={() => undefined}
+          />
+        </motion.div>
+      ) : null}
     </AnimatePresence>
     </>
   );

@@ -1394,6 +1394,12 @@ function createWindow(windowState: WindowState | undefined): void {
     mainWindow?.webContents.send("window:maximizeChanged", false);
     saveWindowStateNow();
   });
+  mainWindow.on("enter-full-screen", () => {
+    mainWindow?.webContents.send("window:fullScreenChanged", true);
+  });
+  mainWindow.on("leave-full-screen", () => {
+    mainWindow?.webContents.send("window:fullScreenChanged", false);
+  });
   mainWindow.on("close", () => saveWindowStateNow());
   mainWindow.on("closed", () => {
     profile("window:closed", "BrowserWindow closed");
@@ -2676,6 +2682,12 @@ function registerIpc(): void {
   });
   handleIpc("window:close", () => mainWindow?.close());
   handleIpc("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
+  handleIpc("window:setFullScreen", (_event, fullscreen: boolean) => {
+    if (!mainWindow) return;
+    if (mainWindow.isFullScreen() === fullscreen) return;
+    mainWindow.setFullScreen(fullscreen);
+  });
+  handleIpc("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
   handleIpc("music:system-audio-active", () => getSystemAudioActive());
   handleIpc("music:system-audio-debug", async () => {
     if (process.platform !== "win32") return "not win32";

@@ -53,6 +53,7 @@
     }
   },
   "dependencies": {
+    "@types/three": "^0.184.1",
     "@vitejs/plugin-react": "^5.0.4",
     "electron-vite": "^4.0.1",
     "framer-motion": "^12.15.0",
@@ -64,6 +65,7 @@
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "three": "^0.184.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

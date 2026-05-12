@@ -101,7 +101,10 @@ function trackTitle(track?: MusicTrack): string | null {
 }
 
 export class MusicEngine {
+  private userSettings: MusicSettings = normalizeMusicSettings();
   private settings: MusicSettings = normalizeMusicSettings();
+  private forceEnabled = false;
+  private forceContinuous = false;
 
   // Audio graph: source → trackGain → masterGain → destination
   // masterGain: overall volume + audibility fades
@@ -182,8 +185,33 @@ export class MusicEngine {
     };
   }
 
+  private deriveEffectiveSettings(user: MusicSettings): MusicSettings {
+    if (!this.forceEnabled && !this.forceContinuous) return user;
+    return {
+      ...user,
+      enabled: this.forceEnabled ? true : user.enabled,
+      continuousPlay: this.forceContinuous ? true : user.continuousPlay
+    };
+  }
+
+  setForcedOverrides(next: { forceEnabled?: boolean; forceContinuous?: boolean }): void {
+    const forceEnabled = next.forceEnabled ?? this.forceEnabled;
+    const forceContinuous = next.forceContinuous ?? this.forceContinuous;
+    if (forceEnabled === this.forceEnabled && forceContinuous === this.forceContinuous) return;
+    this.forceEnabled = forceEnabled;
+    this.forceContinuous = forceContinuous;
+    this.applyDerivedSettings();
+  }
+
+  private applyDerivedSettings(): void {
+    const derived = this.deriveEffectiveSettings(this.userSettings);
+    this.reactToSettings(derived);
+  }
+
   applySettings(settings: AppSettings | MusicSettings | undefined): void {
-    const next = normalizeMusicSettings(isAppSettings(settings) ? settings.music : (settings as MusicSettings | undefined));
+    const userNext = normalizeMusicSettings(isAppSettings(settings) ? settings.music : (settings as MusicSettings | undefined));
+    this.userSettings = userNext;
+    const next = this.deriveEffectiveSettings(userNext);
 
     const oldTracks = this.settings.tracks ?? [];
     const newTracks = next.tracks ?? [];
@@ -204,6 +232,10 @@ export class MusicEngine {
       this.prevQueueTail = [];
     }
 
+    this.reactToSettings(next);
+  }
+
+  private reactToSettings(next: MusicSettings): void {
     const wasEnabled = this.settings.enabled !== false;
     const nowEnabled = next.enabled !== false;
     this.settings = next;
