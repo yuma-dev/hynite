@@ -1854,13 +1854,28 @@ function sortGamesByField(games: Game[], field: LibrarySortField, direction: Lib
         break;
       case "recent":
       default:
-        cmp = (Date.parse(a.lastPlayedAt ?? a.addedAt ?? "") || 0) - (Date.parse(b.lastPlayedAt ?? b.addedAt ?? "") || 0);
+        cmp = gameActivityTime(a) - gameActivityTime(b);
         break;
     }
     if (cmp === 0) cmp = a.title.localeCompare(b.title);
     return cmp * dir;
   });
   return sorted;
+}
+
+function mergeRecentSortedGame(current: Game[], game: Game): Game[] {
+  const existing = current.some((item) => item.id === game.id);
+  const next = existing
+    ? current.map((item) => (item.id === game.id ? game : item))
+    : [game, ...current];
+  return sortGamesByField(next, "recent", "desc");
+}
+
+function mergeRecentActivityGame(current: Game[], game: Game): Game[] {
+  if (gameActivityTime(game) <= 0) {
+    return current.filter((item) => item.id !== game.id);
+  }
+  return mergeRecentSortedGame(current, game);
 }
 
 function applyLibraryFilters(games: Game[], filters: LibraryFilters): Game[] {
@@ -6197,7 +6212,8 @@ export function App() {
       const updateSpan = profileSpan("renderer-render", "renderer:game-update-apply", { id: game.id, title: game.title });
       profileStartup("game:update", "Game update received", { id: game.id, title: game.title });
       setGames((current) => current.map((item) => (item.id === game.id ? game : item)));
-      setRecentGames((current) => current.map((item) => (item.id === game.id ? game : item)));
+      setAllGames((current) => mergeRecentSortedGame(current, game));
+      setRecentGames((current) => mergeRecentActivityGame(current, game));
       setLibraryGameIds((current) => new Set([...current, game.id]));
       setSelected((current) => (current?.id === game.id ? game : current));
       scheduleHomeRefresh();

@@ -68,6 +68,11 @@ export type NativeFileVersionInfo = {
   error?: string;
 };
 
+export type NativePrefetchLastRunTime = {
+  path: string;
+  lastRunAt: string | null;
+};
+
 export class NativeBridge {
   private process?: ChildProcessWithoutNullStreams;
   private buffer = "";
@@ -138,6 +143,19 @@ export class NativeBridge {
     } catch (error) {
       console.warn("Native getFileVersionInfo failed", error);
       return paths.map((path) => ({ path, exists: existsSync(path) }));
+    }
+  }
+
+  async getPrefetchLastRunTimes(paths: string[]): Promise<NativePrefetchLastRunTime[]> {
+    if (paths.length === 0) return [];
+    try {
+      const response = await this.request<{ results: NativePrefetchLastRunTime[] }>(
+        "getPrefetchLastRunTimes", { paths }
+      );
+      return response.results ?? [];
+    } catch (error) {
+      console.warn("Native getPrefetchLastRunTimes failed", error);
+      return paths.map((path) => ({ path, lastRunAt: null }));
     }
   }
 

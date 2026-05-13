@@ -36,6 +36,7 @@ while (await Console.In.ReadLineAsync() is { } line)
             "decryptSecret" => DecryptSecret(request.Params),
             "steamGetAppInfo" => await SteamAppInfoClient.GetAppInfo(request.Params),
             "getFileVersionInfo" => GetFileVersionInfo(request.Params),
+            "getPrefetchLastRunTimes" => GetPrefetchLastRunTimes(request.Params),
             "watchProcess" => new { accepted = true },
             "pollGamepad" => PollGamepad(),
             _ => throw new InvalidOperationException($"Unknown method {request.Method}.")
@@ -164,6 +165,62 @@ static object GetFileVersionInfo(JsonElement parameters)
 }
 
 static object PollGamepad() => XInputReader.Poll();
+
+static object GetPrefetchLastRunTimes(JsonElement parameters)
+{
+    var requested = new List<(string Path, string ExeName)>();
+    if (parameters.TryGetProperty("paths", out var pathsEl) && pathsEl.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var el in pathsEl.EnumerateArray())
+        {
+            var p = el.GetString();
+            if (string.IsNullOrWhiteSpace(p))
+                continue;
+
+            var exeName = Path.GetFileName(p);
+            if (!string.IsNullOrWhiteSpace(exeName))
+                requested.Add((p, exeName.ToUpperInvariant()));
+        }
+    }
+
+    var prefetchDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Prefetch");
+
+    var latestByExeName = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+    if (requested.Count > 0 && Directory.Exists(prefetchDir))
+    {
+        var requestedNames = requested.Select(item => item.ExeName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var pfFile in Directory.EnumerateFiles(prefetchDir, "*.pf"))
+            {
+                var stem = Path.GetFileNameWithoutExtension(pfFile);
+                var separatorIndex = stem.LastIndexOf('-');
+                if (separatorIndex <= 0)
+                    continue;
+
+                var exeName = stem[..separatorIndex];
+                if (!requestedNames.Contains(exeName))
+                    continue;
+
+                var mtime = new DateTimeOffset(File.GetLastWriteTimeUtc(pfFile), TimeSpan.Zero);
+                if (!latestByExeName.TryGetValue(exeName, out var latest) || mtime > latest)
+                    latestByExeName[exeName] = mtime;
+            }
+        }
+        catch { }
+    }
+
+    var results = requested.Select(item =>
+    {
+        string? lastRunAt = latestByExeName.TryGetValue(item.ExeName, out var latest)
+            ? latest.UtcDateTime.ToString("O")
+            : null;
+        return new { path = item.Path, lastRunAt };
+    }).ToList();
+
+    return new { results };
+}
 
 static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 

@@ -605,6 +605,20 @@ export class HyniteRepository {
       .run(addedAt, new Date().toISOString(), gameId);
   }
 
+  getLocalGameExecutables(): Array<{ id: string; executablePath: string; lastPlayedAt: string | null }> {
+    const rows = this.db
+      .prepare("SELECT id, executable_path, last_played_at FROM games WHERE id LIKE 'local:%' AND executable_path IS NOT NULL AND TRIM(executable_path) != ''")
+      .all() as Array<{ id: string; executable_path: string; last_played_at: string | null }>;
+    return rows.map((row) => ({ id: row.id, executablePath: row.executable_path, lastPlayedAt: row.last_played_at }));
+  }
+
+  updateLastPlayedAtIfNewer(gameId: string, lastPlayedAt: string): boolean {
+    const result = this.db
+      .prepare("UPDATE games SET last_played_at = ?, updated_at = ? WHERE id = ? AND (last_played_at IS NULL OR last_played_at < ?)")
+      .run(lastPlayedAt, new Date().toISOString(), gameId, lastPlayedAt);
+    return Number(result.changes) > 0;
+  }
+
   addPlaytime(gameId: string, minutesToAdd: number, lastPlayedAt = new Date().toISOString()): void {
     if (!Number.isFinite(minutesToAdd) || minutesToAdd <= 0) {
       this.db

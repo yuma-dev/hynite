@@ -65,6 +65,7 @@ const STARTUP_BACKGROUND_DELAY_MS = 1_000;
 const STARTUP_LOCAL_SCAN_DELAY_MS = 3_000;
 const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
 const STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL = 5;
+const PREFETCH_LAST_PLAYED_BATCH_SIZE = 100;
 protocol.registerSchemesAsPrivileged([
   { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
@@ -258,6 +259,50 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => {
     setImmediate(resolve);
   });
+}
+
+function normalizeIsoTimestamp(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function emitGameUpdated(gameId: string): void {
+  const updated = repository.getGame(gameId);
+  if (!updated || !mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send("games:updated", { ...updated, sourceMatches: sourceService.search(updated.id) });
+}
+
+async function syncLocalLastPlayedFromPrefetch(repo: HyniteRepository, bridge: NativeBridge): Promise<number> {
+  const games = repo.getLocalGameExecutables();
+  if (games.length === 0) return 0;
+
+  const span = profileSpan("local-activity", "local-activity:prefetch-sync", { games: games.length });
+  let updatedCount = 0;
+  try {
+    for (let index = 0; index < games.length; index += PREFETCH_LAST_PLAYED_BATCH_SIZE) {
+      const batch = games.slice(index, index + PREFETCH_LAST_PLAYED_BATCH_SIZE);
+      const results = await bridge.getPrefetchLastRunTimes(batch.map((game) => game.executablePath));
+      const byPath = new Map(results.map((result) => [result.path.toLowerCase(), normalizeIsoTimestamp(result.lastRunAt)]));
+
+      for (const game of batch) {
+        const lastRunAt = byPath.get(game.executablePath.toLowerCase());
+        if (!lastRunAt) continue;
+        if (repo.updateLastPlayedAtIfNewer(game.id, lastRunAt)) {
+          updatedCount += 1;
+          emitGameUpdated(game.id);
+        }
+      }
+      await yieldToEventLoop();
+    }
+    span.end("ok", { games: games.length, updated: updatedCount });
+    return updatedCount;
+  } catch (error) {
+    span.end("error", { games: games.length, updated: updatedCount, error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
 }
 
 async function backfillLocalAddedAt(repo: HyniteRepository): Promise<void> {
@@ -2873,6 +2918,9 @@ app.whenReady().then(async () => {
 
     runAfterInitialRendererPaint(() => {
       profile("startup:background:start", "Startup background work started");
+      void syncLocalLastPlayedFromPrefetch(repository, nativeBridge).catch((error: unknown) => {
+        console.warn("Prefetch last-played sync failed", error);
+      });
       if (canSync) {
         void startSteamSync("steam", { refreshStaleMetadata: false }).catch((error: unknown) => {
           if (isSteamSyncCancelledError(error)) {

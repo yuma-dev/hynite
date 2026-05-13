@@ -181,6 +181,46 @@ describe("HyniteRepository", () => {
     repository.close();
   });
 
+  it("lists local executables and only advances last played timestamps", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "alpha",
+      title: "Alpha",
+      installState: "installed",
+      executablePath: "C:\\Games\\Alpha\\alpha.exe",
+      lastPlayedAt: "2026-05-05T10:00:00.000Z"
+    });
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "beta",
+      title: "Beta",
+      installState: "installed"
+    });
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "3",
+      title: "Steam",
+      installState: "installed",
+      executablePath: "C:\\Games\\Steam\\steam.exe"
+    });
+
+    expect(repository.getLocalGameExecutables()).toEqual([
+      {
+        id: "local:alpha",
+        executablePath: "C:\\Games\\Alpha\\alpha.exe",
+        lastPlayedAt: "2026-05-05T10:00:00.000Z"
+      }
+    ]);
+
+    expect(repository.updateLastPlayedAtIfNewer("local:alpha", "2026-05-04T10:00:00.000Z")).toBe(false);
+    expect(repository.getGame("local:alpha")?.lastPlayedAt).toBe("2026-05-05T10:00:00.000Z");
+    expect(repository.updateLastPlayedAtIfNewer("local:alpha", "2026-05-06T10:00:00.000Z")).toBe(true);
+    expect(repository.getGame("local:alpha")?.lastPlayedAt).toBe("2026-05-06T10:00:00.000Z");
+
+    repository.close();
+  });
+
   it("filters library queries by an explicit game id set", () => {
     const repository = createRepository();
     repository.upsertImportedGame({ provider: "steam", externalId: "1", title: "Alpha", installState: "unknown" });
