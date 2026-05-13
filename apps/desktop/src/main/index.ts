@@ -64,6 +64,7 @@ let isQuitting = false;
 let servicesShutDown = false;
 let controllerPollingStarted = false;
 let foregroundStartupBackgroundWorkScheduled = false;
+let settingsBackupTimer: NodeJS.Timeout | undefined;
 
 function resolveWindowIconPath(): string {
   const devIconPath = join(__dirname, "../../assets/icons/app.ico");
@@ -2000,10 +2001,26 @@ async function ensureTray(): Promise<void> {
 async function onSettingsChanged(settings: AppSettings): Promise<AppSettings> {
   applyLoginItemSettings(settings);
   rebuildTrayMenu(settings);
+  void settingsService?.createPeriodicBackupIfDue().catch((error: unknown) => {
+    console.warn("Failed to create periodic settings backup", error);
+  });
   if (!onboardingPreview) {
     await backgroundService?.refreshSettings();
   }
   return settings;
+}
+
+function startSettingsBackupTimer(): void {
+  if (onboardingPreview || settingsBackupTimer) return;
+  void settingsService.createPeriodicBackupIfDue().catch((error: unknown) => {
+    console.warn("Failed to create startup settings backup", error);
+  });
+  settingsBackupTimer = setInterval(() => {
+    void settingsService.createPeriodicBackupIfDue().catch((error: unknown) => {
+      console.warn("Failed to create periodic settings backup", error);
+    });
+  }, 60 * 60 * 1000);
+  settingsBackupTimer.unref?.();
 }
 
 async function showMainWindow(options: { withSplash: boolean; focus: boolean }): Promise<void> {
@@ -3286,6 +3303,14 @@ function registerIpc(): void {
   handleIpc("sources:exactTitleMatches", (_event, title: string) => sourceService.exactTitleMatches(title));
   handleIpc("clipboard:copy", (_event, text: string) => clipboard.writeText(text));
   handleIpc("settings:get", () => settingsService.get());
+  handleIpc("settings:list-backups", () => settingsService.listBackups());
+  handleIpc("settings:restore-backup", async (_event, id: string) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
+    return onSettingsChanged(await settingsService.restoreBackup(id));
+  });
+  handleIpc("settings:health", () => settingsService.detectHealthWarning());
   handleIpc("settings:update", async (_event, patch) => {
     if (onboardingPreview) {
       return settingsService.get();
@@ -3508,6 +3533,7 @@ app.whenReady().then(async () => {
     ? join(process.resourcesPath, "audio")
     : join(__dirname, "../../assets/audio");
   settingsService = new SettingsService(join(userData, "settings.json"), audioAssetsRoot);
+  startSettingsBackupTimer();
   diagnosticLogService = new DiagnosticLogService(transientUserDataPath(userData, "metadata-diagnostics.ndjson"));
   homeService = new HomeService(transientUserDataPath(userData, "home-cache.json"), diagnosticLogService);
   sourceService = new SourceService(repository);
@@ -3599,6 +3625,10 @@ app.on("before-quit", () => {
   if (startupHeartbeatTimer) {
     clearInterval(startupHeartbeatTimer);
     startupHeartbeatTimer = undefined;
+  }
+  if (settingsBackupTimer) {
+    clearInterval(settingsBackupTimer);
+    settingsBackupTimer = undefined;
   }
   stopResourceSampler();
   stopSystemAudioMonitor();

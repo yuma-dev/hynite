@@ -56,7 +56,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { isProfileEnabled, profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
 import { profileReactRender, startRuntimeFrameProfiler, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
@@ -2962,7 +2962,45 @@ function SyncStatusModal({ status, onClose }: { status?: SyncStatus; onClose: ()
   );
 }
 
-type SettingsTab = "steam" | "metadata" | "sources" | "audio" | "view" | "controller" | "advanced";
+function SettingsResetWarningModal({ warning, onClose }: { warning: SettingsHealthWarning; onClose: () => void }) {
+  const latest = warning.backups[0];
+  return (
+    <motion.div className="modal-backdrop switch-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <motion.div
+        className="name-dialog settings-warning-dialog"
+        initial={{ opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 8 }}
+        transition={{ duration: 0.14 }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-warning-title"
+      >
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">Settings warning</p>
+            <h2 id="settings-warning-title">Settings look reset</h2>
+          </div>
+          <button className="close-button inline-close" type="button" onClick={onClose} aria-label="Close warning">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="name-dialog-body switch-dialog-body">
+          <p>{warning.message}</p>
+          <p className="muted">Open DevTools console and run <code>await window.__hyniteSettings.list()</code>, then use the restore command printed next to the backup you want. Please report this bug with the backup date.</p>
+          {latest ? <code className="settings-warning-command">{latest.restoreCommand}</code> : null}
+          <div className="settings-actions">
+            <button className="primary-action" type="button" onClick={onClose}>
+              I understand
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+type SettingsTab = "steam" | "metadata" | "sources" | "audio" | "view" | "bigPicture" | "controller" | "advanced";
 
 function soundFileName(filePath?: string): string {
   if (!filePath) {
@@ -3252,6 +3290,11 @@ function SettingsScreen({
     setSettings(next);
   }
 
+  async function updateBigPictureSetting(patch: Partial<Pick<AppSettings, "bigPictureGrayscaleCovers" | "bigPictureDefaultTabId">>) {
+    const next = await window.hynite.settings.update(patch);
+    setSettings(next);
+  }
+
   async function updateController(controller: ControllerSettings) {
     const next = await window.hynite.settings.update({ controller });
     setSettings(next);
@@ -3409,6 +3452,7 @@ function SettingsScreen({
             ["sources", "Sources"],
             ["audio", "Audio"],
             ["view", "View"],
+            ["bigPicture", "Big Picture"],
             ["controller", "Controller"],
             ["advanced", "Advanced"]
           ].map(([id, label]) => (
@@ -3649,6 +3693,44 @@ function SettingsScreen({
                 />
                 <strong>{cardsPerRow}</strong>
               </label>
+            </section>
+          ) : null}
+
+          {tab === "bigPicture" ? (
+            <section className="settings-section">
+              <div className="settings-section-head">
+                <div>
+                  <h2>Big Picture</h2>
+                  <p className="settings-hint">Fullscreen library behavior for TV and controller use.</p>
+                </div>
+              </div>
+              <label className="settings-toggle-row">
+                <input
+                  type="checkbox"
+                  checked={settings?.bigPictureGrayscaleCovers !== false}
+                  onChange={(event) => void updateBigPictureSetting({ bigPictureGrayscaleCovers: event.currentTarget.checked })}
+                />
+                <span className="settings-toggle-control" aria-hidden="true" />
+                <span>
+                  <strong>Grayscale unfocused shelf covers</strong>
+                  <em>Focused covers stay full color; the grid always stays full color.</em>
+                </span>
+              </label>
+              <div className="steam-account-row">
+                <div>
+                  <strong>Startup folder</strong>
+                  <span>{settings?.bigPictureDefaultTabId ? settings.bigPictureDefaultTabId.replace(/^group:/, "Group: ") : "Use the first available folder"}</span>
+                </div>
+                <button
+                  className="secondary-action"
+                  disabled={!settings?.bigPictureDefaultTabId}
+                  onClick={() => void updateBigPictureSetting({ bigPictureDefaultTabId: undefined })}
+                >
+                  <RotateCcw size={14} />
+                  Reset
+                </button>
+              </div>
+              <p className="settings-hint">Use the star button in Big Picture on a group folder to make it the startup folder.</p>
             </section>
           ) : null}
 
@@ -5575,6 +5657,7 @@ function LauncherShell() {
   const [contextMenu, setContextMenu] = useState<GameContextMenuRequest | undefined>();
   const [nameDialog, setNameDialog] = useState<NameDialogState | undefined>();
   const [switchPrompt, setSwitchPrompt] = useState<SteamSwitchPrompt | undefined>();
+  const [settingsHealthWarning, setSettingsHealthWarning] = useState<SettingsHealthWarning | undefined>();
   const [launchHandoff, setLaunchHandoff] = useState<LaunchHandoffState | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
   const [query, setQueryState] = useState("");
@@ -5840,6 +5923,39 @@ function LauncherShell() {
       "  window.__hyniteMusic.skip()            — skip to the next track in the queue",
       "color:#8fbfff;font-weight:bold", "color:inherit"
     );
+  }, []);
+
+  useEffect(() => {
+    const api = {
+      async list(): Promise<SettingsBackupInfo[]> {
+        const backups = await window.hynite.settings.listBackups();
+        console.table(backups.map((backup) => ({
+          date: new Date(backup.createdAt).toLocaleString(),
+          id: backup.id,
+          restore: backup.restoreCommand
+        })));
+        return backups;
+      },
+      async restore(id: string): Promise<AppSettings> {
+        const restored = await window.hynite.settings.restoreBackup(id);
+        console.log("[hynite settings] restored backup", id);
+        settingsRef.current = restored;
+        setSettings(restored);
+        setSettingsHealthWarning(undefined);
+        void refresh();
+        return restored;
+      }
+    };
+    (window as unknown as Record<string, unknown>).__hyniteSettings = api;
+    console.log(
+      "%c[hynite settings] Backup commands available:%c\n" +
+      "  await window.__hyniteSettings.list()          - list backups and restore commands\n" +
+      "  await window.__hyniteSettings.restore(\"id\")  - restore one backup",
+      "color:#8fbfff;font-weight:bold", "color:inherit"
+    );
+    void window.hynite.settings.health().then(setSettingsHealthWarning).catch((error: unknown) => {
+      console.error("Failed to check settings health", error);
+    });
   }, []);
 
   useEffect(() => {
@@ -6773,6 +6889,9 @@ function LauncherShell() {
         />
         {nameDialog ? <NameDialog state={nameDialog} onClose={() => setNameDialog(undefined)} /> : null}
         {switchPrompt ? <SteamSwitchModal prompt={switchPrompt} /> : null}
+        {settingsHealthWarning ? (
+          <SettingsResetWarningModal warning={settingsHealthWarning} onClose={() => setSettingsHealthWarning(undefined)} />
+        ) : null}
       </div>
       <footer className="statusbar">
         <span className="status-dot" />

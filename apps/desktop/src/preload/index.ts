@@ -11,6 +11,8 @@ import type {
   LibraryQuery,
   OnboardingState,
   ProviderId,
+  SettingsBackupInfo,
+  SettingsHealthWarning,
   SourceExactMatch,
   SourceImportInput,
   SourceImportResult,
@@ -149,7 +151,10 @@ const api = {
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke("settings:get"),
-    update: (patch: Partial<AppSettings>): Promise<AppSettings> => ipcRenderer.invoke("settings:update", patch)
+    update: (patch: Partial<AppSettings>): Promise<AppSettings> => ipcRenderer.invoke("settings:update", patch),
+    listBackups: (): Promise<SettingsBackupInfo[]> => ipcRenderer.invoke("settings:list-backups"),
+    restoreBackup: (id: string): Promise<AppSettings> => ipcRenderer.invoke("settings:restore-backup", id),
+    health: (): Promise<SettingsHealthWarning | undefined> => ipcRenderer.invoke("settings:health")
   },
   sound: {
     url: (effectId: SoundEffectId): string => `hynite-sound:///${encodeURIComponent(effectId)}`

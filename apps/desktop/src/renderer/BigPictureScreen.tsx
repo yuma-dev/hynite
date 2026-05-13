@@ -1,4 +1,4 @@
-import { Profiler, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import { Play, X, Download, Info, SlidersHorizontal, Plus, Star } from "lucide-react";
 import type { AppSettings, ControllerActionId, ControllerSettings, Game, GameGroup } from "@hynite/core";
@@ -47,6 +47,7 @@ const VIEW_TRANSITION: { duration: number; ease: [number, number, number, number
   duration: 0.42,
   ease: [0.16, 1, 0.3, 1]
 };
+const GRID_FOCUS_SCROLL_PAD = 72;
 const SHELF_CONTENT_VARIANTS: Variants = {
   initial: (direction: TransitionDirection) => ({
     x: direction === "left" ? "-100%" : direction === "right" ? "100%" : 0,
@@ -324,6 +325,9 @@ export function BigPictureScreen({
           viewMode
         }), { toTabId: toTab?.id, toGameCount: toTab?.games.length ?? 0 });
         setTransitionDirection(next > current ? "right" : "left");
+        setFocusedIndex(0);
+        rowRef.current?.scrollTo({ left: 0, behavior: "auto" });
+        gridRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       }
       return next;
     });
@@ -344,6 +348,9 @@ export function BigPictureScreen({
           viewMode
         }), { toTabId: toTab?.id, toGameCount: toTab?.games.length ?? 0 });
         setTransitionDirection(delta > 0 ? "right" : "left");
+        setFocusedIndex(0);
+        rowRef.current?.scrollTo({ left: 0, behavior: "auto" });
+        gridRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       }
       return next;
     });
@@ -770,17 +777,22 @@ export function BigPictureScreen({
 
   // ── Scroll focused card flush to the left edge of the carousel.
   // Focus styling must not change row layout; otherwise scroll targets drift.
-  useEffect(() => {
+  useLayoutEffect(() => {
+    rowRef.current?.scrollTo({ left: 0, behavior: "auto" });
+    gridRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [currentTab?.id, viewMode]);
+
+  useLayoutEffect(() => {
     if (viewMode !== "shelf") return;
     const row = rowRef.current;
     if (!row) return;
     const focused = row.querySelector<HTMLElement>('[data-focused="true"]');
     if (!focused) return;
-    const focusedLeft = focused.offsetLeft;
     const rowStyle = getComputedStyle(row);
     const padLeft = parseFloat(rowStyle.paddingLeft) || 0;
-    row.scrollTo({ left: focusedLeft - padLeft, behavior: "smooth" });
-  }, [focusedIndex, tabIndex, viewMode]);
+    const targetLeft = focused.offsetLeft - padLeft;
+    row.scrollTo({ left: Math.max(0, targetLeft), behavior: "auto" });
+  }, [currentTab?.id, focusedIndex, viewMode]);
 
   // ── Scroll grid focused cell into view
   useEffect(() => {
@@ -793,9 +805,23 @@ export function BigPictureScreen({
       focusedIndex,
       gridColumns
     });
-    focused?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (focused) {
+      const gridRect = grid.getBoundingClientRect();
+      const focusedRect = focused.getBoundingClientRect();
+      if (focusedRect.top < gridRect.top + GRID_FOCUS_SCROLL_PAD) {
+        grid.scrollTo({
+          top: Math.max(0, grid.scrollTop + focusedRect.top - gridRect.top - GRID_FOCUS_SCROLL_PAD),
+          behavior: reduceMotion ? "auto" : "smooth"
+        });
+      } else if (focusedRect.bottom > gridRect.bottom - GRID_FOCUS_SCROLL_PAD) {
+        grid.scrollTo({
+          top: grid.scrollTop + focusedRect.bottom - gridRect.bottom + GRID_FOCUS_SCROLL_PAD,
+          behavior: reduceMotion ? "auto" : "smooth"
+        });
+      }
+    }
     requestAnimationFrame(() => span.end(focused ? "ok" : "error", { hasFocusedCell: Boolean(focused) }));
-  }, [currentTab?.id, focusedIndex, gridColumns, viewMode, tabIndex]);
+  }, [currentTab?.id, focusedIndex, gridColumns, reduceMotion, viewMode]);
 
   // ── Track grid column count via ResizeObserver on the grid
   useEffect(() => {
@@ -822,7 +848,10 @@ export function BigPictureScreen({
 
   return (
     <div
-      className={viewMode === "grid" ? "big-picture grid-view" : "big-picture"}
+      className={[
+        viewMode === "grid" ? "big-picture grid-view" : "big-picture",
+        settings?.bigPictureGrayscaleCovers === false ? "bp-no-cover-grayscale" : ""
+      ].filter(Boolean).join(" ")}
       style={{ "--bp-bg-base": backgroundBase } as CSSProperties}
     >
       <div className="bp-background" aria-hidden>

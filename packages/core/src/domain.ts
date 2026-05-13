@@ -649,6 +649,21 @@ export type AppSettings = {
   controller?: ControllerSettings;
   /** Tab ID to open by default when entering Big Picture mode. */
   bigPictureDefaultTabId?: string;
+  /** Grayscale non-focused game covers in Big Picture shelf mode. */
+  bigPictureGrayscaleCovers?: boolean;
+};
+
+export type SettingsBackupInfo = {
+  id: string;
+  createdAt: string;
+  fileName: string;
+  restoreCommand: string;
+};
+
+export type SettingsHealthWarning = {
+  kind: "clean-slate-reset";
+  message: string;
+  backups: SettingsBackupInfo[];
 };
 
 export type ExecutableInfo = {

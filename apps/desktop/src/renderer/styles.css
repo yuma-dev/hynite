@@ -4022,6 +4022,21 @@ dd {
   width: min(500px, 92vw);
 }
 
+.settings-warning-dialog {
+  width: min(560px, 92vw);
+}
+
+.settings-warning-command {
+  overflow: hidden;
+  display: block;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .switch-dialog-body p {
   margin: 0;
   color: var(--text);
@@ -5570,7 +5585,7 @@ dd {
   z-index: 2;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .bp-view-stage {
@@ -5584,7 +5599,7 @@ dd {
 .bp-shelf-stage {
   display: grid;
   grid-template-rows: 1fr auto;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .bp-top {
@@ -5686,7 +5701,7 @@ dd {
 
 .bp-hero {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   display: flex;
   align-items: flex-end;
   justify-content: flex-start;
@@ -5806,17 +5821,32 @@ dd {
   z-index: 2;
   display: flex;
   align-items: center;
-  overflow: hidden;
+  overflow: visible;
+}
+
+.bp-row-wrap::before {
+  content: "";
+  position: absolute;
+  left: var(--bp-pad-x);
+  top: calc(54px - (var(--bp-card-w) * 1.5 * (var(--bp-card-scale) - 1) / 2));
+  width: calc(var(--bp-card-w) * var(--bp-card-scale));
+  height: calc(var(--bp-card-w) * 1.5 * var(--bp-card-scale));
+  border-radius: 14px;
+  background: #fff;
+  filter: blur(72px);
+  opacity: 0.46;
+  pointer-events: none;
 }
 
 .bp-row {
+  position: relative;
+  z-index: 2;
   display: flex;
   gap: 22px;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-behavior: smooth;
-  /* padding-block leaves room for the focused card (scaled) + glow */
-  padding: 80px var(--bp-pad-x);
+  padding: 54px max(var(--bp-pad-x), calc(100vw - var(--bp-pad-x) - var(--bp-card-w))) 78px var(--bp-pad-x);
   scrollbar-width: none;
   width: 100%;
 }
@@ -5842,7 +5872,7 @@ dd {
               box-shadow 0.28s ease,
               opacity 0.28s ease;
   opacity: 0.6;
-  contain: layout paint style;
+  contain: layout style;
 }
 
 .bp-card::after {
@@ -5866,6 +5896,10 @@ dd {
   transition: filter 0.28s ease;
 }
 
+.bp-no-cover-grayscale .bp-card img {
+  filter: none;
+}
+
 .bp-card-fallback {
   display: flex;
   align-items: center;
@@ -5882,10 +5916,7 @@ dd {
 .bp-card.focused {
   transform: scale(var(--bp-card-scale));
   border-color: rgba(255, 255, 255, 0.85);
-  box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.6),
-    0 0 0 6px rgba(255, 255, 255, 0.05),
-    0 0 54px color-mix(in srgb, var(--bp-bg-base) 54%, rgba(255, 255, 255, 0.2));
+  box-shadow: none;
   opacity: 1;
   z-index: 2;
 }
@@ -6053,7 +6084,7 @@ dd {
 }
 
 .bp-grid-wrap {
-  overflow: hidden;
+  overflow: visible;
   padding: 12px var(--bp-pad-x) 24px;
 }
 
@@ -6066,7 +6097,7 @@ dd {
   row-gap: 28px;
   align-content: start;
   overflow-y: auto;
-  padding: 24px 10px 100px;
+  padding: 96px 72px 120px;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
@@ -6090,9 +6121,7 @@ dd {
   padding: 0;
   cursor: default;
   transition: transform 0.2s ease, border-color 0.2s ease;
-  contain: layout paint style;
-  content-visibility: auto;
-  contain-intrinsic-size: 260px 390px;
+  contain: layout style;
 }
 
 .bp-grid-card-cover {

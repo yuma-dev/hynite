@@ -215,6 +215,29 @@ describe("SettingsService", () => {
     await expect(service.update({ cardsPerRow: 1 })).resolves.toMatchObject({ cardsPerRow: 4 });
   });
 
+  it("creates, lists, restores, and health-checks periodic settings backups", async () => {
+    const service = createService();
+    await service.update({
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }],
+      bigPictureGrayscaleCovers: false
+    });
+
+    const created = await service.createPeriodicBackupIfDue();
+    expect(created?.restoreCommand).toContain("window.__hyniteSettings.restore");
+    expect(service.listBackups()).toHaveLength(1);
+
+    await service.update({ steamAccounts: [], bigPictureGrayscaleCovers: true, onboarding: undefined });
+    await expect(service.detectHealthWarning()).resolves.toMatchObject({
+      kind: "clean-slate-reset",
+      backups: [{ id: created?.id }]
+    });
+
+    await expect(service.restoreBackup(created!.id)).resolves.toMatchObject({
+      steamAccounts: [{ steamId: "owner-a" }],
+      bigPictureGrayscaleCovers: false
+    });
+  });
+
   it("persists and sanitizes controller bindings", async () => {
     const service = createService();
 

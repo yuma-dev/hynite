@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import { controllerActionIds, defaultLibraryView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
+import { controllerActionIds, defaultLibraryView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
 import { readAudioMetadata } from "./audioMetadata";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
@@ -66,6 +66,9 @@ const DEFAULT_CONTROLLER_SETTINGS: ControllerSettings = {
   bindings: DEFAULT_CONTROLLER_BINDINGS
 };
 
+const SETTINGS_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const SETTINGS_BACKUP_MAX_FILES = 30;
+
 const AUDIO_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"]);
 const BUNDLED_SOUND_FILES: Record<SoundEffectId, string> = {
   startup: "startup.mp3",
@@ -101,7 +104,8 @@ const defaultSettings: AppSettings = {
   sound: DEFAULT_SOUND_SETTINGS,
   music: DEFAULT_MUSIC_SETTINGS,
   controller: DEFAULT_CONTROLLER_SETTINGS,
-  windowState: undefined
+  windowState: undefined,
+  bigPictureGrayscaleCovers: true
 };
 
 function sanitizeTrackMetadata(value: unknown): string | undefined {
@@ -446,8 +450,58 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     music: sanitizeMusicSettings(raw.music, bundledAudio),
     onboarding: sanitizeOnboarding(raw.onboarding),
     controller: sanitizeControllerSettings(raw.controller),
-    windowState: sanitizeWindowState(raw.windowState)
+    windowState: sanitizeWindowState(raw.windowState),
+    bigPictureGrayscaleCovers: raw.bigPictureGrayscaleCovers !== false
   };
+}
+
+function backupTimestampName(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+function backupCreatedAtFromName(fileName: string): string | undefined {
+  const match = /^settings-(.+)\.json$/.exec(fileName);
+  if (!match) return undefined;
+  const iso = match[1]!.replace(
+    /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/,
+    "$1T$2:$3:$4.$5Z"
+  );
+  const timestamp = Date.parse(iso);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function settingsBackupInfo(fileName: string, createdAt: string): SettingsBackupInfo {
+  const id = fileName.replace(/\.json$/i, "");
+  return {
+    id,
+    fileName,
+    createdAt,
+    restoreCommand: `await window.__hyniteSettings.restore("${id}")`
+  };
+}
+
+function hasMeaningfulUserState(settings: AppSettings): boolean {
+  return Boolean(
+    settings.steamAccounts.length > 0 ||
+    settings.steamWebApiKey ||
+    settings.steamGridDbApiKey ||
+    settings.igdb ||
+    (settings.gameGroups?.length ?? 0) > 0 ||
+    (settings.localRoots?.length ?? 0) > 0 ||
+    (settings.localIgnoredPaths?.length ?? 0) > 0 ||
+    Object.keys(settings.launchAccountPreferences ?? {}).length > 0 ||
+    settings.onboarding ||
+    settings.bigPictureDefaultTabId ||
+    settings.reduceMotion ||
+    settings.autoHideAfterLaunch === false ||
+    settings.startWithWindows === false ||
+    settings.closeToTray === false ||
+    settings.backgroundUpdatesEnabled === false ||
+    settings.backgroundPlaytimeTracking === false ||
+    settings.backgroundWorkload !== "balanced" ||
+    settings.cardsPerRow !== defaultSettings.cardsPerRow ||
+    settings.bigPictureGrayscaleCovers === false
+  );
 }
 
 export class SettingsService {
@@ -462,6 +516,10 @@ export class SettingsService {
 
   private backupPath(): string {
     return `${this.filePath}.bak`;
+  }
+
+  private periodicBackupDir(): string {
+    return join(dirname(this.filePath), "settings-backups");
   }
 
   hasPersistedSettings(): boolean {
@@ -492,6 +550,80 @@ export class SettingsService {
     await writeFile(tempPath, JSON.stringify(settings, null, 2));
     await rename(tempPath, this.filePath);
     await copyFile(this.filePath, this.backupPath()).catch(() => undefined);
+  }
+
+  private periodicBackupFiles(): SettingsBackupInfo[] {
+    try {
+      return readdirSync(this.periodicBackupDir())
+        .flatMap((fileName) => {
+          const createdAt = backupCreatedAtFromName(fileName);
+          return createdAt ? [settingsBackupInfo(fileName, createdAt)] : [];
+        })
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    } catch {
+      return [];
+    }
+  }
+
+  private async prunePeriodicBackups(): Promise<void> {
+    const backups = this.periodicBackupFiles();
+    await Promise.all(backups.slice(SETTINGS_BACKUP_MAX_FILES).map((backup) =>
+      rm(join(this.periodicBackupDir(), backup.fileName), { force: true }).catch(() => undefined)
+    ));
+  }
+
+  async createPeriodicBackupIfDue(): Promise<SettingsBackupInfo | undefined> {
+    if (!existsSync(this.filePath)) return undefined;
+    const current = await this.get();
+    if (!hasMeaningfulUserState(current)) return undefined;
+    const latest = this.periodicBackupFiles()[0];
+    if (latest && Date.now() - Date.parse(latest.createdAt) < SETTINGS_BACKUP_INTERVAL_MS) {
+      return undefined;
+    }
+    await mkdir(this.periodicBackupDir(), { recursive: true });
+    const createdAt = new Date();
+    const fileName = `settings-${backupTimestampName(createdAt)}.json`;
+    await copyFile(this.filePath, join(this.periodicBackupDir(), fileName));
+    await this.prunePeriodicBackups();
+    return settingsBackupInfo(fileName, createdAt.toISOString());
+  }
+
+  listBackups(): SettingsBackupInfo[] {
+    return this.periodicBackupFiles();
+  }
+
+  async restoreBackup(id: string): Promise<AppSettings> {
+    const backup = this.periodicBackupFiles().find((entry) => entry.id === id || entry.fileName === id);
+    if (!backup) {
+      throw new Error(`Settings backup ${id} was not found.`);
+    }
+    const raw = JSON.parse(await readFile(join(this.periodicBackupDir(), backup.fileName), "utf8")) as LegacySettings;
+    const restored = migrate(raw, this.bundledAudio());
+    await this.writeSettings(restored);
+    return restored;
+  }
+
+  async detectHealthWarning(): Promise<SettingsHealthWarning | undefined> {
+    if (!this.hasPersistedSettings()) return undefined;
+    const current = await this.get();
+    if (hasMeaningfulUserState(current)) return undefined;
+    const usefulBackups: SettingsBackupInfo[] = [];
+    for (const backup of this.periodicBackupFiles()) {
+      try {
+        const raw = JSON.parse(await readFile(join(this.periodicBackupDir(), backup.fileName), "utf8")) as LegacySettings;
+        if (hasMeaningfulUserState(migrate(raw, this.bundledAudio()))) {
+          usefulBackups.push(backup);
+        }
+      } catch {
+        // Ignore unreadable backup entries.
+      }
+    }
+    if (usefulBackups.length === 0) return undefined;
+    return {
+      kind: "clean-slate-reset",
+      message: "Settings look like a clean slate even though older backups contain configured settings.",
+      backups: usefulBackups.slice(0, 5)
+    };
   }
 
   async get(): Promise<AppSettings> {
@@ -529,6 +661,7 @@ export class SettingsService {
     next.onboarding = sanitizeOnboarding(next.onboarding);
     next.controller = sanitizeControllerSettings(next.controller);
     next.windowState = sanitizeWindowState(next.windowState);
+    next.bigPictureGrayscaleCovers = next.bigPictureGrayscaleCovers !== false;
     await this.writeSettings(next);
     return next;
   }
