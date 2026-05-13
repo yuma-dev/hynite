@@ -11,7 +11,7 @@ import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider, type
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -58,6 +58,8 @@ let resourceSampleRunning = false;
 let rendererUnresponsiveAt: number | undefined;
 let windowStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let windowStateSaveChain: Promise<unknown> = Promise.resolve();
+let mainWindowUsesOnboardingBounds = false;
+let suppressWindowStateSave = false;
 let isQuitting = false;
 let servicesShutDown = false;
 let controllerPollingStarted = false;
@@ -75,10 +77,15 @@ function resolveWindowIconPath(): string {
 const windowIconPath = resolveWindowIconPath();
 const WINDOWS_APP_USER_MODEL_ID = "app.hynite.launcher";
 const BACKGROUND_ARG = "--background";
-const DEFAULT_WINDOW_WIDTH = 1440;
-const DEFAULT_WINDOW_HEIGHT = 900;
+const ONBOARDING_PREVIEW_ARG = "--onboarding-preview";
+const DEFAULT_WINDOW_WIDTH = 980;
+const DEFAULT_WINDOW_HEIGHT = 660;
 const MIN_WINDOW_WIDTH = 980;
-const MIN_WINDOW_HEIGHT = 680;
+const MIN_WINDOW_HEIGHT = 360;
+const ONBOARDING_WINDOW_WIDTH = 980;
+const ONBOARDING_WINDOW_HEIGHT = 560;
+const MIN_ONBOARDING_WINDOW_WIDTH = 760;
+const MIN_ONBOARDING_WINDOW_HEIGHT = 360;
 const MIN_VISIBLE_WINDOW_PX = 80;
 const METADATA_REFRESH_CONCURRENCY = 4;
 const RICH_METADATA_CONCURRENCY = 1;
@@ -90,6 +97,20 @@ const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
 const STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL = 5;
 const PREFETCH_LAST_PLAYED_BATCH_SIZE = 100;
 const RESOURCE_SAMPLE_INTERVAL_MS = 5_000;
+
+function envFlagEnabled(value: string | undefined): boolean {
+  return value === "1" || value === "true";
+}
+
+function isOnboardingPreview(argv = process.argv): boolean {
+  return envFlagEnabled(process.env.HYNITE_ONBOARDING_PREVIEW) || argv.includes(ONBOARDING_PREVIEW_ARG);
+}
+
+const onboardingPreview = isOnboardingPreview();
+
+function transientUserDataPath(userData: string, name: string): string {
+  return onboardingPreview ? join(app.getPath("temp"), `hynite-onboarding-preview-${process.pid}`, name) : join(userData, name);
+}
 protocol.registerSchemesAsPrivileged([
   { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
@@ -294,6 +315,30 @@ function normalizeIsoTimestamp(value: string | null | undefined): string | undef
   if (!value) return undefined;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+async function getOnboardingState(): Promise<OnboardingState> {
+  const firstRun = !settingsService.hasPersistedSettings();
+  const settings = await settingsService.get();
+  const completedAt = settings.onboarding?.completedAt ?? settings.onboarding?.skippedAt;
+  return {
+    shouldShow: onboardingPreview || (firstRun && !completedAt),
+    firstRun,
+    preview: onboardingPreview,
+    completedAt
+  };
+}
+
+async function completeOnboarding(input?: { skipped?: boolean }): Promise<AppSettings> {
+  if (onboardingPreview) {
+    return settingsService.get();
+  }
+  const now = new Date().toISOString();
+  return settingsService.update({
+    onboarding: input?.skipped
+      ? { version: 1, skippedAt: now }
+      : { version: 1, completedAt: now }
+  });
 }
 
 function emitGameUpdated(gameId: string): void {
@@ -1448,10 +1493,31 @@ function centerInWorkArea(display: Electron.Display, width: number, height: numb
   };
 }
 
-function clampWindowBoundsToDisplay(bounds: WindowBounds, display: Electron.Display): WindowBounds {
+type WindowSizing = {
+  width: number;
+  height: number;
+  minWidth: number;
+  minHeight: number;
+};
+
+const MAIN_WINDOW_SIZING: WindowSizing = {
+  width: DEFAULT_WINDOW_WIDTH,
+  height: DEFAULT_WINDOW_HEIGHT,
+  minWidth: MIN_WINDOW_WIDTH,
+  minHeight: MIN_WINDOW_HEIGHT
+};
+
+const ONBOARDING_WINDOW_SIZING: WindowSizing = {
+  width: ONBOARDING_WINDOW_WIDTH,
+  height: ONBOARDING_WINDOW_HEIGHT,
+  minWidth: MIN_ONBOARDING_WINDOW_WIDTH,
+  minHeight: MIN_ONBOARDING_WINDOW_HEIGHT
+};
+
+function clampWindowBoundsToDisplay(bounds: WindowBounds, display: Electron.Display, sizing: WindowSizing): WindowBounds {
   const { workArea } = display;
-  const width = Math.min(Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width)), Math.max(MIN_WINDOW_WIDTH, workArea.width));
-  const height = Math.min(Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height)), Math.max(MIN_WINDOW_HEIGHT, workArea.height));
+  const width = Math.min(Math.max(sizing.minWidth, Math.round(bounds.width)), Math.max(sizing.minWidth, workArea.width));
+  const height = Math.min(Math.max(sizing.minHeight, Math.round(bounds.height)), Math.max(sizing.minHeight, workArea.height));
   const minX = workArea.x;
   const minY = workArea.y;
   const maxX = workArea.x + workArea.width - Math.min(width, MIN_VISIBLE_WINDOW_PX);
@@ -1464,15 +1530,16 @@ function clampWindowBoundsToDisplay(bounds: WindowBounds, display: Electron.Disp
   };
 }
 
-function resolveWindowBounds(state: WindowState | undefined): WindowBounds {
+function resolveWindowBounds(state: WindowState | undefined, sizing: WindowSizing, useSavedState: boolean): WindowBounds {
+  const stateBounds = useSavedState ? state?.bounds : undefined;
   const displays = screen.getAllDisplays();
-  const savedDisplay = state?.displayId !== undefined
+  const savedDisplay = useSavedState && state?.displayId !== undefined
     ? displays.find((display) => display.id === state.displayId)
     : undefined;
   const display = savedDisplay
-    ?? (state?.bounds ? screen.getDisplayMatching(state.bounds) : screen.getPrimaryDisplay());
-  const fallback = centerInWorkArea(display, DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
-  return clampWindowBoundsToDisplay(state?.bounds ?? fallback, display);
+    ?? (stateBounds ? screen.getDisplayMatching(stateBounds) : screen.getPrimaryDisplay());
+  const fallback = centerInWorkArea(display, sizing.width, sizing.height);
+  return clampWindowBoundsToDisplay(stateBounds ?? fallback, display, sizing);
 }
 
 function currentWindowState(window: Electron.BrowserWindow): WindowState | undefined {
@@ -1494,6 +1561,9 @@ function currentWindowState(window: Electron.BrowserWindow): WindowState | undef
 }
 
 function persistWindowState(state: WindowState): void {
+  if (onboardingPreview || mainWindowUsesOnboardingBounds || suppressWindowStateSave) {
+    return;
+  }
   const write = () => settingsService.update({ windowState: state }).then(() => undefined);
   windowStateSaveChain = windowStateSaveChain.then(write, write).catch((err) => {
     console.error("Failed to persist window state", err);
@@ -1501,6 +1571,9 @@ function persistWindowState(state: WindowState): void {
 }
 
 function saveWindowStateNow(window: Electron.BrowserWindow | undefined = mainWindow): void {
+  if (suppressWindowStateSave || mainWindowUsesOnboardingBounds) {
+    return;
+  }
   if (windowStateSaveTimer) {
     clearTimeout(windowStateSaveTimer);
     windowStateSaveTimer = undefined;
@@ -1515,7 +1588,7 @@ function saveWindowStateNow(window: Electron.BrowserWindow | undefined = mainWin
 }
 
 function scheduleWindowStateSave(window: Electron.BrowserWindow | undefined = mainWindow): void {
-  if (!window || window.isDestroyed() || window.isMinimized()) {
+  if (suppressWindowStateSave || mainWindowUsesOnboardingBounds || !window || window.isDestroyed() || window.isMinimized()) {
     return;
   }
   if (windowStateSaveTimer) {
@@ -1526,6 +1599,38 @@ function scheduleWindowStateSave(window: Electron.BrowserWindow | undefined = ma
     saveWindowStateNow(window);
   }, 500);
   windowStateSaveTimer.unref?.();
+}
+
+async function restoreMainWindowBoundsAfterOnboarding(): Promise<void> {
+  const window = mainWindow;
+  if (!mainWindowUsesOnboardingBounds || !window || window.isDestroyed()) {
+    return;
+  }
+  suppressWindowStateSave = true;
+  try {
+    let windowState: WindowState | undefined;
+    try {
+      windowState = await settingsService.getWindowState();
+    } catch (error) {
+      console.warn("Failed to read app window state after onboarding", error);
+    }
+    if (window.isDestroyed() || mainWindow !== window) {
+      return;
+    }
+    const restoredBounds = resolveWindowBounds(windowState, MAIN_WINDOW_SIZING, true);
+    if (window.isMaximized()) {
+      window.unmaximize();
+    }
+    window.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
+    window.setBounds(restoredBounds);
+    if (windowState?.isMaximized) {
+      window.maximize();
+    }
+  } finally {
+    suppressWindowStateSave = false;
+    mainWindowUsesOnboardingBounds = false;
+  }
+  scheduleWindowStateSave(window);
 }
 
 function startBackgroundControllerPolling(): void {
@@ -1574,13 +1679,15 @@ function startBackgroundControllerPolling(): void {
   (intervalId as NodeJS.Timeout).unref?.();
 }
 
-function createWindow(windowState: WindowState | undefined, options: { showWhenReady?: boolean; focusWhenReady?: boolean } = {}): void {
-  const restoredBounds = resolveWindowBounds(windowState);
+function createWindow(windowState: WindowState | undefined, options: { showWhenReady?: boolean; focusWhenReady?: boolean; onboarding?: boolean } = {}): void {
+  const sizing = options.onboarding ? ONBOARDING_WINDOW_SIZING : MAIN_WINDOW_SIZING;
+  const restoredBounds = resolveWindowBounds(windowState, sizing, !options.onboarding);
+  mainWindowUsesOnboardingBounds = options.onboarding === true;
   profile("window:create:start", "Creating BrowserWindow");
   mainWindow = new BrowserWindow({
     ...restoredBounds,
-    minWidth: MIN_WINDOW_WIDTH,
-    minHeight: MIN_WINDOW_HEIGHT,
+    minWidth: sizing.minWidth,
+    minHeight: sizing.minHeight,
     show: false,
     frame: false,
     autoHideMenuBar: true,
@@ -1594,7 +1701,7 @@ function createWindow(windowState: WindowState | undefined, options: { showWhenR
       backgroundThrottling: false
     }
   });
-  if (windowState?.isMaximized) {
+  if (!options.onboarding && windowState?.isMaximized) {
     mainWindow.maximize();
   }
   profile("window:create:end", "BrowserWindow created");
@@ -1663,6 +1770,11 @@ function createWindow(windowState: WindowState | undefined, options: { showWhenR
   mainWindow.on("close", (event) => {
     saveWindowStateNow();
     if (isQuitting) {
+      return;
+    }
+    if (onboardingPreview) {
+      isQuitting = true;
+      app.quit();
       return;
     }
     event.preventDefault();
@@ -1791,6 +1903,10 @@ function isBackgroundLaunch(argv = process.argv): boolean {
 }
 
 function applyLoginItemSettings(settings: AppSettings): void {
+  if (onboardingPreview) {
+    profile("login-item:skipped", "Login item registration skipped in onboarding preview");
+    return;
+  }
   if (process.platform !== "win32" || !app.isPackaged) {
     profile("login-item:skipped", "Login item registration skipped outside packaged Windows", {
       startWithWindows: settings.startWithWindows !== false,
@@ -1812,6 +1928,11 @@ function applyLoginItemSettings(settings: AppSettings): void {
 }
 
 function requestMainWindowClose(): void {
+  if (onboardingPreview) {
+    isQuitting = true;
+    app.quit();
+    return;
+  }
   if (!mainWindow || mainWindow.isDestroyed()) {
     backgroundService?.start("tray");
     return;
@@ -1879,7 +2000,9 @@ async function ensureTray(): Promise<void> {
 async function onSettingsChanged(settings: AppSettings): Promise<AppSettings> {
   applyLoginItemSettings(settings);
   rebuildTrayMenu(settings);
-  await backgroundService?.refreshSettings();
+  if (!onboardingPreview) {
+    await backgroundService?.refreshSettings();
+  }
   return settings;
 }
 
@@ -1888,15 +2011,26 @@ async function showMainWindow(options: { withSplash: boolean; focus: boolean }):
     if (mainWindow.isMinimized()) mainWindow.restore();
     if (!mainWindow.isVisible()) mainWindow.show();
     if (options.focus) mainWindow.focus();
-    backgroundService?.start("foreground");
+    if (!onboardingPreview) {
+      backgroundService?.start("foreground");
+    }
     return;
   }
 
-  const windowState = await settingsService.getWindowState();
-  createWindow(windowState, { showWhenReady: !options.withSplash, focusWhenReady: options.focus && !options.withSplash });
-  backgroundService?.start("foreground");
-  startSystemAudioMonitor();
-  startBackgroundControllerPolling();
+  const [windowState, onboardingState] = await Promise.all([
+    settingsService.getWindowState(),
+    getOnboardingState()
+  ]);
+  createWindow(windowState, {
+    showWhenReady: !options.withSplash,
+    focusWhenReady: options.focus && !options.withSplash,
+    onboarding: onboardingState.shouldShow
+  });
+  if (!onboardingPreview) {
+    backgroundService?.start("foreground");
+    startSystemAudioMonitor();
+    startBackgroundControllerPolling();
+  }
 
   if (options.withSplash) {
     createSplashWindow();
@@ -1906,10 +2040,12 @@ async function showMainWindow(options: { withSplash: boolean; focus: boolean }):
     }, 30_000);
     startupReadyTimeout.unref?.();
   }
-  scheduleForegroundStartupBackgroundWork();
 }
 
 function scheduleForegroundStartupBackgroundWork(): void {
+  if (onboardingPreview) {
+    return;
+  }
   if (foregroundStartupBackgroundWorkScheduled) {
     return;
   }
@@ -2619,9 +2755,17 @@ async function runLocalScan(options: { skipUnchanged?: boolean; refreshMetadata?
 }
 
 function registerIpc(): void {
-  ipcMain.once("startup:ready", () => {
+  let startupReadyHandled = false;
+  ipcMain.on("startup:ready", (_event, input?: { mode?: "app" | "onboarding" }) => {
     profile("startup:ready", "Renderer signaled startup ready");
-    dismissSplash();
+    if (!startupReadyHandled) {
+      startupReadyHandled = true;
+      dismissSplash();
+    }
+    if (input?.mode === "app") {
+      void restoreMainWindowBoundsAfterOnboarding();
+      scheduleForegroundStartupBackgroundWork();
+    }
   });
 
   ipcMain.on("debug:profile", (_event, entry: { phase?: unknown; message?: unknown; details?: unknown; rendererElapsedMs?: unknown }) => {
@@ -2641,10 +2785,16 @@ function registerIpc(): void {
   });
 
   handleIpc("library:sync", async (_event, providerId?: ProviderId) => {
+    if (onboardingPreview) {
+      return { providerId: "steam" as const, scanned: 0, upserted: 0, warnings: ["Onboarding preview did not run Steam sync."] };
+    }
     return startSteamSync(providerId, { refreshStaleMetadata: true });
   });
 
   handleIpc("local:scan", async () => {
+    if (onboardingPreview) {
+      return { scanned: 0, skipped: 0, matched: 0, ambiguous: 0, unmatched: 0, issues: [] };
+    }
     const result = await runLocalScan();
     return result ?? { scanned: 0, skipped: 0, matched: 0, ambiguous: 0, unmatched: 0, issues: [] };
   });
@@ -2712,9 +2862,15 @@ function registerIpc(): void {
     });
   });
   handleIpc("local:set-ignored", async (_event, paths: string[]) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     return settingsService.update({ localIgnoredPaths: paths });
   });
   handleIpc("local:ignore-folder", async (_event, folderPath: string) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     const current = await settingsService.get();
     const ignored = new Set(current.localIgnoredPaths ?? []);
     ignored.add(folderPath);
@@ -2730,12 +2886,21 @@ function registerIpc(): void {
     }).length;
   });
   handleIpc("local:remove-under", (_event, folderPath: string) => {
+    if (onboardingPreview) {
+      return { removed: 0 };
+    }
     return { removed: repository.removeLocalGamesUnder(folderPath) };
   });
   handleIpc("local:remove-all", () => {
+    if (onboardingPreview) {
+      return { removed: 0 };
+    }
     return { removed: repository.removeAllLocalGames() };
   });
   handleIpc("local:remove-and-ignore", async (_event, args: { gameId: string; folderPath?: string }) => {
+    if (onboardingPreview) {
+      return { ok: true };
+    }
     repository.removeGame(args.gameId);
     if (args.folderPath) {
       const current = await settingsService.get();
@@ -2746,6 +2911,9 @@ function registerIpc(): void {
     return { ok: true };
   });
   handleIpc("local:remove-game", (_event, gameId: string) => {
+    if (onboardingPreview) {
+      return { ok: true };
+    }
     const game = repository.getGame(gameId);
     if (!game) {
       return { ok: true };
@@ -2765,6 +2933,15 @@ function registerIpc(): void {
       match?: { provider: "steam" | "igdb"; externalId: string; title: string };
     }
   ) => {
+    if (onboardingPreview) {
+      return {
+        gameId: "local:preview",
+        candidateId: "preview",
+        title: args.titleOverride ?? "Preview Game",
+        chosenExe: args.executablePath ?? "C:\\Games\\Preview\\Preview.exe",
+        identification: { kind: "unmatched" as const, reason: "preview" }
+      };
+    }
     const settings = await settingsService.get();
     const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
     const igdbAuth = settings.igdb
@@ -2809,12 +2986,18 @@ function registerIpc(): void {
     return result;
   });
   handleIpc("local:repair-library", () => {
+    if (onboardingPreview) {
+      return { deleted: 0 };
+    }
     return repository.repairPhantomLocalGames();
   });
   handleIpc("local:resolve-ambiguous", async (
     _event,
     args: { candidateId: string; chosen: { provider: "steam" | "igdb"; externalId: string; title: string } | null }
   ) => {
+    if (onboardingPreview) {
+      return { ok: true };
+    }
     const settings = await settingsService.get();
     const localId = makeGameId("local", args.candidateId);
     const game = repository.getGame(localId);
@@ -2867,6 +3050,9 @@ function registerIpc(): void {
     return { ok: true };
   });
   handleIpc("games:set-launch-exe", (_event, args: { gameId: string; executablePath: string }) => {
+    if (onboardingPreview) {
+      return { ok: true };
+    }
     repository.setExecutablePath(args.gameId, args.executablePath);
     return { ok: true };
   });
@@ -2906,22 +3092,37 @@ function registerIpc(): void {
     return result.filePaths;
   });
   handleIpc("local:set-roots", async (_event, roots: Array<{ path: string; depth: number }>) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     return settingsService.update({ localRoots: roots });
   });
   handleIpc("local:set-exclude-patterns", async (_event, patterns: string[]) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     return settingsService.update({ localExcludePatterns: patterns });
   });
   handleIpc("metadata:save-igdb-credentials", async (_event, args: { clientId: string; clientSecret: string }) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     const clientId = await nativeBridge.encryptSecret({ value: args.clientId, scope: "current-user" });
     const clientSecret = await nativeBridge.encryptSecret({ value: args.clientSecret, scope: "current-user" });
     return settingsService.update({ igdb: { clientId, clientSecret } });
   });
   handleIpc("metadata:clear-igdb-credentials", async () => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     return settingsService.update({ igdb: undefined });
   });
 
   handleIpc("library:list", (_event, query: LibraryQuery = {}) => repository.queryGames(query));
   handleIpc("library:clear", async () => {
+    if (onboardingPreview) {
+      return { cleared: 0 };
+    }
     await withSteamSyncStartLock(() => cancelActiveSteamSync("Steam sync cancelled before clearing the library"));
     clearRichMetadataQueue("Detail metadata cancelled before clearing the library");
     const cleared = repository.clearLibrary();
@@ -2965,6 +3166,13 @@ function registerIpc(): void {
   });
 
   handleIpc("games:update-assets", async (_event, id: string, update: GameAssetUpdate) => {
+    if (onboardingPreview) {
+      const game = repository.getGame(id);
+      if (!game) {
+        throw new Error(`Game ${id} was not found.`);
+      }
+      return { ...game, sourceMatches: [] };
+    }
     const game = repository.getGame(id);
     if (!game) {
       throw new Error(`Game ${id} was not found.`);
@@ -3016,25 +3224,53 @@ function registerIpc(): void {
   });
   handleIpc("steam:getActiveUser", () => getActiveSteamUser());
   handleIpc("steam:setAccountLocalUsername", async (_event, steamId: string, localUsername: string | undefined) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     const trimmed = localUsername?.trim();
     return settingsService.patchSteamAccount(steamId, { localUsername: trimmed ? trimmed : undefined });
   });
   handleIpc("steam:setPreferredLaunchAccount", async (_event, gameId: string, steamId: string | undefined) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     const trimmed = steamId?.trim();
     return settingsService.setLaunchAccountPreference(gameId, trimmed ? trimmed : undefined);
   });
-  handleIpc("steam:removeAccount", async (_event, steamId: string) => settingsService.removeSteamAccount(steamId));
+  handleIpc("steam:removeAccount", async (_event, steamId: string) => onboardingPreview ? settingsService.get() : settingsService.removeSteamAccount(steamId));
 
   handleIpc("home:get", async () => {
     const settings = await settingsService.get();
     const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
     return homeService.get(repository.listGames(), { steamGridDbApiKey, steamAppInfoProvider: fetchNativeSteamAppInfoMetadata });
   });
+  handleIpc("onboarding:state", () => getOnboardingState());
+  handleIpc("onboarding:complete", (_event, input?: { skipped?: boolean }) => completeOnboarding(input));
   handleIpc("sync:status", () => syncStatusService.get());
-  handleIpc("sources:import", (_event, input: SourceImportInput) => sourceService.import(input));
+  handleIpc("sources:import", (_event, input: SourceImportInput) => {
+    if (onboardingPreview) {
+      return {
+        sourceId: "preview-source",
+        name: "Preview source",
+        importedEntries: 24,
+        skippedEntries: 0
+      };
+    }
+    return sourceService.import(input);
+  });
   handleIpc("sources:list", () => sourceService.list());
-  handleIpc("sources:remove", (_event, id: string) => sourceService.remove(id));
-  handleIpc("sources:refreshSource", (_event, id: string, json: string) => sourceService.refreshSource(id, json));
+  handleIpc("sources:remove", (_event, id: string) => {
+    if (onboardingPreview) {
+      return undefined;
+    }
+    return sourceService.remove(id);
+  });
+  handleIpc("sources:refreshSource", (_event, id: string, json: string) => {
+    if (onboardingPreview) {
+      return { sourceId: id, name: "Preview source", importedEntries: 24, skippedEntries: 0 };
+    }
+    return sourceService.refreshSource(id, json);
+  });
   handleIpc("sources:search", (_event, gameId: string, options) => {
     const span = profileSpan("source-search", "sources:search", { gameId });
     const matches = sourceService.search(gameId, options);
@@ -3050,8 +3286,19 @@ function registerIpc(): void {
   handleIpc("sources:exactTitleMatches", (_event, title: string) => sourceService.exactTitleMatches(title));
   handleIpc("clipboard:copy", (_event, text: string) => clipboard.writeText(text));
   handleIpc("settings:get", () => settingsService.get());
-  handleIpc("settings:update", async (_event, patch) => onSettingsChanged(await settingsService.update(patch)));
+  handleIpc("settings:update", async (_event, patch) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
+    return onSettingsChanged(await settingsService.update(patch));
+  });
   handleIpc("steam:pair", async () => {
+    if (onboardingPreview) {
+      return {
+        steamId: "76561198000000000",
+        pairedAt: new Date().toISOString()
+      };
+    }
     const paired = await pairSteamAccount(mainWindow);
     const current = await settingsService.get();
     const existing = current.steamAccounts.find((account) => account.steamId === paired.steamId);
@@ -3081,6 +3328,9 @@ function registerIpc(): void {
     return paired;
   });
   handleIpc("steam:saveApiKey", async (_event, apiKey: string) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     const trimmed = apiKey.trim();
     if (!trimmed) {
       throw new Error("Steam Web API key is required.");
@@ -3088,14 +3338,20 @@ function registerIpc(): void {
     const encrypted = await nativeBridge.encryptSecret({ value: trimmed, scope: "current-user" });
     return settingsService.update({ steamWebApiKey: encrypted });
   });
-  handleIpc("steam:clearApiKey", async () => settingsService.update({ steamWebApiKey: undefined }));
+  handleIpc("steam:clearApiKey", async () => onboardingPreview ? settingsService.get() : settingsService.update({ steamWebApiKey: undefined }));
   handleIpc("steam:disconnect", async (_event, steamId?: string) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     if (steamId) {
       return settingsService.removeSteamAccount(steamId);
     }
     return settingsService.update({ steamAccounts: [] });
   });
   handleIpc("steam:connectFamily", async (_event, steamId: string) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     const current = await settingsService.get();
     if (!current.steamAccounts.some((account) => account.steamId === steamId)) {
       throw new Error("Pair the Steam account before connecting the family library.");
@@ -3117,6 +3373,9 @@ function registerIpc(): void {
     });
   });
   handleIpc("steam:refreshFamily", async (_event, steamId: string) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     const current = await settingsService.get();
     const target = current.steamAccounts.find((account) => account.steamId === steamId);
     if (!target?.familySession) {
@@ -3137,6 +3396,9 @@ function registerIpc(): void {
     });
   });
   handleIpc("steam:disconnectFamily", async (_event, steamId: string) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     await disconnectSteamFamilySession();
     return settingsService.patchSteamAccount(steamId, { familySession: undefined });
   });
@@ -3144,6 +3406,9 @@ function registerIpc(): void {
     return searchSteamStore(query, net.fetch);
   });
   handleIpc("metadata:saveSteamGridDbKey", async (_event, apiKey: string) => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
     const trimmed = apiKey.trim();
     if (!trimmed) {
       throw new Error("SteamGridDB API key is required.");
@@ -3152,7 +3417,7 @@ function registerIpc(): void {
     const encrypted = await nativeBridge.encryptSecret({ value: trimmed, scope: "current-user" });
     return settingsService.update({ steamGridDbApiKey: encrypted });
   });
-  handleIpc("metadata:clearSteamGridDbKey", async () => settingsService.update({ steamGridDbApiKey: undefined }));
+  handleIpc("metadata:clearSteamGridDbKey", async () => onboardingPreview ? settingsService.get() : settingsService.update({ steamGridDbApiKey: undefined }));
   handleIpc("native:openExternal", (_event, url: string) => {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
@@ -3184,8 +3449,9 @@ function registerIpc(): void {
     if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
   });
-  handleIpc("music:system-audio-active", () => getSystemAudioActive());
+  handleIpc("music:system-audio-active", () => onboardingPreview ? false : getSystemAudioActive());
   handleIpc("music:system-audio-debug", async () => {
+    if (onboardingPreview) return "onboarding preview";
     if (process.platform !== "win32") return "not win32";
     try {
       const script = buildSystemAudioDebugScript();
@@ -3197,6 +3463,9 @@ function registerIpc(): void {
     }
   });
   handleIpc("debug:seed", () => {
+    if (onboardingPreview) {
+      throw new Error("Debug seed is disabled in onboarding preview.");
+    }
     const seeded = repository.upsertImportedGame({
       provider: "steam",
       externalId: "1086940",
@@ -3225,27 +3494,30 @@ app.whenReady().then(async () => {
   startupProfileService = new StartupProfileService(userData, app.getVersion());
   profile("app:ready", "Electron app ready", {
     userData,
+    onboardingPreview,
     profileCommand: startupProfileService.enabled,
     versions: process.versions
   });
   startStartupHeartbeat();
-  repository = new HyniteRepository(join(userData, "hynite.db"));
+  repository = new HyniteRepository(onboardingPreview ? ":memory:" : join(userData, "hynite.db"));
   profile("services:repository", "Repository opened");
-  void backfillLocalAddedAt(repository);
+  if (!onboardingPreview) {
+    void backfillLocalAddedAt(repository);
+  }
   const audioAssetsRoot = app.isPackaged
     ? join(process.resourcesPath, "audio")
     : join(__dirname, "../../assets/audio");
   settingsService = new SettingsService(join(userData, "settings.json"), audioAssetsRoot);
-  diagnosticLogService = new DiagnosticLogService(join(userData, "metadata-diagnostics.ndjson"));
-  homeService = new HomeService(join(userData, "home-cache.json"), diagnosticLogService);
+  diagnosticLogService = new DiagnosticLogService(transientUserDataPath(userData, "metadata-diagnostics.ndjson"));
+  homeService = new HomeService(transientUserDataPath(userData, "home-cache.json"), diagnosticLogService);
   sourceService = new SourceService(repository);
-  assetCacheService = new AssetCacheService(join(userData, "asset-cache"), startupProfileService);
+  assetCacheService = new AssetCacheService(transientUserDataPath(userData, "asset-cache"), startupProfileService);
   assetCacheService.registerProtocol(protocol);
   soundFileService = new SoundFileService(() => settingsService.get());
   soundFileService.registerProtocol(protocol);
   soundFileService.registerMusicProtocol(protocol);
   nativeBridge = new NativeBridge();
-  syncStatusService = new SyncStatusService(() => mainWindow, join(userData, "sync-status.json"));
+  syncStatusService = new SyncStatusService(() => mainWindow, transientUserDataPath(userData, "sync-status.json"));
   launchTracker = new LaunchTracker(repository);
   launchTracker.on((event) => {
     if (event.kind === "started") {
@@ -3253,7 +3525,7 @@ app.whenReady().then(async () => {
     }
     emitGameUpdated(event.gameId);
   });
-  localImportService = new LocalImportService(join(userData, "local-scan-cache.json"), repository, nativeBridge);
+  localImportService = new LocalImportService(transientUserDataPath(userData, "local-scan-cache.json"), repository, nativeBridge);
   localPlaytimeMonitor = new LocalPlaytimeMonitor({
     repository,
     nativeBridge,
@@ -3282,8 +3554,10 @@ app.whenReady().then(async () => {
   profile("ipc:registered", "IPC handlers registered");
   const settings = await settingsService.get();
   applyLoginItemSettings(settings);
-  await ensureTray();
-  backgroundService.start(isBackgroundLaunch() ? "tray" : "foreground");
+  if (!onboardingPreview) {
+    await ensureTray();
+    backgroundService.start(isBackgroundLaunch() ? "tray" : "foreground");
+  }
   if (!isBackgroundLaunch()) {
     await showMainWindow({ withSplash: true, focus: true });
   }
@@ -3329,7 +3603,9 @@ app.on("before-quit", () => {
   stopResourceSampler();
   stopSystemAudioMonitor();
   backgroundService?.stop();
-  syncStatusService?.flush();
+  if (!onboardingPreview) {
+    syncStatusService?.flush();
+  }
   void startupProfileService?.finish();
   repository?.close();
   nativeBridge?.dispose();

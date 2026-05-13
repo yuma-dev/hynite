@@ -385,6 +385,33 @@ function sanitizeControllerSettings(value: unknown): ControllerSettings {
   };
 }
 
+function sanitizeIsoString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function sanitizeOnboarding(value: unknown): AppSettings["onboarding"] {
+  const candidate = value && typeof value === "object"
+    ? value as Partial<NonNullable<AppSettings["onboarding"]>>
+    : {};
+  if (candidate.version !== 1) {
+    return undefined;
+  }
+  const completedAt = sanitizeIsoString(candidate.completedAt);
+  const skippedAt = sanitizeIsoString(candidate.skippedAt);
+  if (!completedAt && !skippedAt) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    ...(completedAt ? { completedAt } : {}),
+    ...(skippedAt ? { skippedAt } : {})
+  };
+}
+
 function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSettings {
   const rawAccounts: LegacyAccount[] = Array.isArray(raw.steamAccounts)
     ? raw.steamAccounts
@@ -417,6 +444,7 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     gameGroups: sanitizeGameGroups(raw.gameGroups),
     sound: sanitizeSoundSettings(raw.sound, bundledAudio),
     music: sanitizeMusicSettings(raw.music, bundledAudio),
+    onboarding: sanitizeOnboarding(raw.onboarding),
     controller: sanitizeControllerSettings(raw.controller),
     windowState: sanitizeWindowState(raw.windowState)
   };
@@ -434,6 +462,10 @@ export class SettingsService {
 
   private backupPath(): string {
     return `${this.filePath}.bak`;
+  }
+
+  hasPersistedSettings(): boolean {
+    return existsSync(this.filePath) || existsSync(this.backupPath());
   }
 
   private async readRawSettings(): Promise<LegacySettings | undefined> {
@@ -494,6 +526,7 @@ export class SettingsService {
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
     next.sound = sanitizeSoundSettings(next.sound, this.bundledAudio());
     next.music = sanitizeMusicSettings(next.music, this.bundledAudio());
+    next.onboarding = sanitizeOnboarding(next.onboarding);
     next.controller = sanitizeControllerSettings(next.controller);
     next.windowState = sanitizeWindowState(next.windowState);
     await this.writeSettings(next);

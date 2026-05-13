@@ -9,6 +9,7 @@ import type {
   HomeModel,
   LaunchSession,
   LibraryQuery,
+  OnboardingState,
   ProviderId,
   SourceExactMatch,
   SourceImportInput,
@@ -37,6 +38,10 @@ export type LaunchOutcome =
   | { kind: "no-account"; reason: string };
 
 const api = {
+  onboarding: {
+    state: (): Promise<OnboardingState> => ipcRenderer.invoke("onboarding:state"),
+    complete: (input?: { skipped?: boolean }): Promise<AppSettings> => ipcRenderer.invoke("onboarding:complete", input)
+  },
   library: {
     sync: (providerId?: ProviderId): Promise<SyncResult> => ipcRenderer.invoke("library:sync", providerId),
     list: (query: LibraryQuery): Promise<Game[]> => ipcRenderer.invoke("library:list", query),
@@ -207,7 +212,7 @@ const api = {
       ipcRenderer.invoke("local:set-exclude-patterns", patterns)
   },
   startup: {
-    signalReady: (): void => ipcRenderer.send("startup:ready")
+    signalReady: (input?: { mode?: "app" | "onboarding" }): void => ipcRenderer.send("startup:ready", input)
   },
   debug: {
     profileEnabled: process.env.HYNITE_STARTUP_PROFILE === "1" || process.env.HYNITE_STARTUP_PROFILE === "true",

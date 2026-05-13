@@ -487,7 +487,7 @@ export type SteamFamilyAuthResult = {
 
 export type LocalRoot = {
   path: string;
-  /** 1 = each immediate subfolder is a game; 2 = also recurses one level. */
+  /** 1..3 folder scan depth; onboarding saves new roots with depth 3. */
   depth: number;
 };
 
@@ -544,6 +544,19 @@ export type MusicSettings = {
   continuousPlay?: boolean;
   gapMinMs?: number;
   gapMaxMs?: number;
+};
+
+export type OnboardingSettings = {
+  version: 1;
+  completedAt?: string;
+  skippedAt?: string;
+};
+
+export type OnboardingState = {
+  shouldShow: boolean;
+  firstRun: boolean;
+  preview: boolean;
+  completedAt?: string;
 };
 
 export type WindowBounds = {
@@ -628,6 +641,8 @@ export type AppSettings = {
   sound?: SoundSettings;
   /** Background music tracks played during launcher use. */
   music?: MusicSettings;
+  /** First-run onboarding completion marker. Absence alone does not force existing users through onboarding. */
+  onboarding?: OnboardingSettings;
   /** Last normal window placement restored by the Electron main process on startup. */
   windowState?: WindowState;
   /** Big Picture controller navigation and background focus shortcut bindings. */

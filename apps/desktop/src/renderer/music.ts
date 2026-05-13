@@ -289,11 +289,30 @@ export class MusicEngine {
     this.emit();
   }
 
-  onStartupComplete(): void {
-    if (this.active) return;
+  onStartupComplete(options: { skipStartupDelay?: boolean } = {}): void {
+    if (this.active) {
+      if (options.skipStartupDelay && this.startupTimer) {
+        clearTimeout(this.startupTimer);
+        this.startupTimer = undefined;
+        if (this.shouldBeAudible()) {
+          this.audible = true;
+          this.doResume();
+        }
+        this.emit();
+      }
+      return;
+    }
     this.active = true;
     this.startSystemPoll();
     if (!this.canPlay()) { this.emit(); return; }
+    if (options.skipStartupDelay) {
+      if (this.shouldBeAudible()) {
+        this.audible = true;
+        this.doResume();
+      }
+      this.emit();
+      return;
+    }
     if (this.settings.startupWithSoundEnabled === true) {
       if (this.shouldBeAudible()) {
         this.audible = true;

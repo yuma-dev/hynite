@@ -56,6 +56,21 @@ afterEach(() => {
 });
 
 describe("SettingsService", () => {
+  it("detects no persisted settings", () => {
+    const service = createService();
+    expect(service.hasPersistedSettings()).toBe(false);
+  });
+
+  it("detects primary or backup settings files", () => {
+    const service = createService();
+    writeFileSync(join(tempDir!, "settings.json"), JSON.stringify({ cacheTtlHours: 12 }));
+    expect(service.hasPersistedSettings()).toBe(true);
+
+    rmSync(join(tempDir!, "settings.json"), { force: true });
+    writeFileSync(join(tempDir!, "settings.json.bak"), JSON.stringify({ cacheTtlHours: 18 }));
+    expect(service.hasPersistedSettings()).toBe(true);
+  });
+
   it("migrates existing settings without launch account preferences", async () => {
     const service = createService();
     writeFileSync(join(tempDir!, "settings.json"), JSON.stringify({ cacheTtlHours: 12, reduceMotion: true }));
@@ -129,6 +144,52 @@ describe("SettingsService", () => {
       cacheTtlHours: 6,
       reduceMotion: true,
       autoHideAfterLaunch: true
+    });
+  });
+
+  it("sanitizes onboarding marker", async () => {
+    const service = createService();
+    writeFileSync(join(tempDir!, "settings.json"), JSON.stringify({
+      onboarding: {
+        version: 1,
+        completedAt: "2026-05-13T10:20:30.000Z",
+        skippedAt: "not-a-date"
+      }
+    }));
+
+    await expect(service.get()).resolves.toMatchObject({
+      onboarding: {
+        version: 1,
+        completedAt: "2026-05-13T10:20:30.000Z"
+      }
+    });
+
+    writeFileSync(join(tempDir!, "settings.json"), JSON.stringify({
+      onboarding: {
+        version: 2,
+        completedAt: "2026-05-13T10:20:30.000Z"
+      }
+    }));
+
+    const loaded = await service.get();
+    expect(loaded.onboarding).toBeUndefined();
+  });
+
+  it("updates onboarding marker without dropping unrelated settings", async () => {
+    const service = createService();
+    await service.update({
+      cacheTtlHours: 6,
+      reduceMotion: true,
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }]
+    });
+
+    await expect(service.update({
+      onboarding: { version: 1, skippedAt: "2026-05-13T10:00:00.000Z" }
+    })).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      reduceMotion: true,
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }],
+      onboarding: { version: 1, skippedAt: "2026-05-13T10:00:00.000Z" }
     });
   });
 

@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "node scripts/electron-vite.mjs dev --config apps/desktop/electron.vite.config.ts",
     "dev:profile": "node scripts/electron-vite.mjs --startup-profile dev --config apps/desktop/electron.vite.config.ts",
+    "dev:onboarding": "node scripts/electron-vite.mjs --onboarding-preview dev --config apps/desktop/electron.vite.config.ts",
     "profile:latest": "node scripts/read-latest-profile-report.mjs",
     "build": "npm run typecheck && electron-vite build --config apps/desktop/electron.vite.config.ts",
     "installer": "npm run build && npm run native:publish && electron-builder --win nsis",

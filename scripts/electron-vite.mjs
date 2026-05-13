@@ -11,6 +11,11 @@ const args = process.argv.slice(2).filter((arg) => {
     return false;
   }
 
+  if (arg === "--onboarding-preview") {
+    env.HYNITE_ONBOARDING_PREVIEW = "1";
+    return false;
+  }
+
   return true;
 });
 

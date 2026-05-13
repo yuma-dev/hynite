@@ -56,11 +56,12 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { isProfileEnabled, profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
 import { profileReactRender, startRuntimeFrameProfiler, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
 import { BigPictureScreen } from "./BigPictureScreen";
+import { OnboardingExperience } from "./onboarding/OnboardingExperience";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
 import { bindingLabel, bindingPressed, controllerBindingOrder, CONTROLLER_ACTION_HELP, CONTROLLER_ACTION_LABELS, firstPressedBinding, normalizeControllerSettings, pressedButtonIndexes, readGamepadState } from "./controllerInput";
@@ -5559,7 +5560,7 @@ function GameContextMenu({
   );
 }
 
-export function App() {
+function LauncherShell() {
   const [route, setRoute] = useState<Route>("home");
   const routeRef = useRef<Route>("home");
   const [home, setHome] = useState<HomeModel | undefined>();
@@ -6256,7 +6257,7 @@ export function App() {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       profileStartup("startup-overlay:hidden", "Startup overlay hidden");
       setStartupDone(true);
-      window.hynite.startup.signalReady();
+      window.hynite.startup.signalReady({ mode: "app" });
     }));
   }, [initialLoadComplete, homeFirstLoaded]);
 
@@ -6873,4 +6874,62 @@ export function App() {
     </AnimatePresence>
     </>
   );
+}
+
+export function App() {
+  const [onboardingState, setOnboardingState] = useState<OnboardingState | undefined>();
+  const [previewFinished, setPreviewFinished] = useState(false);
+
+  useEffect(() => {
+    void window.hynite.onboarding.state()
+      .then(setOnboardingState)
+      .catch((error: unknown) => {
+        console.error("Failed to load onboarding state", error);
+        setOnboardingState({ shouldShow: false, firstRun: false, preview: false });
+      });
+  }, []);
+
+  if (!onboardingState) {
+    return (
+      <div className="startup-overlay">
+        <StartupLoading />
+      </div>
+    );
+  }
+
+  if (onboardingState.preview && previewFinished) {
+    return (
+      <div className="onboarding-shell">
+        <div className="onboarding-preview-complete">
+          <strong>Preview complete</strong>
+          <span>No settings, sources, library rows, caches, sync state, or background jobs were changed.</span>
+          <button className="primary-action" type="button" onClick={() => setPreviewFinished(false)}>
+            Replay onboarding
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (onboardingState.shouldShow) {
+    return (
+      <OnboardingExperience
+        state={onboardingState}
+        onFinished={(_settings, skipped) => {
+          if (onboardingState.preview) {
+            setPreviewFinished(true);
+            return;
+          }
+          setOnboardingState({
+            ...onboardingState,
+            shouldShow: false,
+            completedAt: new Date().toISOString()
+          });
+          void skipped;
+        }}
+      />
+    );
+  }
+
+  return <LauncherShell />;
 }
