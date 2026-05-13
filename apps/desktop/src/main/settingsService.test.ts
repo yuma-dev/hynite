@@ -244,7 +244,8 @@ describe("SettingsService", () => {
         effects: {
           startup: { filePath: " C:\\Sounds\\boot.wav ", volume: -1, enabled: true, playback: "restart" },
           gameSelect: { filePath: "C:\\Sounds\\select.mp3", volume: 0.35, enabled: false, playback: "overlap" },
-          gameLaunch: { filePath: "C:\\Sounds\\launch.ogg", volume: 2, enabled: true, playback: "fade" }
+          gameLaunch: { filePath: "C:\\Sounds\\launch.ogg", volume: 2, enabled: true, playback: "fade" },
+          bigPictureOpen: { filePath: "C:\\Sounds\\bp.mp3", volume: 0.8, enabled: true, playback: "fade" }
         }
       }
     });
@@ -256,7 +257,8 @@ describe("SettingsService", () => {
         effects: {
           startup: { filePath: "C:\\Sounds\\boot.wav", volume: 0, enabled: true, playback: "restart" },
           gameSelect: { filePath: "C:\\Sounds\\select.mp3", volume: 0.35, enabled: false, playback: "overlap" },
-          gameLaunch: { filePath: "C:\\Sounds\\launch.ogg", volume: 1, enabled: true, playback: "fade" }
+          gameLaunch: { filePath: "C:\\Sounds\\launch.ogg", volume: 1, enabled: true, playback: "fade" },
+          bigPictureOpen: { filePath: "C:\\Sounds\\bp.mp3", volume: 0.8, enabled: true, playback: "fade" }
         }
       }
     });
@@ -270,6 +272,7 @@ describe("SettingsService", () => {
     writeFileSync(join(audioRoot, "soundeffects", "startup.mp3"), "startup");
     writeFileSync(join(audioRoot, "soundeffects", "selection.mp3"), "selection");
     writeFileSync(join(audioRoot, "soundeffects", "gamestart.mp3"), "gamestart");
+    writeFileSync(join(audioRoot, "soundeffects", "bplaunch.mp3"), "bplaunch");
     writeFileSync(join(audioRoot, "music", "01. Theme.mp3"), taggedMp3({
       TIT2: "Theme",
       TPE1: "Artist",
@@ -285,6 +288,7 @@ describe("SettingsService", () => {
           startup: { source: "bundled", filePath: join(audioRoot, "soundeffects", "startup.mp3") },
           gameSelect: { source: "bundled", filePath: join(audioRoot, "soundeffects", "selection.mp3") },
           gameLaunch: { source: "bundled", filePath: join(audioRoot, "soundeffects", "gamestart.mp3") },
+          bigPictureOpen: { source: "bundled", filePath: join(audioRoot, "soundeffects", "bplaunch.mp3") },
           navigation: { source: "bundled", filePath: join(audioRoot, "soundeffects", "selection.mp3") }
         }
       },

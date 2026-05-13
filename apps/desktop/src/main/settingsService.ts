@@ -71,6 +71,7 @@ const BUNDLED_SOUND_FILES: Record<SoundEffectId, string> = {
   startup: "startup.mp3",
   gameSelect: "selection.mp3",
   gameLaunch: "gamestart.mp3",
+  bigPictureOpen: "bplaunch.mp3",
   navigation: "selection.mp3"
 };
 

@@ -34,6 +34,12 @@ export const SOUND_EFFECT_DEFINITIONS: SoundEffectDefinition[] = [
     defaultPlayback: "fade"
   },
   {
+    id: "bigPictureOpen",
+    label: "Big Picture",
+    description: "Played when Big Picture opens.",
+    defaultPlayback: "fade"
+  },
+  {
     id: "navigation",
     label: "Navigation",
     description: "Played when switching primary sections.",

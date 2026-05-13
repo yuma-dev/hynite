@@ -11,3 +11,6 @@ obj/
 *.db-shm
 *.db-wal
 dev.*.log
+docs/
+AGENTS.md
+.claude

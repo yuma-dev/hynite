@@ -5731,7 +5731,7 @@ export function App() {
   useEffect(() => {
     const wasBigPicture = bigPictureRef.current;
     if (bigPicture && !wasBigPicture) {
-      soundEngine.play("gameLaunch");
+      soundEngine.play("bigPictureOpen");
     }
     musicEngine.setForcedOverrides({ forceEnabled: bigPicture, forceContinuous: bigPicture });
     void window.hynite.window.setFullScreen(bigPicture).catch(() => undefined);

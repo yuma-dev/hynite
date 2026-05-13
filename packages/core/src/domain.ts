@@ -496,7 +496,7 @@ export type IgdbCredentials = {
   clientSecret: EncryptedSecret;
 };
 
-export const soundEffectIds = ["startup", "gameSelect", "gameLaunch", "navigation"] as const;
+export const soundEffectIds = ["startup", "gameSelect", "gameLaunch", "bigPictureOpen", "navigation"] as const;
 
 export type SoundEffectId = typeof soundEffectIds[number];
 
