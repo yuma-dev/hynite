@@ -48,16 +48,22 @@ export class LaunchTracker {
       startedAt: new Date(startedAt).toISOString()
     };
 
+    const markStarted = (): void => {
+      try {
+        this.repository.addPlaytime(gameId, 0, session.startedAt);
+      } catch (error) {
+        console.warn(`Failed to persist local game launch for ${gameId}`, error);
+      }
+      this.emit({ kind: "started", gameId, session });
+    };
+
     // Shortcut/URL files — must go through the OS shell. We can't track exit, so playtime
     // is recorded only when the user re-launches and the shell handles the resolved target.
     if (SHELL_FALLBACK_EXTENSIONS.has(ext)) {
       void shell.openPath(executablePath).catch((error) => {
         console.warn(`Local game shell launch failed for ${gameId}`, error);
       });
-      try {
-        this.repository.addPlaytime(gameId, 0); // bumps lastPlayedAt
-      } catch {/* */}
-      this.emit({ kind: "started", gameId, session });
+      markStarted();
       return session;
     }
 
@@ -77,6 +83,8 @@ export class LaunchTracker {
       console.warn(`Local game launch error for ${gameId}`, error);
     });
 
+    child.once("spawn", markStarted);
+
     child.on("exit", (code) => {
       const minutes = Math.round((Date.now() - startedAt) / 60000);
       try {
@@ -88,8 +96,6 @@ export class LaunchTracker {
     });
 
     child.unref();
-
-    this.emit({ kind: "started", gameId, session });
     return session;
   }
 }

@@ -2883,6 +2883,9 @@ app.whenReady().then(async () => {
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, join(userData, "sync-status.json"));
   launchTracker = new LaunchTracker(repository);
+  launchTracker.on((event) => {
+    emitGameUpdated(event.gameId);
+  });
   localImportService = new LocalImportService(join(userData, "local-scan-cache.json"), repository, nativeBridge);
   profile("services:ready", "Main services initialized");
   registerIpc();

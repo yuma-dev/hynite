@@ -1936,9 +1936,13 @@ button {
 .cover-playtime {
   position: absolute;
   left: 12px;
+  right: 12px;
   bottom: 12px;
   color: rgba(255, 255, 255, 0.85);
   font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
 

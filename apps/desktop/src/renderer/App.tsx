@@ -535,6 +535,44 @@ function formatHours(minutes?: number): string {
   return `${Math.round(minutes / 60)}h played`;
 }
 
+function formatCompactPlaytime(minutes?: number): string {
+  if (!minutes) {
+    return "0h";
+  }
+  return `${Math.round(minutes / 60)}h`;
+}
+
+function formatRelativeAgo(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return undefined;
+  }
+
+  const elapsedMs = Math.max(0, Date.now() - timestamp);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const month = 30 * day;
+  const year = 365 * day;
+
+  if (elapsedMs < minute) return "now";
+  if (elapsedMs < hour) return `${Math.floor(elapsedMs / minute)}m ago`;
+  if (elapsedMs < day) return `${Math.floor(elapsedMs / hour)}h ago`;
+  if (elapsedMs < month) return `${Math.floor(elapsedMs / day)}d ago`;
+  if (elapsedMs < year) return `${Math.floor(elapsedMs / month)}mo ago`;
+  return `${Math.floor(elapsedMs / year)}y ago`;
+}
+
+function formatCoverActivity(game: Game): string {
+  const playtime = formatCompactPlaytime(game.playtimeMinutes);
+  const lastPlayed = formatRelativeAgo(game.lastPlayedAt);
+  return lastPlayed ? `${lastPlayed} - ${playtime}` : formatHours(game.playtimeMinutes);
+}
+
 function formatNumber(value?: number): string {
   return value === undefined ? "Unknown" : value.toLocaleString();
 }
@@ -1021,7 +1059,7 @@ const GameCover = memo(function GameCover({
   const logoProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
   const isInstalled = game.installState === "installed";
   const launchable = canLaunch(game);
-  const playtimeLabel = formatHours(game.playtimeMinutes);
+  const activity = formatCoverActivity(game);
   const familyShared = isFamilySharedOnly(game);
   const familyOwnersTooltip = familyShared
     ? `Shared by Steam Family${familySharedOwners(game).length > 0 ? `: ${familySharedOwners(game).join(", ")}` : ""}`
@@ -1159,7 +1197,7 @@ const GameCover = memo(function GameCover({
               <Info size={22} />
             </button>
           )}
-          <span className="cover-playtime">{playtimeLabel}</span>
+          <span className="cover-playtime">{activity}</span>
         </span>
       </span>
       {familyShared ? (
