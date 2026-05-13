@@ -73,6 +73,12 @@ export type NativePrefetchLastRunTime = {
   lastRunAt: string | null;
 };
 
+export type NativeRunningProcess = {
+  path: string;
+  pid: number;
+  startedAt?: string | null;
+};
+
 export class NativeBridge {
   private process?: ChildProcessWithoutNullStreams;
   private buffer = "";
@@ -157,6 +163,39 @@ export class NativeBridge {
       console.warn("Native getPrefetchLastRunTimes failed", error);
       return paths.map((path) => ({ path, lastRunAt: null }));
     }
+  }
+
+  async getRunningProcesses(paths: string[]): Promise<NativeRunningProcess[]> {
+    if (paths.length === 0) return [];
+    try {
+      const response = await this.request<{ results: NativeRunningProcess[] }>(
+        "getRunningProcesses", { paths }
+      );
+      return response.results ?? [];
+    } catch (error) {
+      console.warn("Native getRunningProcesses failed", error);
+      return [];
+    }
+  }
+
+  dispose(): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("Native bridge disposed."));
+    }
+    this.pending.clear();
+    this.buffer = "";
+    if (this.process && !this.process.killed) {
+      this.process.kill();
+    }
+    this.process = undefined;
+  }
+
+  getProcessInfo(): { pid?: number; running: boolean } {
+    return {
+      pid: this.process?.pid,
+      running: Boolean(this.process && !this.process.killed)
+    };
   }
 
   private request<T>(method: string, params: Record<string, unknown>): Promise<T> {

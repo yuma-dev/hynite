@@ -56,7 +56,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
+import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type PlayerMode, type ProviderId, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
 import { isProfileEnabled, profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
 import { profileReactRender, startRuntimeFrameProfiler, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
@@ -3241,6 +3241,11 @@ function SettingsScreen({
     setSettings(next);
   }
 
+  async function updateBackgroundSetting(patch: Partial<Pick<AppSettings, "startWithWindows" | "closeToTray" | "backgroundUpdatesEnabled" | "backgroundWorkload" | "backgroundPlaytimeTracking">>) {
+    const next = await window.hynite.settings.update(patch);
+    setSettings(next);
+  }
+
   async function setCardsPerRow(value: number) {
     const next = await window.hynite.settings.update({ cardsPerRow: normalizeCardsPerRow(value) });
     setSettings(next);
@@ -4047,6 +4052,70 @@ function SettingsScreen({
 
           {tab === "advanced" ? (
             <>
+              <section className="settings-section">
+                <h2>Startup & background</h2>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings?.startWithWindows !== false}
+                    onChange={(event) => void updateBackgroundSetting({ startWithWindows: event.currentTarget.checked })}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Start Hynite with Windows</strong>
+                    <em>Packaged Windows builds start directly into tray mode.</em>
+                  </span>
+                </label>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings?.closeToTray !== false}
+                    onChange={(event) => void updateBackgroundSetting({ closeToTray: event.currentTarget.checked })}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Keep running in tray when closed</strong>
+                    <em>Closes the UI and keeps background services alive.</em>
+                  </span>
+                </label>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings?.backgroundUpdatesEnabled !== false}
+                    onChange={(event) => void updateBackgroundSetting({ backgroundUpdatesEnabled: event.currentTarget.checked })}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Background updates</strong>
+                    <em>Runs lightweight Steam syncs, activity checks, and maintenance from the tray.</em>
+                  </span>
+                </label>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings?.backgroundPlaytimeTracking !== false}
+                    onChange={(event) => void updateBackgroundSetting({ backgroundPlaytimeTracking: event.currentTarget.checked })}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Track local game playtime in tray</strong>
+                    <em>Watches exact known local executable paths without loading the window.</em>
+                  </span>
+                </label>
+                <label className="music-number-row">
+                  <span>Workload</span>
+                  <select
+                    className="plain-input"
+                    value={settings?.backgroundWorkload ?? "balanced"}
+                    onChange={(event) => void updateBackgroundSetting({ backgroundWorkload: event.currentTarget.value as BackgroundWorkload })}
+                  >
+                    <option value="minimum">Minimum</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="max">Max</option>
+                  </select>
+                  <strong>{settings?.backgroundWorkload ?? "balanced"}</strong>
+                </label>
+              </section>
               <section className="settings-section">
                 <h2>Launch behavior</h2>
                 <label className="settings-toggle-row">

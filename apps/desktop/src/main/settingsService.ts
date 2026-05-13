@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import { controllerActionIds, defaultLibraryView, soundEffectIds, type AppSettings, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
+import { controllerActionIds, defaultLibraryView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
 import { readAudioMetadata } from "./audioMetadata";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
@@ -86,6 +86,11 @@ const defaultSettings: AppSettings = {
   cacheTtlHours: 24,
   reduceMotion: false,
   autoHideAfterLaunch: true,
+  startWithWindows: true,
+  closeToTray: true,
+  backgroundUpdatesEnabled: true,
+  backgroundWorkload: "balanced",
+  backgroundPlaytimeTracking: true,
   cardsPerRow: 6,
   libraryView: defaultLibraryView,
   launchAccountPreferences: {},
@@ -225,6 +230,10 @@ function sanitizeCardsPerRow(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(12, Math.max(4, Math.round(value)))
     : defaultSettings.cardsPerRow ?? 8;
+}
+
+function sanitizeBackgroundWorkload(value: unknown): BackgroundWorkload {
+  return value === "minimum" || value === "balanced" || value === "max" ? value : "balanced";
 }
 
 function clampVolume(value: unknown, fallback: number): number {
@@ -398,6 +407,11 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     ...rest,
     steamAccounts: cleanedAccounts,
     steamWebApiKey: liftedKey,
+    startWithWindows: raw.startWithWindows !== false,
+    closeToTray: raw.closeToTray !== false,
+    backgroundUpdatesEnabled: raw.backgroundUpdatesEnabled !== false,
+    backgroundWorkload: sanitizeBackgroundWorkload(raw.backgroundWorkload),
+    backgroundPlaytimeTracking: raw.backgroundPlaytimeTracking !== false,
     cardsPerRow: sanitizeCardsPerRow(raw.cardsPerRow),
     gameGroups: sanitizeGameGroups(raw.gameGroups),
     sound: sanitizeSoundSettings(raw.sound, bundledAudio),
@@ -470,6 +484,11 @@ export class SettingsService {
     if (!Array.isArray(next.steamAccounts)) {
       next.steamAccounts = [];
     }
+    next.startWithWindows = next.startWithWindows !== false;
+    next.closeToTray = next.closeToTray !== false;
+    next.backgroundUpdatesEnabled = next.backgroundUpdatesEnabled !== false;
+    next.backgroundWorkload = sanitizeBackgroundWorkload(next.backgroundWorkload);
+    next.backgroundPlaytimeTracking = next.backgroundPlaytimeTracking !== false;
     next.cardsPerRow = sanitizeCardsPerRow(next.cardsPerRow);
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
     next.sound = sanitizeSoundSettings(next.sound, this.bundledAudio());

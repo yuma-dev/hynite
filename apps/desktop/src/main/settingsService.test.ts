@@ -64,8 +64,49 @@ describe("SettingsService", () => {
       cacheTtlHours: 12,
       reduceMotion: true,
       autoHideAfterLaunch: true,
+      startWithWindows: true,
+      closeToTray: true,
+      backgroundUpdatesEnabled: true,
+      backgroundWorkload: "balanced",
+      backgroundPlaytimeTracking: true,
       launchAccountPreferences: {},
       gameGroups: []
+    });
+  });
+
+  it("persists and sanitizes background lifecycle settings", async () => {
+    const service = createService();
+
+    await expect(service.update({
+      cacheTtlHours: 6,
+      startWithWindows: false,
+      closeToTray: false,
+      backgroundUpdatesEnabled: false,
+      backgroundWorkload: "minimum",
+      backgroundPlaytimeTracking: false
+    })).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      startWithWindows: false,
+      closeToTray: false,
+      backgroundUpdatesEnabled: false,
+      backgroundWorkload: "minimum",
+      backgroundPlaytimeTracking: false
+    });
+
+    writeFileSync(join(tempDir!, "settings.json"), JSON.stringify({
+      cacheTtlHours: 9,
+      backgroundWorkload: "aggressive",
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }]
+    }));
+
+    await expect(service.get()).resolves.toMatchObject({
+      cacheTtlHours: 9,
+      startWithWindows: true,
+      closeToTray: true,
+      backgroundUpdatesEnabled: true,
+      backgroundWorkload: "balanced",
+      backgroundPlaytimeTracking: true,
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }]
     });
   });
 

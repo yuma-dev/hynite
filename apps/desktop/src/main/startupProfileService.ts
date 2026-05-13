@@ -92,6 +92,7 @@ type ProfileReport = {
   steamSync: Record<string, unknown>;
   ipc: Record<string, unknown>;
   runtimeFrames: Record<string, unknown>;
+  resources: Record<string, unknown>;
   renderer: Record<string, unknown>;
   main: Record<string, unknown>;
   raw: {
@@ -620,6 +621,7 @@ export class StartupProfileService implements ProfileSink {
       steamSync: this.steamSyncReport(),
       ipc: this.ipcReport(),
       runtimeFrames: this.runtimeFrameReport(),
+      resources: this.resourceReport(),
       renderer: this.processReport("renderer"),
       main: this.processReport("main"),
       raw: {
@@ -945,6 +947,61 @@ export class StartupProfileService implements ProfileSink {
         stats: metricStats(colorBends, (metric) => `${String(metric.details?.canvasWidth ?? "?")}x${String(metric.details?.canvasHeight ?? "?")}`),
         slowest: metricStats(colorBends).slowest
       }
+    };
+  }
+
+  private resourceReport(): Record<string, unknown> {
+    const metrics = this.metrics.filter((metric) => metric.category === "resource");
+    const samples = metrics.filter((metric) => metric.name === "resource:sample");
+    const byMode = new Map<string, ProfileMetric[]>();
+    for (const sample of samples) {
+      const mode = String(sample.details?.mode ?? "unknown");
+      const entries = byMode.get(mode) ?? [];
+      entries.push(sample);
+      byMode.set(mode, entries);
+    }
+
+    const fieldStats = (field: string, rows: ProfileMetric[] = samples): Record<string, unknown> => {
+      const values = rows
+        .map((metric) => metric.details?.[field])
+        .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+      if (values.length === 0) {
+        return { count: 0 };
+      }
+      const total = values.reduce((sum, value) => sum + value, 0);
+      return {
+        count: values.length,
+        min: round(Math.min(...values)),
+        max: round(Math.max(...values)),
+        avg: round(total / values.length),
+        p50: percentile(values, 50),
+        p95: percentile(values, 95)
+      };
+    };
+
+    const modeStats = Object.fromEntries([...byMode.entries()].map(([mode, rows]) => [mode, {
+      samples: rows.length,
+      mainRssMb: fieldStats("mainRssMb", rows),
+      totalElectronWorkingSetMb: fieldStats("totalElectronWorkingSetMb", rows),
+      totalElectronCpuPercent: fieldStats("totalElectronCpuPercent", rows),
+      nativeBridgeRssMb: fieldStats("nativeBridgeRssMb", rows),
+      rendererProcessCount: fieldStats("rendererProcessCount", rows)
+    }]));
+
+    return {
+      samples: samples.length,
+      mainRssMb: fieldStats("mainRssMb"),
+      heapUsedMb: fieldStats("heapUsedMb"),
+      totalElectronWorkingSetMb: fieldStats("totalElectronWorkingSetMb"),
+      totalElectronCpuPercent: fieldStats("totalElectronCpuPercent"),
+      nativeBridgeRssMb: fieldStats("nativeBridgeRssMb"),
+      rendererProcessCount: fieldStats("rendererProcessCount"),
+      byMode: modeStats,
+      latest: samples.at(-1)?.details,
+      slowestCpuSamples: [...samples]
+        .sort((a, b) => Number(b.details?.totalElectronCpuPercent ?? 0) - Number(a.details?.totalElectronCpuPercent ?? 0))
+        .slice(0, 20)
+        .map((metric) => ({ elapsedMs: metric.elapsedMs, cpuPercent: metric.details?.totalElectronCpuPercent, details: metric.details }))
     };
   }
 

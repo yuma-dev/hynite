@@ -162,4 +162,36 @@ describe("StartupProfileService", () => {
     expect(events).not.toContain("C:\\\\Users\\\\Example");
     expect(events).toContain("asset.png");
   });
+
+  it("summarizes resource samples by mode", async () => {
+    process.env.HYNITE_STARTUP_PROFILE = "1";
+    const userData = await tempUserData();
+    const service = new StartupProfileService(userData, "0.0.0-test");
+
+    service.metric("resource", "resource:sample", 1.5, {
+      mode: "tray",
+      mainRssMb: 120,
+      heapUsedMb: 40,
+      totalElectronWorkingSetMb: 140,
+      totalElectronCpuPercent: 1.5,
+      rendererProcessCount: 0,
+      nativeBridgeRssMb: 30
+    });
+    service.metric("resource", "resource:sample", 5, {
+      mode: "foreground",
+      mainRssMb: 180,
+      heapUsedMb: 75,
+      totalElectronWorkingSetMb: 360,
+      totalElectronCpuPercent: 5,
+      rendererProcessCount: 1,
+      nativeBridgeRssMb: 32
+    });
+    await service.finish();
+
+    const report = JSON.parse(await readFile(service.reportPath, "utf8"));
+    expect(report.resources.samples).toBe(2);
+    expect(report.resources.mainRssMb.max).toBe(180);
+    expect(report.resources.byMode.tray.rendererProcessCount.max).toBe(0);
+    expect(report.resources.byMode.foreground.rendererProcessCount.max).toBe(1);
+  });
 });

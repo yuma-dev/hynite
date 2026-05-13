@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, protocol, screen, shell, Tray } from "electron";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -23,6 +23,8 @@ import { searchSteamStore } from "./steamSearchService";
 import { StartupProfileService } from "./startupProfileService";
 import { SyncStatusService } from "./syncStatusService";
 import { AssetCacheService } from "./assetCacheService";
+import { BackgroundService } from "./backgroundService";
+import { LocalPlaytimeMonitor } from "./localPlaytimeMonitor";
 import {
   authenticateSteamSession,
   disconnectSteamFamilySession,
@@ -32,6 +34,7 @@ import {
 
 let mainWindow: Electron.BrowserWindow | undefined;
 let splashWindow: Electron.BrowserWindow | undefined;
+let tray: Tray | undefined;
 let startupReadyTimeout: ReturnType<typeof setTimeout> | undefined;
 let repository: HyniteRepository;
 let settingsService: SettingsService;
@@ -44,15 +47,23 @@ let soundFileService: SoundFileService;
 let diagnosticLogService: DiagnosticLogService;
 let localImportService: LocalImportService;
 let launchTracker: LaunchTracker;
+let localPlaytimeMonitor: LocalPlaytimeMonitor;
+let backgroundService: BackgroundService;
 let activeLocalScan: { promise: Promise<unknown>; controller: AbortController } | undefined;
 let startupProfileService: StartupProfileService | undefined;
 let startupHeartbeatTimer: NodeJS.Timeout | undefined;
+let resourceSampleTimer: NodeJS.Timeout | undefined;
+let resourceSampleRunning = false;
 let rendererUnresponsiveAt: number | undefined;
 let windowStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let windowStateSaveChain: Promise<unknown> = Promise.resolve();
+let isQuitting = false;
+let servicesShutDown = false;
+let controllerPollingStarted = false;
 
 const windowIconPath = join(__dirname, "../../assets/icons/app.ico");
 const WINDOWS_APP_USER_MODEL_ID = "app.hynite.launcher";
+const BACKGROUND_ARG = "--background";
 const DEFAULT_WINDOW_WIDTH = 1440;
 const DEFAULT_WINDOW_HEIGHT = 900;
 const MIN_WINDOW_WIDTH = 980;
@@ -61,11 +72,13 @@ const MIN_VISIBLE_WINDOW_PX = 80;
 const METADATA_REFRESH_CONCURRENCY = 4;
 const RICH_METADATA_CONCURRENCY = 1;
 const RICH_METADATA_STARTUP_LIMIT = Number.POSITIVE_INFINITY;
-const STARTUP_BACKGROUND_DELAY_MS = 1_000;
+const FOREGROUND_STARTUP_BACKGROUND_DELAY_MS = 1_000;
+const STARTUP_BACKGROUND_DELAY_MS = FOREGROUND_STARTUP_BACKGROUND_DELAY_MS;
 const STARTUP_LOCAL_SCAN_DELAY_MS = 3_000;
 const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
 const STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL = 5;
 const PREFETCH_LAST_PLAYED_BATCH_SIZE = 100;
+const RESOURCE_SAMPLE_INTERVAL_MS = 5_000;
 protocol.registerSchemesAsPrivileged([
   { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
@@ -74,6 +87,11 @@ protocol.registerSchemesAsPrivileged([
 
 if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
 }
 const richMetadataQueued = new Set<string>();
 const richMetadataQueue: string[] = [];
@@ -387,6 +405,116 @@ function startStartupHeartbeat(): void {
     }
   }, 500);
   startupHeartbeatTimer.unref?.();
+}
+
+function parseCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (char === "," && !quoted) {
+      values.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  values.push(current);
+  return values;
+}
+
+async function readProcessRssMb(pid: number | undefined): Promise<number | undefined> {
+  if (!pid || process.platform !== "win32") return undefined;
+  try {
+    const { stdout } = await execFileAsync("tasklist.exe", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
+      windowsHide: true,
+      timeout: 2_000
+    });
+    const line = stdout.split(/\r?\n/).map((entry) => entry.trim()).find((entry) => entry && !entry.includes("No tasks"));
+    if (!line) return undefined;
+    const columns = parseCsvLine(line);
+    const memText = columns[4] ?? "";
+    const kb = Number(memText.replace(/[^\d]/g, ""));
+    return Number.isFinite(kb) && kb > 0 ? Math.round((kb / 1024) * 10) / 10 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function sampleResources(): Promise<void> {
+  if (!startupProfileService?.enabled || resourceSampleRunning) return;
+  resourceSampleRunning = true;
+  try {
+    const memory = process.memoryUsage();
+    const electronMetrics = app.getAppMetrics();
+    const totalElectronWorkingSetMb = electronMetrics.reduce((sum, metric) => {
+      const workingSetKb = Number((metric as any).memory?.workingSetSize ?? 0);
+      return sum + (Number.isFinite(workingSetKb) ? workingSetKb / 1024 : 0);
+    }, 0);
+    const totalElectronCpuPercent = electronMetrics.reduce((sum, metric) => {
+      const cpu = Number((metric as any).cpu?.percentCPUUsage ?? 0);
+      return sum + (Number.isFinite(cpu) ? cpu : 0);
+    }, 0);
+    const rendererProcessCount = electronMetrics.filter((metric) => {
+      const type = String((metric as any).type ?? "").toLowerCase();
+      return type.includes("renderer") || type.includes("tab");
+    }).length;
+    const nativeInfo = nativeBridge?.getProcessInfo();
+    const nativeBridgeRssMb = await readProcessRssMb(nativeInfo?.pid);
+    const backgroundState = backgroundService?.getState();
+    const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+
+    startupProfileService.metric("resource", "resource:sample", Math.round(totalElectronCpuPercent * 10) / 10, {
+      mode: window ? "foreground" : "tray",
+      hasWindow: Boolean(window),
+      windowVisible: window?.isVisible() ?? false,
+      windowMinimized: window?.isMinimized() ?? false,
+      rendererProcessCount,
+      mainRssMb: Math.round((memory.rss / 1024 / 1024) * 10) / 10,
+      heapUsedMb: Math.round((memory.heapUsed / 1024 / 1024) * 10) / 10,
+      heapTotalMb: Math.round((memory.heapTotal / 1024 / 1024) * 10) / 10,
+      externalMb: Math.round((memory.external / 1024 / 1024) * 10) / 10,
+      totalElectronWorkingSetMb: Math.round(totalElectronWorkingSetMb * 10) / 10,
+      totalElectronCpuPercent: Math.round(totalElectronCpuPercent * 10) / 10,
+      nativeBridgeRunning: nativeInfo?.running ?? false,
+      nativeBridgePid: nativeInfo?.pid,
+      nativeBridgeRssMb,
+      backgroundMode: backgroundState?.mode,
+      backgroundTimerCount: backgroundState?.timerCount,
+      backgroundRunningSteam: backgroundState?.runningSteam,
+      backgroundRunningLocalScan: backgroundState?.runningLocalScan,
+      backgroundRunningPrefetch: backgroundState?.runningPrefetch
+    });
+  } catch (error) {
+    startupProfileService?.point("resource", "resource:sample-error", { error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    resourceSampleRunning = false;
+  }
+}
+
+function startResourceSampler(): void {
+  if (!startupProfileService?.enabled || resourceSampleTimer) return;
+  void sampleResources();
+  resourceSampleTimer = setInterval(() => {
+    void sampleResources();
+  }, RESOURCE_SAMPLE_INTERVAL_MS);
+  resourceSampleTimer.unref?.();
+}
+
+function stopResourceSampler(): void {
+  if (!resourceSampleTimer) return;
+  clearInterval(resourceSampleTimer);
+  resourceSampleTimer = undefined;
 }
 
 function isSteamSyncCancelledError(error: unknown): error is SteamSyncCancelledError {
@@ -1391,6 +1519,8 @@ function scheduleWindowStateSave(window: Electron.BrowserWindow | undefined = ma
 
 function startBackgroundControllerPolling(): void {
   if (process.platform !== "win32") return;
+  if (controllerPollingStarted) return;
+  controllerPollingStarted = true;
 
   let focusComboPressedPrev = false;
   let polling = false;
@@ -1433,7 +1563,7 @@ function startBackgroundControllerPolling(): void {
   (intervalId as NodeJS.Timeout).unref?.();
 }
 
-function createWindow(windowState: WindowState | undefined): void {
+function createWindow(windowState: WindowState | undefined, options: { showWhenReady?: boolean; focusWhenReady?: boolean } = {}): void {
   const restoredBounds = resolveWindowBounds(windowState);
   profile("window:create:start", "Creating BrowserWindow");
   mainWindow = new BrowserWindow({
@@ -1468,7 +1598,12 @@ function createWindow(windowState: WindowState | undefined): void {
 
   mainWindow.once("ready-to-show", () => {
     profile("window:ready-to-show", "Renderer ready to show");
-    mainWindow?.focus();
+    if (options.showWhenReady) {
+      mainWindow?.show();
+    }
+    if (options.focusWhenReady) {
+      mainWindow?.focus();
+    }
   });
 
   mainWindow.webContents.on("dom-ready", () => {
@@ -1514,7 +1649,31 @@ function createWindow(windowState: WindowState | undefined): void {
   mainWindow.on("leave-full-screen", () => {
     mainWindow?.webContents.send("window:fullScreenChanged", false);
   });
-  mainWindow.on("close", () => saveWindowStateNow());
+  mainWindow.on("close", (event) => {
+    saveWindowStateNow();
+    if (isQuitting) {
+      return;
+    }
+    event.preventDefault();
+    void settingsService.get().then((settings) => {
+      if (settings.closeToTray === false) {
+        isQuitting = true;
+        app.quit();
+        return;
+      }
+      profile("window:close-to-tray", "Destroying renderer and keeping tray background alive");
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.destroy();
+      }
+      backgroundService?.start("tray");
+    }).catch((error) => {
+      console.warn("Failed to read close-to-tray setting", error);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.destroy();
+      }
+      backgroundService?.start("tray");
+    });
+  });
   mainWindow.on("closed", () => {
     profile("window:closed", "BrowserWindow closed");
     mainWindow = undefined;
@@ -1614,6 +1773,175 @@ function runAfterInitialRendererPaint(task: () => void): void {
   window.webContents.once("did-finish-load", schedule);
   window.webContents.once("did-fail-load", schedule);
   setTimeout(schedule, STARTUP_BACKGROUND_DELAY_MS * 4);
+}
+
+function isBackgroundLaunch(argv = process.argv): boolean {
+  return argv.includes(BACKGROUND_ARG);
+}
+
+function applyLoginItemSettings(settings: AppSettings): void {
+  if (process.platform !== "win32" || !app.isPackaged) {
+    profile("login-item:skipped", "Login item registration skipped outside packaged Windows", {
+      startWithWindows: settings.startWithWindows !== false,
+      platform: process.platform,
+      packaged: app.isPackaged
+    });
+    return;
+  }
+
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: settings.startWithWindows !== false,
+      args: [BACKGROUND_ARG]
+    });
+    profile("login-item:updated", "Login item registration updated", { startWithWindows: settings.startWithWindows !== false });
+  } catch (error) {
+    console.warn("Failed to update login item settings", error);
+  }
+}
+
+function requestMainWindowClose(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    backgroundService?.start("tray");
+    return;
+  }
+  mainWindow.close();
+}
+
+function rebuildTrayMenu(settings: AppSettings): void {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {
+      label: "Open Hynite",
+      click: () => void showMainWindow({ withSplash: false, focus: true })
+    },
+    {
+      label: "Sync Steam Now",
+      click: () => void backgroundService?.runSteamSyncNow("tray").catch((error) => {
+        console.warn("Tray Steam sync failed", error);
+      })
+    },
+    { type: "separator" },
+    {
+      label: "Background updates",
+      type: "checkbox",
+      checked: settings.backgroundUpdatesEnabled !== false,
+      click: (item) => void settingsService.update({ backgroundUpdatesEnabled: item.checked }).then(onSettingsChanged).catch(console.error)
+    },
+    {
+      label: "Track local playtime",
+      type: "checkbox",
+      checked: settings.backgroundPlaytimeTracking !== false,
+      click: (item) => void settingsService.update({ backgroundPlaytimeTracking: item.checked }).then(onSettingsChanged).catch(console.error)
+    },
+    {
+      label: "Start with Windows",
+      type: "checkbox",
+      checked: settings.startWithWindows !== false,
+      click: (item) => void settingsService.update({ startWithWindows: item.checked }).then(onSettingsChanged).catch(console.error)
+    },
+    { type: "separator" },
+    {
+      label: "Quit Hynite",
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]));
+}
+
+async function ensureTray(): Promise<void> {
+  if (tray) return;
+  try {
+    const icon = nativeImage.createFromPath(windowIconPath);
+    tray = new Tray(icon);
+    tray.setToolTip("Hynite");
+    tray.on("click", () => void showMainWindow({ withSplash: false, focus: true }));
+    tray.on("double-click", () => void showMainWindow({ withSplash: false, focus: true }));
+    rebuildTrayMenu(await settingsService.get());
+  } catch (error) {
+    console.warn("Failed to create tray", error);
+  }
+}
+
+async function onSettingsChanged(settings: AppSettings): Promise<AppSettings> {
+  applyLoginItemSettings(settings);
+  rebuildTrayMenu(settings);
+  await backgroundService?.refreshSettings();
+  return settings;
+}
+
+async function showMainWindow(options: { withSplash: boolean; focus: boolean }): Promise<void> {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (options.focus) mainWindow.focus();
+    backgroundService?.start("foreground");
+    return;
+  }
+
+  const windowState = await settingsService.getWindowState();
+  createWindow(windowState, { showWhenReady: !options.withSplash, focusWhenReady: options.focus && !options.withSplash });
+  backgroundService?.start("foreground");
+  startSystemAudioMonitor();
+  startBackgroundControllerPolling();
+
+  if (options.withSplash) {
+    createSplashWindow();
+    startupReadyTimeout = setTimeout(() => {
+      profile("startup:ready-timeout", "Startup ready timeout - showing main window");
+      dismissSplash();
+    }, 30_000);
+    startupReadyTimeout.unref?.();
+    scheduleForegroundStartupBackgroundWork();
+  }
+}
+
+function scheduleForegroundStartupBackgroundWork(): void {
+  void settingsService.get().then((settings) => {
+    const canSync = Boolean(settings.steamWebApiKey) && settings.steamAccounts.length > 0;
+    profile("startup:settings-loaded", "Startup settings loaded", {
+      steamAccounts: settings.steamAccounts.length,
+      hasSteamWebApiKey: Boolean(settings.steamWebApiKey),
+      hasSteamGridDbApiKey: Boolean(settings.steamGridDbApiKey)
+    });
+    const localRoots = (settings.localRoots ?? []).filter((root) => root.path && root.path.trim().length > 0);
+    const runStartupLocalScan = (): void => {
+      if (localRoots.length === 0) return;
+      profile("startup:background:local-scan:scheduled", "Startup background local scan scheduled", { rootCount: localRoots.length, delayMs: STARTUP_LOCAL_SCAN_DELAY_MS });
+      setTimeout(() => {
+        profile("startup:background:local-scan", "Starting background local scan", { rootCount: localRoots.length });
+        void runLocalScan().catch((error: unknown) => {
+          console.warn("Startup local scan failed", error);
+        });
+      }, STARTUP_LOCAL_SCAN_DELAY_MS).unref?.();
+    };
+
+    runAfterInitialRendererPaint(() => {
+      profile("startup:background:start", "Startup background work started");
+      void syncLocalLastPlayedFromPrefetch(repository, nativeBridge).catch((error: unknown) => {
+        console.warn("Prefetch last-played sync failed", error);
+      });
+      if (canSync) {
+        void startSteamSync("steam", { refreshStaleMetadata: false }).catch((error: unknown) => {
+          if (isSteamSyncCancelledError(error)) {
+            return;
+          }
+          console.warn("Startup Steam sync failed", error);
+        }).finally(() => {
+          profile("startup:background:rich-backfill", "Queueing rich metadata after startup Steam sync");
+          enqueueRichMetadataBackfill();
+          runStartupLocalScan();
+        });
+        return;
+      }
+
+      profile("startup:background:rich-backfill", "Queueing rich metadata without startup Steam sync");
+      enqueueRichMetadataBackfill();
+      runStartupLocalScan();
+    });
+  });
 }
 
 async function startSteamSync(providerId?: ProviderId, options: { refreshStaleMetadata?: boolean } = {}): Promise<SyncResult> {
@@ -2686,7 +3014,7 @@ function registerIpc(): void {
   handleIpc("sources:exactTitleMatches", (_event, title: string) => sourceService.exactTitleMatches(title));
   handleIpc("clipboard:copy", (_event, text: string) => clipboard.writeText(text));
   handleIpc("settings:get", () => settingsService.get());
-  handleIpc("settings:update", (_event, patch) => settingsService.update(patch));
+  handleIpc("settings:update", async (_event, patch) => onSettingsChanged(await settingsService.update(patch)));
   handleIpc("steam:pair", async () => {
     const paired = await pairSteamAccount(mainWindow);
     const current = await settingsService.get();
@@ -2884,85 +3212,89 @@ app.whenReady().then(async () => {
   syncStatusService = new SyncStatusService(() => mainWindow, join(userData, "sync-status.json"));
   launchTracker = new LaunchTracker(repository);
   launchTracker.on((event) => {
+    if (event.kind === "started") {
+      localPlaytimeMonitor?.ignorePid(event.session.pid);
+    }
     emitGameUpdated(event.gameId);
   });
   localImportService = new LocalImportService(join(userData, "local-scan-cache.json"), repository, nativeBridge);
+  localPlaytimeMonitor = new LocalPlaytimeMonitor({
+    repository,
+    nativeBridge,
+    getSettings: () => settingsService.get(),
+    emitGameUpdated,
+    log: (level, message, details) => {
+      diagnosticLogService.log({ level, phase: "local:playtime", message, details });
+      syncStatusService.log(level === "warning" ? "warning" : "info", "local:playtime", message, details);
+    }
+  });
+  backgroundService = new BackgroundService({
+    getSettings: () => settingsService.get(),
+    startSteamSync,
+    runLocalScan,
+    syncLocalLastPlayedFromPrefetch: () => syncLocalLastPlayedFromPrefetch(repository, nativeBridge),
+    enqueueRichMetadataBackfill,
+    localPlaytimeMonitor,
+    isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
+    getSystemIdleTime: () => powerMonitor.getSystemIdleTime(),
+    cancelActiveSteamSync,
+    profile
+  });
   profile("services:ready", "Main services initialized");
+  startResourceSampler();
   registerIpc();
   profile("ipc:registered", "IPC handlers registered");
-  startSystemAudioMonitor();
-  const windowState = await settingsService.getWindowState();
-  createWindow(windowState);
-  startBackgroundControllerPolling();
-  createSplashWindow();
-  startupReadyTimeout = setTimeout(() => {
-    profile("startup:ready-timeout", "Startup ready timeout — showing main window");
-    dismissSplash();
-  }, 30_000);
-  startupReadyTimeout.unref?.();
-  void settingsService.get().then((settings) => {
-    const canSync = Boolean(settings.steamWebApiKey) && settings.steamAccounts.length > 0;
-    profile("startup:settings-loaded", "Startup settings loaded", {
-      steamAccounts: settings.steamAccounts.length,
-      hasSteamWebApiKey: Boolean(settings.steamWebApiKey),
-      hasSteamGridDbApiKey: Boolean(settings.steamGridDbApiKey)
-    });
-    const localRoots = (settings.localRoots ?? []).filter((root) => root.path && root.path.trim().length > 0);
-    const runStartupLocalScan = (): void => {
-      if (localRoots.length === 0) return;
-      profile("startup:background:local-scan:scheduled", "Startup background local scan scheduled", { rootCount: localRoots.length, delayMs: STARTUP_LOCAL_SCAN_DELAY_MS });
-      setTimeout(() => {
-        profile("startup:background:local-scan", "Starting background local scan", { rootCount: localRoots.length });
-        void runLocalScan().catch((error: unknown) => {
-          console.warn("Startup local scan failed", error);
-        });
-      }, STARTUP_LOCAL_SCAN_DELAY_MS).unref?.();
-    };
+  const settings = await settingsService.get();
+  applyLoginItemSettings(settings);
+  await ensureTray();
+  backgroundService.start(isBackgroundLaunch() ? "tray" : "foreground");
+  if (!isBackgroundLaunch()) {
+    await showMainWindow({ withSplash: true, focus: true });
+  }
+});
 
-    runAfterInitialRendererPaint(() => {
-      profile("startup:background:start", "Startup background work started");
-      void syncLocalLastPlayedFromPrefetch(repository, nativeBridge).catch((error: unknown) => {
-        console.warn("Prefetch last-played sync failed", error);
-      });
-      if (canSync) {
-        void startSteamSync("steam", { refreshStaleMetadata: false }).catch((error: unknown) => {
-          if (isSteamSyncCancelledError(error)) {
-            return;
-          }
-          console.warn("Startup Steam sync failed", error);
-        }).finally(() => {
-          profile("startup:background:rich-backfill", "Queueing rich metadata after startup Steam sync");
-          enqueueRichMetadataBackfill();
-          runStartupLocalScan();
-        });
-        return;
-      }
+app.on("second-instance", (_event, argv) => {
+  profile("app:second-instance", "Second instance requested", { background: isBackgroundLaunch(argv) });
+  if (!isBackgroundLaunch(argv)) {
+    void showMainWindow({ withSplash: false, focus: true });
+  }
+});
 
-      profile("startup:background:rich-backfill", "Queueing rich metadata without startup Steam sync");
-      enqueueRichMetadataBackfill();
-      runStartupLocalScan();
-    });
-  });
+powerMonitor.on("resume", () => {
+  void backgroundService?.onResume();
+});
+
+powerMonitor.on("unlock-screen", () => {
+  void backgroundService?.onResume();
 });
 
 app.on("window-all-closed", () => {
   profile("app:window-all-closed", "All windows closed");
-  if (startupHeartbeatTimer) {
-    clearInterval(startupHeartbeatTimer);
-    startupHeartbeatTimer = undefined;
-  }
   stopSystemAudioMonitor();
-  syncStatusService?.flush();
-  void startupProfileService?.finish();
-  repository?.close();
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
 });
 
 app.on("activate", () => {
   profile("app:activate", "Electron app activated");
   if (BrowserWindow.getAllWindows().length === 0) {
-    void settingsService.getWindowState().then((windowState) => createWindow(windowState));
+    void showMainWindow({ withSplash: false, focus: true });
   }
+});
+
+app.on("before-quit", () => {
+  isQuitting = true;
+  if (servicesShutDown) {
+    return;
+  }
+  servicesShutDown = true;
+  if (startupHeartbeatTimer) {
+    clearInterval(startupHeartbeatTimer);
+    startupHeartbeatTimer = undefined;
+  }
+  stopResourceSampler();
+  stopSystemAudioMonitor();
+  backgroundService?.stop();
+  syncStatusService?.flush();
+  void startupProfileService?.finish();
+  repository?.close();
+  nativeBridge?.dispose();
 });

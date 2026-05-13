@@ -107,6 +107,27 @@ if (!found) {
     }
   }
 
+  const resources = report.resources;
+  if (resources?.samples) {
+    console.log("\nResources:");
+    console.log(`- Samples: ${resources.samples}`);
+    console.log(`- Main RSS: avg ${resources.mainRssMb?.avg ?? 0} MB, peak ${resources.mainRssMb?.max ?? 0} MB`);
+    console.log(`- Electron working set: avg ${resources.totalElectronWorkingSetMb?.avg ?? 0} MB, peak ${resources.totalElectronWorkingSetMb?.max ?? 0} MB`);
+    console.log(`- Electron CPU: avg ${resources.totalElectronCpuPercent?.avg ?? 0}%, p95 ${resources.totalElectronCpuPercent?.p95 ?? 0}%, peak ${resources.totalElectronCpuPercent?.max ?? 0}%`);
+    console.log(`- Renderer processes: avg ${resources.rendererProcessCount?.avg ?? 0}, peak ${resources.rendererProcessCount?.max ?? 0}`);
+    if (resources.nativeBridgeRssMb?.count) {
+      console.log(`- Native bridge RSS: avg ${resources.nativeBridgeRssMb.avg ?? 0} MB, peak ${resources.nativeBridgeRssMb.max ?? 0} MB`);
+    }
+    const byMode = resources.byMode ?? {};
+    const modes = Object.entries(byMode);
+    if (modes.length) {
+      console.log("- By mode:");
+      for (const [mode, stats] of modes) {
+        console.log(`  - ${mode}: samples ${stats.samples ?? 0}, main RSS avg ${stats.mainRssMb?.avg ?? 0} MB, CPU avg ${stats.totalElectronCpuPercent?.avg ?? 0}%, renderers peak ${stats.rendererProcessCount?.max ?? 0}`);
+      }
+    }
+  }
+
   const freezes = report.freezes ?? [];
   if (freezes.length) {
     console.log("\nFreezes:");

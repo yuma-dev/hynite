@@ -588,6 +588,8 @@ export type ControllerSettings = {
   bindings: Partial<Record<ControllerActionId, ControllerButtonBinding>>;
 };
 
+export type BackgroundWorkload = "minimum" | "balanced" | "max";
+
 export type AppSettings = {
   steamAccounts: SteamAccountSettings[];
   /** Single Steam Web API key shared by every paired account (one key fetches any public profile). */
@@ -597,6 +599,16 @@ export type AppSettings = {
   reduceMotion: boolean;
   /** Shows a game launch handoff before minimizing Hynite after successful launches. */
   autoHideAfterLaunch: boolean;
+  /** Register packaged Windows app to start as tray-only background host at user login. */
+  startWithWindows: boolean;
+  /** Close/destroy renderer to tray instead of quitting the main process. */
+  closeToTray: boolean;
+  /** Allows scheduled background sync/activity work while Hynite is in tray. */
+  backgroundUpdatesEnabled: boolean;
+  /** Controls how much scheduled tray work Hynite performs. */
+  backgroundWorkload: BackgroundWorkload;
+  /** Tracks known local game executables while Hynite is in the background. */
+  backgroundPlaytimeTracking: boolean;
   /** Target number of game cards shown across Home rows and Library grid at desktop widths. */
   cardsPerRow?: number;
   libraryView?: LibraryView;

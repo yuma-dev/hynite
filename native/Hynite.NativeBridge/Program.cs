@@ -37,6 +37,7 @@ while (await Console.In.ReadLineAsync() is { } line)
             "steamGetAppInfo" => await SteamAppInfoClient.GetAppInfo(request.Params),
             "getFileVersionInfo" => GetFileVersionInfo(request.Params),
             "getPrefetchLastRunTimes" => GetPrefetchLastRunTimes(request.Params),
+            "getRunningProcesses" => GetRunningProcesses(request.Params),
             "watchProcess" => new { accepted = true },
             "pollGamepad" => PollGamepad(),
             _ => throw new InvalidOperationException($"Unknown method {request.Method}.")
@@ -220,6 +221,87 @@ static object GetPrefetchLastRunTimes(JsonElement parameters)
     }).ToList();
 
     return new { results };
+}
+
+static object GetRunningProcesses(JsonElement parameters)
+{
+    var requestedPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    if (parameters.TryGetProperty("paths", out var pathsElement) && pathsElement.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var element in pathsElement.EnumerateArray())
+        {
+            var path = element.GetString();
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+
+            try
+            {
+                var fullPath = Path.GetFullPath(path);
+                requestedPaths[NormalizeProcessPath(fullPath)] = fullPath;
+            }
+            catch
+            {
+                requestedPaths[NormalizeProcessPath(path)] = path;
+            }
+        }
+    }
+
+    var results = new List<object>();
+    if (requestedPaths.Count == 0)
+    {
+        return new { results };
+    }
+
+    foreach (var process in Process.GetProcesses())
+    {
+        using (process)
+        {
+            string? modulePath = null;
+            try
+            {
+                modulePath = process.MainModule?.FileName;
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(modulePath))
+                continue;
+
+            var key = NormalizeProcessPath(modulePath);
+            if (!requestedPaths.TryGetValue(key, out var requestedPath))
+                continue;
+
+            string? startedAt = null;
+            try
+            {
+                startedAt = process.StartTime.ToUniversalTime().ToString("O");
+            }
+            catch { }
+
+            results.Add(new
+            {
+                path = requestedPath,
+                pid = process.Id,
+                startedAt
+            });
+        }
+    }
+
+    return new { results };
+}
+
+static string NormalizeProcessPath(string path)
+{
+    try
+    {
+        return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToUpperInvariant();
+    }
+    catch
+    {
+        return path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToUpperInvariant();
+    }
 }
 
 static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
