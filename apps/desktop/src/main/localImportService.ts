@@ -9,6 +9,7 @@ import {
   type ExeFileInfo,
   type IdentifyCandidate,
   type IdentifyResult,
+  type LocalGameCandidate,
   type LocalScanCache,
   type LocalScanCacheEntry,
   type LocalScanIssue,
@@ -44,6 +45,36 @@ function localMetadataPatch(patch: GameMetadataPatch): GameMetadataPatch {
   return rest;
 }
 
+function normalizePathKey(path: string): string {
+  return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+function exeSignature(candidate: Pick<LocalGameCandidate, "exeFiles">): string {
+  return candidate.exeFiles
+    .map((path) => normalizePathKey(path))
+    .sort()
+    .join("\n");
+}
+
+function cacheEntryForCandidate(candidate: LocalGameCandidate): LocalScanCacheEntry {
+  return {
+    folderPath: candidate.folderPath,
+    mtimeMs: candidate.mtimeMs,
+    candidateId: candidate.id,
+    exeSignature: exeSignature(candidate)
+  };
+}
+
+function cacheEntryMatchesCandidate(entry: LocalScanCacheEntry | undefined, candidate: LocalGameCandidate): boolean {
+  if (!entry?.exeSignature) {
+    return false;
+  }
+  return entry.candidateId === candidate.id &&
+    normalizePathKey(entry.folderPath) === normalizePathKey(candidate.folderPath) &&
+    Math.abs(entry.mtimeMs - candidate.mtimeMs) < 1 &&
+    entry.exeSignature === exeSignature(candidate);
+}
+
 export type LocalImportRunOptions = {
   roots: Array<{ path: string; depth: number }>;
   excludePatterns: string[];
@@ -55,12 +86,15 @@ export type LocalImportRunOptions = {
   signal?: AbortSignal;
   /** Forces metadata refresh even when the cache is hit. */
   refreshMetadata?: boolean;
+  /** Skip unchanged cached candidates before PE metadata, identification, DB writes, and metadata refresh. */
+  skipUnchanged?: boolean;
   log?: LocalImportLogger;
   searchSteamStore?: (query: string) => Promise<IdentifyCandidate[]>;
 };
 
 export type LocalImportResult = {
   scanned: number;
+  skipped: number;
   imported: number;
   matched: number;
   ambiguous: number;
@@ -151,6 +185,9 @@ export class LocalImportService {
       },
       peMetadataLookup,
       identify: { steamSearch, igdbSearch, igdbExternalLookup },
+      shouldSkipCandidate: options.skipUnchanged
+        ? (candidate) => cacheEntryMatchesCandidate(cache.entries[candidate.id], candidate)
+        : undefined,
       refreshMetadata: async (game) => {
         const match = provider.lastReport?.matches.get(game.externalId);
         if (match?.provider === "steam") {
@@ -212,36 +249,37 @@ export class LocalImportService {
       }
 
       // Refresh metadata for the local entry using the matched provider.
-      try {
-        const patch = await provider.refreshMetadata(game);
-        if (patch && Object.keys(patch).length > 0) {
-          this.repository.applyMetadata(persisted.id, localMetadataPatch(patch));
+      if (options.refreshMetadata !== false) {
+        try {
+          const patch = await provider.refreshMetadata(game);
+          if (patch && Object.keys(patch).length > 0) {
+            this.repository.applyMetadata(persisted.id, localMetadataPatch(patch));
+          }
+        } catch (error) {
+          options.log?.("warning", "Local metadata refresh failed", {
+            candidateId,
+            match,
+            error: errorMessage(error)
+          });
         }
-      } catch (error) {
-        options.log?.("warning", "Local metadata refresh failed", {
-          candidateId,
-          match,
-          error: errorMessage(error)
-        });
       }
 
-      // Update cache with current mtime.
-      const entry: LocalScanCacheEntry = {
-        folderPath: game.installDirectory ?? "",
-        mtimeMs: Date.now(),
-        candidateId
-      };
-      cache.entries[candidateId] = entry;
+      const candidate = provider.lastReport?.candidates.get(candidateId);
+      if (candidate) {
+        cache.entries[candidateId] = cacheEntryForCandidate(candidate);
+      }
     }
 
     await this.saveCache();
 
     const issues = provider.lastReport?.issues ?? [];
+    const skipped = provider.lastReport?.skipped ?? 0;
     const ambiguous = issues.filter((issue) => issue.reason === "ambiguous_match" || issue.reason === "ambiguous_exe").length;
     const unmatched = issues.filter((issue) => issue.reason === "unmatched").length;
 
     options.log?.("info", "Local scan complete", {
-      scanned: imported.length,
+      scanned: imported.length + skipped,
+      skipped,
       matched,
       ambiguous,
       unmatched,
@@ -249,7 +287,8 @@ export class LocalImportService {
     });
 
     return {
-      scanned: imported.length,
+      scanned: imported.length + skipped,
+      skipped,
       imported: upserted,
       matched,
       ambiguous,

@@ -41,7 +41,7 @@ describe("BackgroundService", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("foreground mode starts playtime monitor without scheduling tray jobs", async () => {
+  it("foreground mode keeps passive monitoring and maintenance timers active", async () => {
     const localPlaytimeMonitor = monitor();
     const startSteamSync = vi.fn();
     const service = new BackgroundService({
@@ -57,8 +57,28 @@ describe("BackgroundService", () => {
     await Promise.resolve();
 
     expect(localPlaytimeMonitor.start).toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(localPlaytimeMonitor.stop).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
     expect(startSteamSync).not.toHaveBeenCalled();
+  });
+
+  it("tray mode starts playtime monitor and schedules tray jobs", async () => {
+    const localPlaytimeMonitor = monitor();
+    const service = new BackgroundService({
+      getSettings: async () => settings(),
+      startSteamSync: vi.fn(),
+      runLocalScan: vi.fn(),
+      syncLocalLastPlayedFromPrefetch: vi.fn(async () => 0),
+      enqueueRichMetadataBackfill: vi.fn(),
+      localPlaytimeMonitor
+    });
+
+    service.start("tray");
+    await Promise.resolve();
+
+    expect(localPlaytimeMonitor.start).toHaveBeenCalled();
+    expect(localPlaytimeMonitor.stop).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
   });
 
   it("skips tray Steam sync without credentials or accounts", async () => {
@@ -128,5 +148,58 @@ describe("BackgroundService", () => {
 
     expect(runLocalScan).not.toHaveBeenCalled();
     expect(enqueueRichMetadataBackfill).not.toHaveBeenCalled();
+  });
+
+  it("runs passive local scans with unchanged-cache skipping enabled", async () => {
+    const runLocalScan = vi.fn(async () => undefined);
+    const service = new BackgroundService({
+      getSettings: async () => settings({
+        localRoots: [{ path: "C:\\Games", depth: 1 }]
+      }),
+      startSteamSync: vi.fn(),
+      runLocalScan,
+      syncLocalLastPlayedFromPrefetch: vi.fn(async () => 0),
+      enqueueRichMetadataBackfill: vi.fn(),
+      localPlaytimeMonitor: monitor(),
+      getSystemIdleTime: () => 10 * 60
+    });
+
+    service.start("foreground");
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(runLocalScan).toHaveBeenCalledWith({ skipUnchanged: true, refreshMetadata: true });
+  });
+
+  it("defers capped rich backfill after passive Steam sync", async () => {
+    const startSteamSync = vi.fn(async () => ({ providerId: "steam" as const, scanned: 0, upserted: 0, warnings: [] }));
+    const enqueueRichMetadataBackfill = vi.fn();
+    const service = new BackgroundService({
+      getSettings: async () => settings({
+        steamAccounts: [{ steamId: "a", pairedAt: "2026-01-01T00:00:00.000Z" }],
+        steamWebApiKey: { cipherText: "x", scope: "current-user" }
+      }),
+      startSteamSync,
+      runLocalScan: vi.fn(),
+      syncLocalLastPlayedFromPrefetch: vi.fn(async () => 0),
+      enqueueRichMetadataBackfill,
+      localPlaytimeMonitor: monitor(),
+      isOnBatteryPower: () => false
+    });
+
+    service.start("foreground");
+    await Promise.resolve();
+    await service.runSteamSyncNow("timer");
+
+    expect(startSteamSync).toHaveBeenCalledWith("steam", {
+      refreshStaleMetadata: false,
+      replaceActive: false,
+      richBackfillLimit: false
+    });
+    expect(enqueueRichMetadataBackfill).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+    expect(enqueueRichMetadataBackfill).toHaveBeenCalledWith(25);
   });
 });

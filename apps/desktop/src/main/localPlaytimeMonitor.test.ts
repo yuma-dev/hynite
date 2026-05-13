@@ -84,6 +84,87 @@ describe("LocalPlaytimeMonitor", () => {
     expect(writes).toHaveLength(0);
   });
 
+  it("uses slow idle polling until a local session is active", async () => {
+    const getRunningProcesses = vi.fn(async () => []);
+    const monitor = new LocalPlaytimeMonitor({
+      repository: {
+        getLocalGameExecutables: () => [{ id: "local:example", executablePath: "C:\\Games\\Example\\game.exe", lastPlayedAt: null }],
+        addPlaytime: vi.fn()
+      },
+      nativeBridge: { getRunningProcesses },
+      getSettings: async () => settings()
+    });
+
+    await monitor.start();
+    await vi.runOnlyPendingTimersAsync();
+    expect(getRunningProcesses).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(getRunningProcesses).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(4.5 * 60_000);
+    expect(getRunningProcesses).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses active polling while tracking a local session", async () => {
+    let running = [{ path: "C:\\Games\\Example\\game.exe", pid: 42, startedAt: "2026-05-13T10:00:00.000Z" }];
+    const getRunningProcesses = vi.fn(async () => running);
+    const monitor = new LocalPlaytimeMonitor({
+      repository: {
+        getLocalGameExecutables: () => [{ id: "local:example", executablePath: "C:\\Games\\Example\\game.exe", lastPlayedAt: null }],
+        addPlaytime: vi.fn()
+      },
+      nativeBridge: { getRunningProcesses },
+      getSettings: async () => settings(),
+      now: () => Date.parse("2026-05-13T10:00:00.000Z")
+    });
+
+    await monitor.start();
+    await vi.runOnlyPendingTimersAsync();
+    expect(getRunningProcesses).toHaveBeenCalledTimes(1);
+
+    running = [];
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(getRunningProcesses).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues a restarted session from the last recorded playtime", async () => {
+    let now = Date.parse("2026-05-13T10:10:00.000Z");
+    let running = [{ path: "C:\\Games\\Example\\game.exe", pid: 42, startedAt: "2026-05-13T10:00:00.000Z" }];
+    const writes: Array<{ id: string; minutes: number; at?: string }> = [];
+    const monitor = new LocalPlaytimeMonitor({
+      repository: {
+        getLocalGameExecutables: () => [{
+          id: "local:example",
+          executablePath: "C:\\Games\\Example\\game.exe",
+          lastPlayedAt: "2026-05-13T10:05:00.000Z"
+        }],
+        addPlaytime: (id, minutes, at) => writes.push({ id, minutes, at })
+      },
+      nativeBridge: {
+        getRunningProcesses: async () => running
+      },
+      getSettings: async () => settings(),
+      now: () => now
+    });
+
+    await monitor.start();
+    await monitor.pollNow();
+
+    running = [];
+    now += 30_000;
+    await monitor.pollNow();
+
+    now += 30_000;
+    await monitor.pollNow();
+
+    expect(writes.at(-1)).toMatchObject({
+      id: "local:example",
+      minutes: 6,
+      at: "2026-05-13T10:11:00.000Z"
+    });
+  });
+
   it("does not poll native processes when disabled or when no exe paths exist", async () => {
     const getRunningProcesses = vi.fn(async () => []);
     const disabled = new LocalPlaytimeMonitor({

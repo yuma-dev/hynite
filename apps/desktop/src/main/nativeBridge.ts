@@ -83,6 +83,9 @@ export class NativeBridge {
   private process?: ChildProcessWithoutNullStreams;
   private buffer = "";
   private readonly pending = new Map<string, PendingRequest<unknown>>();
+  private idleTimer?: NodeJS.Timeout;
+
+  constructor(private readonly options: { idleTimeoutMs?: number } = {}) {}
 
   async resolveExecutable(path: string): Promise<ExecutableInfo> {
     return { path, exists: existsSync(path) };
@@ -179,6 +182,7 @@ export class NativeBridge {
   }
 
   dispose(): void {
+    this.clearIdleTimer();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error("Native bridge disposed."));
@@ -200,6 +204,7 @@ export class NativeBridge {
 
   private request<T>(method: string, params: Record<string, unknown>): Promise<T> {
     const child = this.ensureProcess();
+    this.clearIdleTimer();
     const id = randomUUID();
     return new Promise<T>((resolveRequest, reject) => {
       const timeout = setTimeout(() => {
@@ -217,6 +222,8 @@ export class NativeBridge {
           reject(error);
         }
       });
+    }).finally(() => {
+      this.scheduleIdleDispose();
     });
   }
 
@@ -243,6 +250,7 @@ export class NativeBridge {
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => console.warn("Native bridge:", chunk.trim()));
     child.on("exit", () => {
+      this.clearIdleTimer();
       this.process = undefined;
       for (const pending of this.pending.values()) {
         clearTimeout(pending.timeout);
@@ -253,6 +261,28 @@ export class NativeBridge {
 
     this.process = child;
     return child;
+  }
+
+  private clearIdleTimer(): void {
+    if (!this.idleTimer) return;
+    clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
+  }
+
+  private scheduleIdleDispose(): void {
+    const idleTimeoutMs = this.options.idleTimeoutMs ?? 60_000;
+    if (idleTimeoutMs <= 0 || this.pending.size > 0 || !this.process || this.process.killed) {
+      return;
+    }
+
+    this.clearIdleTimer();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined;
+      if (this.pending.size === 0) {
+        this.dispose();
+      }
+    }, idleTimeoutMs);
+    this.idleTimer.unref?.();
   }
 
   private onStdout(chunk: string): void {

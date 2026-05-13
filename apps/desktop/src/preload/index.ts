@@ -58,7 +58,7 @@ const api = {
     }
   },
   local: {
-    scan: (): Promise<{ scanned: number; matched: number; ambiguous: number; unmatched: number; issues: unknown[] }> =>
+    scan: (): Promise<{ scanned: number; skipped: number; matched: number; ambiguous: number; unmatched: number; issues: unknown[] }> =>
       ipcRenderer.invoke("local:scan"),
     getIssues: (): Promise<unknown[]> => ipcRenderer.invoke("local:get-issues"),
     resolveAmbiguous: (

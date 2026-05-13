@@ -73,6 +73,7 @@ export type LocalScanCacheEntry = {
   folderPath: string;
   mtimeMs: number;
   candidateId: string;
+  exeSignature?: string;
 };
 
 export type LocalScanCache = {

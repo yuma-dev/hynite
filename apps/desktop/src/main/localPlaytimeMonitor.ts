@@ -4,6 +4,7 @@ import type { HyniteRepository } from "@hynite/db";
 import type { NativeBridge } from "./nativeBridge";
 
 const ACTIVE_POLL_MS = 30_000;
+const IDLE_POLL_MS = 5 * 60_000;
 const EMPTY_POLL_MS = 10 * 60_000;
 const EXECUTABLE_REFRESH_MS = 10 * 60_000;
 const IGNORED_PID_TTL_MS = 12 * 60 * 60_000;
@@ -12,6 +13,7 @@ type LocalExecutable = {
   id: string;
   executablePath: string;
   key: string;
+  lastPlayedAt?: string | null;
 };
 
 type ActiveSession = {
@@ -128,7 +130,8 @@ export class LocalPlaytimeMonitor {
           existing.missingPolls = 0;
           continue;
         }
-        const startedAtMs = parseTimestamp(processInfo.startedAt, now);
+        const processStartedAtMs = parseTimestamp(processInfo.startedAt, now);
+        const startedAtMs = Math.max(processStartedAtMs, parseTimestamp(executable.lastPlayedAt, processStartedAtMs));
         this.activeSessions.set(sessionKey, {
           gameId: executable.id,
           executablePath: executable.executablePath,
@@ -161,7 +164,7 @@ export class LocalPlaytimeMonitor {
         this.activeSessions.delete(sessionKey);
       }
 
-      this.schedule(ACTIVE_POLL_MS);
+      this.schedule(this.activeSessions.size > 0 ? ACTIVE_POLL_MS : IDLE_POLL_MS);
     } catch (error) {
       this.warn("Local playtime monitor poll failed", { error: error instanceof Error ? error.message : String(error) });
       this.schedule(ACTIVE_POLL_MS);
@@ -184,7 +187,8 @@ export class LocalPlaytimeMonitor {
       return [{
         id: row.id,
         executablePath: row.executablePath,
-        key: normalizePathKey(row.executablePath)
+        key: normalizePathKey(row.executablePath),
+        lastPlayedAt: row.lastPlayedAt
       }];
     });
     this.executableByKey = new Map(this.executableCache.map((row) => [row.key, row]));

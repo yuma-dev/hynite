@@ -17,17 +17,20 @@ export type LocalScanIssue = {
 
 export type LocalScanReport = {
   imported: ImportedGame[];
+  candidates: Map<string, LocalGameCandidate>;
   /** Per-game enrichment that should be merged onto the upserted game. */
   enrichment: Map<string, { match: IdentifyResult["kind"] extends "match" ? IdentifyResult : never } | { match?: never }>;
   /** Identification matches by candidate id, used by main to register sibling sources. */
   matches: Map<string, { provider: "steam" | "igdb"; externalId: string; confidence: number; reason: string }>;
   issues: LocalScanIssue[];
+  skipped: number;
 };
 
 export type LocalProviderOptions = {
   scanConfig: LocalScanConfig;
   peMetadataLookup: PeMetadataLookup;
   identify: IdentifyOptions;
+  shouldSkipCandidate?: (candidate: LocalGameCandidate) => boolean;
   /** Optional metadata refresh hook called once the launcher knows the matched provider+id. */
   refreshMetadata?: (game: ImportedGame) => Promise<GameMetadataPatch>;
 };
@@ -45,12 +48,19 @@ export class LocalImporterProvider implements ImporterProvider {
     const candidates = await scanLocalRoots(this.options.scanConfig);
     const report: LocalScanReport = {
       imported: [],
+      candidates: new Map(),
       enrichment: new Map(),
       matches: new Map(),
-      issues: []
+      issues: [],
+      skipped: 0
     };
 
     for (const candidate of candidates) {
+      if (this.options.shouldSkipCandidate?.(candidate)) {
+        report.skipped += 1;
+        continue;
+      }
+      report.candidates.set(candidate.id, candidate);
       const game = await this.processCandidate(candidate, report);
       if (game) report.imported.push(game);
     }

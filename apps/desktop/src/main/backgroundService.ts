@@ -4,7 +4,7 @@ import type { LocalPlaytimeMonitor } from "./localPlaytimeMonitor";
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 
-const TRAY_STARTUP_DELAY_MS = 90_000;
+const MAINTENANCE_STARTUP_DELAY_MS = 90_000;
 const PREFETCH_STARTUP_DELAY_MS = 3 * MINUTE_MS;
 const LOCAL_SCAN_STARTUP_DELAY_MS = 10 * MINUTE_MS;
 const RICH_BACKFILL_DELAY_MS = 15 * MINUTE_MS;
@@ -23,8 +23,8 @@ type BackgroundCadence = {
 
 export type BackgroundServiceOptions = {
   getSettings: () => Promise<AppSettings>;
-  startSteamSync: (providerId: "steam", options: { refreshStaleMetadata: false }) => Promise<SyncResult>;
-  runLocalScan: () => Promise<unknown>;
+  startSteamSync: (providerId: "steam", options: { refreshStaleMetadata: false; replaceActive?: boolean; richBackfillLimit?: number | false }) => Promise<SyncResult>;
+  runLocalScan: (options?: { skipUnchanged?: boolean; refreshMetadata?: boolean }) => Promise<unknown>;
   syncLocalLastPlayedFromPrefetch: () => Promise<number>;
   enqueueRichMetadataBackfill: (limit?: number) => void;
   localPlaytimeMonitor: LocalPlaytimeMonitor;
@@ -69,6 +69,7 @@ export class BackgroundService {
   private runningSteam = false;
   private runningLocalScan = false;
   private runningPrefetch = false;
+  private scheduleGeneration = 0;
 
   constructor(private readonly options: BackgroundServiceOptions) {}
 
@@ -84,17 +85,23 @@ export class BackgroundService {
   }
 
   start(mode: BackgroundMode): void {
+    const wasStopped = this.stopped;
+    const modeChanged = this.mode !== mode;
+    if (!wasStopped && !modeChanged) {
+      return;
+    }
+
     this.mode = mode;
     this.stopped = false;
+    this.scheduleGeneration += 1;
     this.clearTimers();
     void this.options.localPlaytimeMonitor.start();
-    if (mode === "tray") {
-      void this.scheduleTrayWork();
-    }
+    void this.scheduleMaintenanceWork(this.scheduleGeneration);
   }
 
   stop(): void {
     this.stopped = true;
+    this.scheduleGeneration += 1;
     this.clearTimers();
     this.options.localPlaytimeMonitor.stop();
   }
@@ -102,14 +109,13 @@ export class BackgroundService {
   async refreshSettings(): Promise<void> {
     await this.options.localPlaytimeMonitor.refreshSettings();
     if (this.stopped) return;
-    if (this.mode === "tray") {
-      this.clearTimers();
-      await this.scheduleTrayWork();
-    }
+    this.scheduleGeneration += 1;
+    this.clearTimers();
+    await this.scheduleMaintenanceWork(this.scheduleGeneration);
   }
 
   async onResume(): Promise<void> {
-    if (this.stopped || this.mode !== "tray") return;
+    if (this.stopped) return;
     this.setTimer(() => {
       void this.runPrefetchSync("timer");
     }, RESUME_PREFETCH_DEBOUNCE_MS);
@@ -131,15 +137,22 @@ export class BackgroundService {
     this.runningSteam = true;
     try {
       this.options.profile?.("background:steam:start", "Background Steam sync started", { trigger });
-      await this.options.startSteamSync("steam", { refreshStaleMetadata: false });
+      await this.options.startSteamSync("steam", {
+        refreshStaleMetadata: false,
+        replaceActive: false,
+        richBackfillLimit: false
+      });
       await this.scheduleRichBackfill(settings);
     } finally {
       this.runningSteam = false;
     }
   }
 
-  private async scheduleTrayWork(): Promise<void> {
+  private async scheduleMaintenanceWork(generation: number): Promise<void> {
     const settings = await this.options.getSettings();
+    if (this.stopped || generation !== this.scheduleGeneration) {
+      return;
+    }
     if (!this.canRunBackgroundUpdates(settings)) {
       await this.options.cancelActiveSteamSync?.("Background updates disabled");
       return;
@@ -148,7 +161,7 @@ export class BackgroundService {
 
     this.setTimer(() => {
       void this.runSteamLoop(cadence.steamIntervalMs);
-    }, TRAY_STARTUP_DELAY_MS);
+    }, MAINTENANCE_STARTUP_DELAY_MS);
     this.setTimer(() => {
       void this.runPrefetchLoop(cadence.prefetchIntervalMs);
     }, PREFETCH_STARTUP_DELAY_MS);
@@ -160,7 +173,7 @@ export class BackgroundService {
   }
 
   private async runSteamLoop(intervalMs: number): Promise<void> {
-    if (this.stopped || this.mode !== "tray") return;
+    if (this.stopped) return;
     try {
       await this.runSteamSyncNow("timer");
     } catch (error) {
@@ -173,7 +186,7 @@ export class BackgroundService {
   }
 
   private async runPrefetchLoop(intervalMs: number): Promise<void> {
-    if (this.stopped || this.mode !== "tray") return;
+    if (this.stopped) return;
     try {
       await this.runPrefetchSync("timer");
     } finally {
@@ -197,7 +210,7 @@ export class BackgroundService {
   }
 
   private async runLocalScanLoop(intervalMs: number): Promise<void> {
-    if (this.stopped || this.mode !== "tray") return;
+    if (this.stopped) return;
     try {
       await this.runLocalScanIfAllowed("timer");
     } finally {
@@ -217,7 +230,7 @@ export class BackgroundService {
     this.runningLocalScan = true;
     try {
       this.options.profile?.("background:local-scan:start", "Background local scan started", { trigger, rootCount: roots.length });
-      await this.options.runLocalScan();
+      await this.options.runLocalScan({ skipUnchanged: true, refreshMetadata: true });
       await this.options.localPlaytimeMonitor.refreshExecutables();
     } catch (error) {
       console.warn("Background local scan failed", error);

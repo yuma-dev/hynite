@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, protocol, screen, shell, Tray } from "electron";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -60,8 +61,18 @@ let windowStateSaveChain: Promise<unknown> = Promise.resolve();
 let isQuitting = false;
 let servicesShutDown = false;
 let controllerPollingStarted = false;
+let foregroundStartupBackgroundWorkScheduled = false;
 
-const windowIconPath = join(__dirname, "../../assets/icons/app.ico");
+function resolveWindowIconPath(): string {
+  const devIconPath = join(__dirname, "../../assets/icons/app.ico");
+  const packagedIconPath = join(process.resourcesPath ?? "", "icons/app.ico");
+  if (app.isPackaged && existsSync(packagedIconPath)) {
+    return packagedIconPath;
+  }
+  return devIconPath;
+}
+
+const windowIconPath = resolveWindowIconPath();
 const WINDOWS_APP_USER_MODEL_ID = "app.hynite.launcher";
 const BACKGROUND_ARG = "--background";
 const DEFAULT_WINDOW_WIDTH = 1440;
@@ -1894,11 +1905,16 @@ async function showMainWindow(options: { withSplash: boolean; focus: boolean }):
       dismissSplash();
     }, 30_000);
     startupReadyTimeout.unref?.();
-    scheduleForegroundStartupBackgroundWork();
   }
+  scheduleForegroundStartupBackgroundWork();
 }
 
 function scheduleForegroundStartupBackgroundWork(): void {
+  if (foregroundStartupBackgroundWorkScheduled) {
+    return;
+  }
+  foregroundStartupBackgroundWorkScheduled = true;
+
   void settingsService.get().then((settings) => {
     const canSync = Boolean(settings.steamWebApiKey) && settings.steamAccounts.length > 0;
     profile("startup:settings-loaded", "Startup settings loaded", {
@@ -1912,7 +1928,7 @@ function scheduleForegroundStartupBackgroundWork(): void {
       profile("startup:background:local-scan:scheduled", "Startup background local scan scheduled", { rootCount: localRoots.length, delayMs: STARTUP_LOCAL_SCAN_DELAY_MS });
       setTimeout(() => {
         profile("startup:background:local-scan", "Starting background local scan", { rootCount: localRoots.length });
-        void runLocalScan().catch((error: unknown) => {
+        void runLocalScan({ skipUnchanged: true, refreshMetadata: true }).catch((error: unknown) => {
           console.warn("Startup local scan failed", error);
         });
       }, STARTUP_LOCAL_SCAN_DELAY_MS).unref?.();
@@ -1924,7 +1940,11 @@ function scheduleForegroundStartupBackgroundWork(): void {
         console.warn("Prefetch last-played sync failed", error);
       });
       if (canSync) {
-        void startSteamSync("steam", { refreshStaleMetadata: false }).catch((error: unknown) => {
+        void startSteamSync("steam", {
+          refreshStaleMetadata: false,
+          replaceActive: false,
+          richBackfillLimit: false
+        }).catch((error: unknown) => {
           if (isSteamSyncCancelledError(error)) {
             return;
           }
@@ -1944,14 +1964,24 @@ function scheduleForegroundStartupBackgroundWork(): void {
   });
 }
 
-async function startSteamSync(providerId?: ProviderId, options: { refreshStaleMetadata?: boolean } = {}): Promise<SyncResult> {
+async function startSteamSync(providerId?: ProviderId, options: { refreshStaleMetadata?: boolean; replaceActive?: boolean; richBackfillLimit?: number | false } = {}): Promise<SyncResult> {
   if (providerId && providerId !== "steam") {
     throw new Error(`Provider ${providerId} is not implemented yet.`);
   }
 
-  profile("steam-sync:start-requested", "Steam sync start requested", { providerId, refreshStaleMetadata: options.refreshStaleMetadata });
+  profile("steam-sync:start-requested", "Steam sync start requested", {
+    providerId,
+    refreshStaleMetadata: options.refreshStaleMetadata,
+    replaceActive: options.replaceActive !== false
+  });
   const started = await withSteamSyncStartLock(async () => {
-    await cancelActiveSteamSync("Steam sync replaced by a newer request");
+    if (activeSteamSync) {
+      if (options.replaceActive === false) {
+        profile("steam-sync:already-active", "Steam sync request joined active sync", { providerId });
+        return { promise: activeSteamSync.promise };
+      }
+      await cancelActiveSteamSync("Steam sync replaced by a newer request");
+    }
     const controller = new AbortController();
     const promise = syncSteamLibrary(providerId, { ...options, signal: controller.signal }).finally(() => {
       if (activeSteamSync?.promise === promise) {
@@ -1964,7 +1994,7 @@ async function startSteamSync(providerId?: ProviderId, options: { refreshStaleMe
   return started.promise;
 }
 
-async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStaleMetadata?: boolean; signal?: AbortSignal } = {}) {
+async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStaleMetadata?: boolean; signal?: AbortSignal; richBackfillLimit?: number | false } = {}) {
   const syncStartedAt = performance.now();
   const syncRunId = randomUUID();
   const trigger = options.refreshStaleMetadata === false ? "startup" : "manual";
@@ -2370,8 +2400,12 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       durationMs: roundDuration(syncStartedAt)
     });
     const richBackfillSpan = profileSpan("steam-sync", "steam-sync:rich-backfill-queue", { syncRunId });
-    enqueueRichMetadataBackfill();
-    richBackfillSpan.end("ok", { syncRunId });
+    if (options.richBackfillLimit !== false) {
+      enqueueRichMetadataBackfill(typeof options.richBackfillLimit === "number" ? options.richBackfillLimit : undefined);
+      richBackfillSpan.end("ok", { syncRunId, limit: options.richBackfillLimit ?? "all" });
+    } else {
+      richBackfillSpan.end("ok", { syncRunId, skipped: true });
+    }
     throwIfSteamSyncCancelled(options.signal);
     syncStatusService.finish(`Steam sync complete: ${upserted} games, ${installedApps.size} local installs`);
     profile("steam-sync:end", "Steam sync completed", {
@@ -2519,7 +2553,7 @@ async function performLaunch(id: string): Promise<{ kind: "launched" } & LaunchS
   return { kind: "launched", ...session };
 }
 
-async function runLocalScan(): Promise<{ scanned: number; matched: number; ambiguous: number; unmatched: number; issues: LocalScanIssue[] } | undefined> {
+async function runLocalScan(options: { skipUnchanged?: boolean; refreshMetadata?: boolean } = {}): Promise<{ scanned: number; skipped: number; matched: number; ambiguous: number; unmatched: number; issues: LocalScanIssue[] } | undefined> {
   if (activeLocalScan) {
     return activeLocalScan.promise as Promise<ReturnType<typeof runLocalScan>>;
   }
@@ -2549,6 +2583,8 @@ async function runLocalScan(): Promise<{ scanned: number; matched: number; ambig
       steamGridDbApiKey,
       steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
       signal: controller.signal,
+      skipUnchanged: options.skipUnchanged,
+      refreshMetadata: options.refreshMetadata,
       searchSteamStore: async (query) => {
         try {
           const results = await searchSteamStore(query, net.fetch);
@@ -2610,7 +2646,7 @@ function registerIpc(): void {
 
   handleIpc("local:scan", async () => {
     const result = await runLocalScan();
-    return result ?? { scanned: 0, matched: 0, ambiguous: 0, unmatched: 0, issues: [] };
+    return result ?? { scanned: 0, skipped: 0, matched: 0, ambiguous: 0, unmatched: 0, issues: [] };
   });
   handleIpc("local:get-issues", async () => {
     return localImportService.lastReport?.issues ?? [];

@@ -32,6 +32,10 @@
     ],
     "extraResources": [
       {
+        "from": "assets/icons",
+        "to": "icons"
+      },
+      {
         "from": "assets/audio",
         "to": "audio"
       },
