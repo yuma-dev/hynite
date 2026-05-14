@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   buildSingleCandidate,
@@ -47,6 +47,30 @@ function localMetadataPatch(patch: GameMetadataPatch): GameMetadataPatch {
 
 function normalizePathKey(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+function trimPathSeparators(path: string): string {
+  return normalizePathKey(path.replace(/[\\/]+$/, ""));
+}
+
+function isPathUnderFolder(path: string, folder: string): boolean {
+  const normalizedPath = trimPathSeparators(path);
+  const normalizedFolder = trimPathSeparators(folder);
+  return normalizedPath === normalizedFolder || normalizedPath.startsWith(`${normalizedFolder}\\`) || normalizedPath.startsWith(`${normalizedFolder}/`);
+}
+
+async function existingRootPaths(roots: Array<{ path: string }>): Promise<string[]> {
+  const checked = await Promise.all(
+    roots.map(async (root) => {
+      try {
+        const stats = await stat(root.path);
+        return stats.isDirectory() ? root.path : undefined;
+      } catch {
+        return undefined;
+      }
+    })
+  );
+  return checked.filter((path): path is string => Boolean(path));
 }
 
 function exeSignature(candidate: Pick<LocalGameCandidate, "exeFiles">): string {
@@ -102,8 +126,12 @@ export type LocalImportResult = {
   issues: LocalScanIssue[];
 };
 
+type PersistentLocalScanCache = LocalScanCache & {
+  issues?: Record<string, LocalScanIssue>;
+};
+
 export class LocalImportService {
-  private cache?: LocalScanCache;
+  private cache?: PersistentLocalScanCache;
 
   constructor(
     private readonly cachePath: string,
@@ -111,13 +139,17 @@ export class LocalImportService {
     private readonly nativeBridge: NativeBridge
   ) {}
 
-  async loadCache(): Promise<LocalScanCache> {
+  async loadCache(): Promise<PersistentLocalScanCache> {
     if (this.cache) return this.cache;
     try {
       const raw = await readFile(this.cachePath, "utf8");
-      this.cache = JSON.parse(raw) as LocalScanCache;
+      const parsed = JSON.parse(raw) as PersistentLocalScanCache;
+      this.cache = {
+        entries: parsed.entries && typeof parsed.entries === "object" ? parsed.entries : {},
+        issues: parsed.issues && typeof parsed.issues === "object" ? parsed.issues : {}
+      };
     } catch {
-      this.cache = { entries: {} };
+      this.cache = { entries: {}, issues: {} };
     }
     return this.cache;
   }
@@ -130,6 +162,32 @@ export class LocalImportService {
 
   /** Last completed scan report (issues, ambiguous candidates, matches). */
   lastReport?: LocalImporterProvider["lastReport"];
+
+  async getIssues(ignoredPaths: string[] = []): Promise<LocalScanIssue[]> {
+    const issues = Object.values((await this.loadCache()).issues ?? {});
+    const ignored = new Set(ignoredPaths.map((path) => normalizePathKey(path)));
+    return issues.filter((issue) => !ignored.has(normalizePathKey(issue.folderPath)));
+  }
+
+  async clearIssue(candidateId: string, folderPath?: string): Promise<void> {
+    const cache = await this.loadCache();
+    delete cache.issues?.[candidateId];
+    if (folderPath) {
+      const normalizedFolderPath = normalizePathKey(folderPath);
+      for (const [key, issue] of Object.entries(cache.issues ?? {})) {
+        if (normalizePathKey(issue.folderPath) === normalizedFolderPath) {
+          delete cache.issues?.[key];
+        }
+      }
+    }
+    if (this.lastReport) {
+      this.lastReport.issues = this.lastReport.issues.filter((issue) => {
+        if (issue.candidateId === candidateId) return false;
+        return folderPath ? normalizePathKey(issue.folderPath) !== normalizePathKey(folderPath) : true;
+      });
+    }
+    await this.saveCache();
+  }
 
   async run(options: LocalImportRunOptions): Promise<LocalImportResult> {
     const cache = await this.loadCache();
@@ -270,9 +328,12 @@ export class LocalImportService {
       }
     }
 
-    await this.saveCache();
-
     const issues = provider.lastReport?.issues ?? [];
+    const availableRoots = await existingRootPaths(options.roots);
+    const previousIssues = Object.values(cache.issues ?? {});
+    const retainedIssues = previousIssues.filter((issue) => !availableRoots.some((root) => isPathUnderFolder(issue.folderPath, root)));
+    cache.issues = Object.fromEntries([...retainedIssues, ...issues].map((issue) => [issue.candidateId, issue]));
+    await this.saveCache();
     const skipped = provider.lastReport?.skipped ?? 0;
     const ambiguous = issues.filter((issue) => issue.reason === "ambiguous_match" || issue.reason === "ambiguous_exe").length;
     const unmatched = issues.filter((issue) => issue.reason === "unmatched").length;

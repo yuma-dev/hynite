@@ -874,7 +874,7 @@ async function pathExists(path: string | undefined): Promise<boolean> {
 }
 
 async function getLocalIssues(settings: AppSettings): Promise<Array<LocalScanIssue | MissingLocalGameIssue>> {
-  const scanIssues = localImportService.lastReport?.issues ?? [];
+  const scanIssues = await localImportService.getIssues(settings.localIgnoredPaths ?? []);
   const roots = (settings.localRoots ?? []).filter((root) => root.path.trim().length > 0);
   if (roots.length === 0) return scanIssues;
   const availableRoots = (
@@ -2986,6 +2986,11 @@ function registerIpc(): void {
     const current = await settingsService.get();
     const ignored = new Set(current.localIgnoredPaths ?? []);
     ignored.add(folderPath);
+    const issues = await localImportService.getIssues(current.localIgnoredPaths ?? []);
+    const issue = issues.find((entry) => entry.folderPath === folderPath);
+    if (issue) {
+      await localImportService.clearIssue(issue.candidateId, folderPath);
+    }
     return settingsService.update({ localIgnoredPaths: [...ignored] });
   });
   handleIpc("local:count-under", (_event, folderPath: string) => {
@@ -3014,6 +3019,7 @@ function registerIpc(): void {
       return { ok: true };
     }
     repository.removeGame(args.gameId);
+    await localImportService.clearIssue(args.gameId, args.folderPath);
     if (args.folderPath) {
       const current = await settingsService.get();
       const ignored = new Set(current.localIgnoredPaths ?? []);
@@ -3022,7 +3028,7 @@ function registerIpc(): void {
     }
     return { ok: true };
   });
-  handleIpc("local:remove-game", (_event, gameId: string) => {
+  handleIpc("local:remove-game", async (_event, gameId: string) => {
     if (onboardingPreview) {
       return { ok: true };
     }
@@ -3034,6 +3040,7 @@ function registerIpc(): void {
       throw new Error("Only local games can be deleted from this menu.");
     }
     repository.removeGame(gameId);
+    await localImportService.clearIssue(gameId, game.installDirectory);
     return { ok: true };
   });
   handleIpc("local:update-location", async (_event, args: { gameId: string; folderPath: string }) => {
@@ -3066,6 +3073,7 @@ function registerIpc(): void {
     if (report) {
       report.issues = report.issues.filter((issue) => issue.candidateId !== args.gameId && issue.folderPath !== game.installDirectory);
     }
+    await localImportService.clearIssue(args.gameId, game.installDirectory);
     return { ok: true, executablePath: probe.chosenExe };
   });
   handleIpc("local:add-single", async (
@@ -3124,9 +3132,10 @@ function registerIpc(): void {
 
     // If this candidate was previously flagged as an issue, drop it now that it has a resolution.
     const report = localImportService.lastReport;
-    if (report && (args.match || result.identification.kind === "match")) {
+    if (report) {
       report.issues = report.issues.filter((issue) => issue.candidateId !== result.candidateId);
     }
+    await localImportService.clearIssue(result.candidateId);
     return result;
   });
   handleIpc("local:repair-library", () => {
@@ -3191,6 +3200,7 @@ function registerIpc(): void {
     if (report) {
       report.issues = report.issues.filter((issue) => issue.candidateId !== args.candidateId);
     }
+    await localImportService.clearIssue(args.candidateId);
     return { ok: true };
   });
   handleIpc("games:set-launch-exe", (_event, args: { gameId: string; executablePath: string }) => {
