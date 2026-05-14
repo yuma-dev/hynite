@@ -149,6 +149,16 @@ describe("HyniteRepository", () => {
       { sourceId: "source-1", sourceName: "Source A", count: 2 },
       { sourceId: "source-2", sourceName: "Source B", count: 1 }
     ]);
+    expect(repository.exactDownloadTitleMatchesBatch([
+      normalizeTitle("baldurs gate 3"),
+      normalizeTitle("missing game")
+    ])).toEqual(new Map([
+      [normalizeTitle("baldurs gate 3"), [
+        { sourceId: "source-1", sourceName: "Source A", count: 2 },
+        { sourceId: "source-2", sourceName: "Source B", count: 1 }
+      ]],
+      [normalizeTitle("missing game"), []]
+    ]));
 
     repository.close();
   });
@@ -445,6 +455,109 @@ describe("HyniteRepository", () => {
       coverUrl: undefined,
       headerUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3405690/hash/header.jpg"
     });
+
+    repository.close();
+  });
+
+  it("dedupes Steam wishlist appids across accounts", () => {
+    const repository = createRepository();
+    repository.replaceSteamWishlistForAccount("owner-a", [
+      {
+        appid: "100",
+        title: "Shared Wish",
+        sortTitle: "shared wish",
+        accounts: [{ steamId: "owner-a", personaName: "Owner A", priority: 1, addedAt: "2026-01-01T00:00:00.000Z" }],
+        releaseDate: "2026-06-01",
+        releaseDateText: "Jun 1, 2026",
+        releasePrecision: "exact",
+        refreshedAt: "2026-05-13T00:00:00.000Z",
+        metadataStatus: "partial"
+      }
+    ]);
+    repository.replaceSteamWishlistForAccount("owner-b", [
+      {
+        appid: "100",
+        title: "Shared Wish",
+        sortTitle: "shared wish",
+        accounts: [{ steamId: "owner-b", personaName: "Owner B" }],
+        releaseDate: "2026-06-01",
+        releaseDateText: "Jun 1, 2026",
+        releasePrecision: "exact",
+        refreshedAt: "2026-05-13T00:00:00.000Z",
+        metadataStatus: "partial"
+      }
+    ]);
+
+    const items = repository.querySteamWishlist({});
+    expect(items).toHaveLength(1);
+    expect(items[0]?.accounts.map((account) => account.steamId)).toEqual(["owner-a", "owner-b"]);
+
+    repository.close();
+  });
+
+  it("replaces one account wishlist without pruning another account", () => {
+    const repository = createRepository();
+    const base = {
+      title: "Wish",
+      sortTitle: "wish",
+      releasePrecision: "unknown" as const,
+      refreshedAt: "2026-05-13T00:00:00.000Z",
+      metadataStatus: "none" as const
+    };
+    repository.replaceSteamWishlistForAccount("owner-a", [
+      { ...base, appid: "100", accounts: [{ steamId: "owner-a" }] },
+      { ...base, appid: "200", accounts: [{ steamId: "owner-a" }] }
+    ]);
+    repository.replaceSteamWishlistForAccount("owner-b", [
+      { ...base, appid: "200", accounts: [{ steamId: "owner-b" }] }
+    ]);
+
+    repository.replaceSteamWishlistForAccount("owner-a", [
+      { ...base, appid: "300", accounts: [{ steamId: "owner-a" }] }
+    ]);
+
+    expect(repository.querySteamWishlist({}).map((item) => item.appid).sort()).toEqual(["200", "300"]);
+    expect(repository.querySteamWishlist({ accountSteamIds: ["owner-b"] }).map((item) => item.appid)).toEqual(["200"]);
+
+    repository.close();
+  });
+
+  it("keeps cached wishlist rows when no replacement is performed after a failed refresh", () => {
+    const repository = createRepository();
+    repository.replaceSteamWishlistForAccount("owner-a", [
+      {
+        appid: "100",
+        title: "Cached Wish",
+        sortTitle: "cached wish",
+        accounts: [{ steamId: "owner-a" }],
+        releasePrecision: "unknown",
+        refreshedAt: "2026-05-13T00:00:00.000Z",
+        metadataStatus: "partial"
+      }
+    ]);
+
+    expect(repository.querySteamWishlist({ accountSteamIds: ["owner-a"] }).map((item) => item.title)).toEqual(["Cached Wish"]);
+
+    repository.close();
+  });
+
+  it("returns exact upcoming wishlist releases for calendar queries", () => {
+    const repository = createRepository();
+    const base = {
+      title: "Wish",
+      sortTitle: "wish",
+      refreshedAt: "2026-05-13T00:00:00.000Z",
+      metadataStatus: "partial" as const,
+      accounts: [{ steamId: "owner-a" }]
+    };
+    repository.replaceSteamWishlistForAccount("owner-a", [
+      { ...base, appid: "1", releaseDate: "2026-05-20", releaseDateText: "May 20, 2026", releasePrecision: "exact" },
+      { ...base, appid: "2", releaseDate: "2026-09-01", releaseDateText: "Sep 1, 2026", releasePrecision: "exact" },
+      { ...base, appid: "3", releaseDateText: "Coming soon", releasePrecision: "unknown" },
+      { ...base, appid: "4", releaseDate: "2026-05-01", releaseDateText: "May 1, 2026", releasePrecision: "exact" }
+    ]);
+
+    expect(repository.querySteamWishlistCalendar({ startDate: "2026-05-13", months: 3 }).map((item) => item.appid)).toEqual(["1"]);
 
     repository.close();
   });

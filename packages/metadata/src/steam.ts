@@ -141,28 +141,56 @@ type SteamAppDetailsResponse = Record<
 
 type SteamMovie = NonNullable<NonNullable<SteamAppDetailsResponse[string]["data"]>["movies"]>[number];
 
-function parseSteamDate(value: string | undefined): string | undefined {
+export type SteamReleaseDateInfo = {
+  date?: string;
+  text?: string;
+  precision: "exact" | "month" | "year" | "unknown";
+};
+
+export function parseSteamStoreReleaseDate(value: string | undefined): SteamReleaseDateInfo {
   if (!value) {
-    return undefined;
+    return { precision: "unknown" };
   }
 
-  const exactEnglishDate = /^(?<month>[A-Za-z]+)\s+(?<day>\d{1,2}),\s+(?<year>\d{4})$/.exec(value);
+  const trimmed = value.trim();
+  if (!trimmed) return { precision: "unknown" };
+
+  const exactEnglishDate = /^(?<month>[A-Za-z]+)\s+(?<day>\d{1,2}),\s+(?<year>\d{4})$/.exec(trimmed);
   if (exactEnglishDate?.groups?.month && exactEnglishDate.groups.day && exactEnglishDate.groups.year) {
     const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
     const monthIndex = months.indexOf(exactEnglishDate.groups.month.slice(0, 3).toLocaleLowerCase());
     if (monthIndex >= 0) {
       const day = Number(exactEnglishDate.groups.day);
       const year = Number(exactEnglishDate.groups.year);
-      return new Date(Date.UTC(year, monthIndex, day)).toISOString().slice(0, 10);
+      return {
+        date: new Date(Date.UTC(year, monthIndex, day)).toISOString().slice(0, 10),
+        text: trimmed,
+        precision: "exact"
+      };
     }
   }
 
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) {
-    return value;
+  const isoDate = /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})$/.exec(trimmed);
+  if (isoDate) {
+    const parsed = Date.parse(`${trimmed}T00:00:00.000Z`);
+    if (Number.isFinite(parsed)) {
+      return { date: new Date(parsed).toISOString().slice(0, 10), text: trimmed, precision: "exact" };
+    }
   }
 
-  return new Date(parsed).toISOString().slice(0, 10);
+  if (/^[A-Za-z]+\s+\d{4}$/.test(trimmed)) {
+    return { text: trimmed, precision: "month" };
+  }
+
+  if (/^\d{4}$/.test(trimmed)) {
+    return { text: trimmed, precision: "year" };
+  }
+
+  return { text: trimmed, precision: "unknown" };
+}
+
+function parseSteamDate(value: string | undefined): string | undefined {
+  return parseSteamStoreReleaseDate(value).date;
 }
 
 function stripHtml(value: string | undefined): string | undefined {

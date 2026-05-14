@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { DownloadSourceInfo, SourceExactMatch, SourceImportInput, SourceImportResult, SourceMatch, SourceSearchOptions } from "@hynite/core";
+import type { DownloadSourceInfo, SourceExactMatch, SourceExactMatchBatch, SourceImportInput, SourceImportResult, SourceMatch, SourceSearchOptions } from "@hynite/core";
 import type { HyniteRepository } from "@hynite/db";
 import { findSourceMatches, normalizeTitle, prepareSourceImport } from "@hynite/source-search";
 
@@ -97,5 +97,21 @@ export class SourceService {
   exactTitleMatches(title: string): SourceExactMatch[] {
     const normalizedTitle = normalizeTitle(title);
     return this.repository.exactDownloadTitleMatches(normalizedTitle);
+  }
+
+  exactTitleMatchesBatch(titles: string[]): SourceExactMatchBatch[] {
+    const normalizedByTitle = new Map<string, string>();
+    const originalTitles: string[] = [];
+    for (const title of titles) {
+      const trimmed = title.trim();
+      if (!trimmed || normalizedByTitle.has(trimmed)) continue;
+      normalizedByTitle.set(trimmed, normalizeTitle(trimmed));
+      originalTitles.push(trimmed);
+    }
+    const matchesByNormalizedTitle = this.repository.exactDownloadTitleMatchesBatch([...normalizedByTitle.values()]);
+    return originalTitles.map((title) => ({
+      title,
+      matches: matchesByNormalizedTitle.get(normalizedByTitle.get(title) ?? "") ?? []
+    }));
   }
 }

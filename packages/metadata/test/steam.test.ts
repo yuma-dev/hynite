@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchSteamAppInfoMetadata, fetchSteamMetadata, metadataFromSteamAppDetailsResponse } from "../src/steam";
+import { fetchSteamAppInfoMetadata, fetchSteamMetadata, metadataFromSteamAppDetailsResponse, parseSteamStoreReleaseDate } from "../src/steam";
 
 describe("fetchSteamMetadata", () => {
   it("normalizes cached Steam appdetails raw payloads", () => {
@@ -185,5 +185,16 @@ describe("fetchSteamMetadata", () => {
       headerUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/407530/header.jpg"
     });
     expect(patch.libraryCapsuleUrl).toBeUndefined();
+  });
+
+  it("classifies Steam Store release date precision", () => {
+    expect(parseSteamStoreReleaseDate("Aug 21, 2012")).toEqual({
+      date: "2012-08-21",
+      text: "Aug 21, 2012",
+      precision: "exact"
+    });
+    expect(parseSteamStoreReleaseDate("May 2026")).toEqual({ text: "May 2026", precision: "month" });
+    expect(parseSteamStoreReleaseDate("2027")).toEqual({ text: "2027", precision: "year" });
+    expect(parseSteamStoreReleaseDate("Coming soon")).toEqual({ text: "Coming soon", precision: "unknown" });
   });
 });

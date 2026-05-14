@@ -14,6 +14,7 @@ import type {
   SettingsBackupInfo,
   SettingsHealthWarning,
   SourceExactMatch,
+  SourceExactMatchBatch,
   SourceImportInput,
   SourceImportResult,
   SourceMatch,
@@ -24,7 +25,10 @@ import type {
   SteamPairingResult,
   SteamSearchResult,
   SyncStatus,
-  SyncResult
+  SyncResult,
+  SteamWishlistItem,
+  WishlistCalendarQuery,
+  WishlistListQuery
 } from "@hynite/core";
 
 export type LaunchOutcome =
@@ -48,6 +52,12 @@ const api = {
     sync: (providerId?: ProviderId): Promise<SyncResult> => ipcRenderer.invoke("library:sync", providerId),
     list: (query: LibraryQuery): Promise<Game[]> => ipcRenderer.invoke("library:list", query),
     clear: (): Promise<{ cleared: number }> => ipcRenderer.invoke("library:clear")
+  },
+  wishlist: {
+    list: (query?: WishlistListQuery): Promise<SteamWishlistItem[]> => ipcRenderer.invoke("wishlist:list", query ?? {}),
+    count: (): Promise<number> => ipcRenderer.invoke("wishlist:count"),
+    calendar: (query: WishlistCalendarQuery): Promise<SteamWishlistItem[]> => ipcRenderer.invoke("wishlist:calendar", query),
+    refresh: (): Promise<SyncResult> => ipcRenderer.invoke("wishlist:refresh")
   },
   games: {
     get: (id: string): Promise<GameDetail> => ipcRenderer.invoke("games:get", id),
@@ -140,7 +150,8 @@ const api = {
       ipcRenderer.invoke("sources:refreshSource", id, json),
     search: (gameId: string, options?: SourceSearchOptions): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:search", gameId, options),
     searchTitle: (title: string, options?: SourceSearchOptions): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:searchTitle", title, options),
-    exactTitleMatches: (title: string): Promise<SourceExactMatch[]> => ipcRenderer.invoke("sources:exactTitleMatches", title)
+    exactTitleMatches: (title: string): Promise<SourceExactMatch[]> => ipcRenderer.invoke("sources:exactTitleMatches", title),
+    exactTitleMatchesBatch: (titles: string[]): Promise<SourceExactMatchBatch[]> => ipcRenderer.invoke("sources:exactTitleMatchesBatch", titles)
   },
   clipboard: {
     copy: (text: string): Promise<void> => ipcRenderer.invoke("clipboard:copy", text)

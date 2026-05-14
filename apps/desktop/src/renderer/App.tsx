@@ -56,8 +56,8 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SyncStatus } from "@hynite/core";
-import { isProfileEnabled, profileImageError, profileImageStart, profileSpan, profileStartup } from "./startupProfile";
+import { defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
+import { isProfileEnabled, profileImageError, profileImageStart, profilePoint, profileSpan, profileStartup } from "./startupProfile";
 import { profileReactRender, startRuntimeFrameProfiler, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
 import { BigPictureScreen } from "./BigPictureScreen";
@@ -195,12 +195,13 @@ async function launchGame(input: LaunchGameInput, preferredSteamId?: string): Pr
   return handledPromise;
 }
 
-type Route = "home" | "trending" | "library" | "search" | "local" | "settings";
+type Route = "home" | "trending" | "library" | "wishlist" | "search" | "local" | "settings";
 
 const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
   { id: "home", label: "Home", icon: Home },
   { id: "trending", label: "Trending", icon: Flame },
   { id: "library", label: "Library", icon: Library },
+  { id: "wishlist", label: "Wishlist", icon: CalendarDays },
   { id: "search", label: "Search", icon: Search },
   { id: "local", label: "Add games", icon: Plus },
   { id: "settings", label: "Settings", icon: Settings }
@@ -733,6 +734,15 @@ function normalizeLibraryView(view?: LibraryView): LibraryView {
   };
 }
 
+function normalizeWishlistView(view?: WishlistView): WishlistView {
+  return {
+    sort: {
+      ...defaultWishlistView.sort,
+      ...(view?.sort ?? {})
+    }
+  };
+}
+
 function normalizeGroups(settings?: AppSettings): GameGroup[] {
   return settings?.gameGroups ?? [];
 }
@@ -1046,18 +1056,27 @@ const GameCover = memo(function GameCover({
   onSelect,
   onContextMenu,
   wide = false,
-  inLibrary = true
+  inLibrary = true,
+  badges,
+  showLogo = true,
+  profileDetails,
+  onCoverLoad
 }: {
   game: Game;
   onSelect: (game: Game) => void;
   onContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
   wide?: boolean;
   inLibrary?: boolean;
+  badges?: ReactNode;
+  showLogo?: boolean;
+  profileDetails?: Record<string, unknown>;
+  onCoverLoad?: (details: Record<string, unknown>) => void;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const cover = primaryCover(game);
   const coverProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
   const logoProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
+  const profileDetailsRef = useRef<Record<string, unknown> | undefined>(profileDetails);
   const isInstalled = game.installState === "installed";
   const launchable = canLaunch(game);
   const activity = formatCoverActivity(game);
@@ -1067,28 +1086,34 @@ const GameCover = memo(function GameCover({
     : undefined;
 
   useEffect(() => {
+    profileDetailsRef.current = profileDetails;
+  }, [profileDetails]);
+
+  useEffect(() => {
     if (!cover) return undefined;
-    const span = profileImageStart(cover, { role: "cover", gameId: game.id, title: game.title, lazy: true });
+    const details = { ...profileDetailsRef.current, role: "cover", gameId: game.id, title: game.title, lazy: true };
+    const span = profileImageStart(cover, details);
     coverProfileRef.current = span;
     return () => {
       if (coverProfileRef.current === span) {
-        span.end("cancelled", { role: "cover", gameId: game.id, title: game.title });
+        span.end("cancelled", details);
         coverProfileRef.current = undefined;
       }
     };
   }, [cover, game.id, game.title]);
 
   useEffect(() => {
-    if (!game.logoUrl) return undefined;
-    const span = profileImageStart(game.logoUrl, { role: "logo", gameId: game.id, title: game.title, lazy: true });
+    if (!showLogo || !game.logoUrl) return undefined;
+    const details = { ...profileDetailsRef.current, role: "logo", gameId: game.id, title: game.title, lazy: true };
+    const span = profileImageStart(game.logoUrl, details);
     logoProfileRef.current = span;
     return () => {
       if (logoProfileRef.current === span) {
-        span.end("cancelled", { role: "logo", gameId: game.id, title: game.title });
+        span.end("cancelled", details);
         logoProfileRef.current = undefined;
       }
     };
-  }, [game.logoUrl, game.id, game.title]);
+  }, [game.logoUrl, game.id, game.title, showLogo]);
 
   return (
     <div
@@ -1122,6 +1147,7 @@ const GameCover = memo(function GameCover({
             onLoad={(event) => {
               setImgLoaded(true);
               coverProfileRef.current?.end("ok", {
+                ...profileDetailsRef.current,
                 role: "cover",
                 gameId: game.id,
                 title: game.title,
@@ -1129,18 +1155,26 @@ const GameCover = memo(function GameCover({
                 naturalHeight: event.currentTarget.naturalHeight,
                 lazy: true
               });
+              onCoverLoad?.({
+                ...profileDetailsRef.current,
+                gameId: game.id,
+                title: game.title,
+                naturalWidth: event.currentTarget.naturalWidth,
+                naturalHeight: event.currentTarget.naturalHeight
+              });
               coverProfileRef.current = undefined;
             }}
             onError={() => {
-              profileImageError(cover, { role: "cover", gameId: game.id, title: game.title, lazy: true });
-              coverProfileRef.current?.end("error", { role: "cover", gameId: game.id, title: game.title });
+              const details = { ...profileDetailsRef.current, role: "cover", gameId: game.id, title: game.title, lazy: true };
+              profileImageError(cover, details);
+              coverProfileRef.current?.end("error", details);
               coverProfileRef.current = undefined;
             }}
           />
         ) : null}
         <span className="cover-reveal">
           <span className="cover-logo">
-            {game.logoUrl ? (
+            {showLogo && game.logoUrl ? (
               <img
                 className="cover-logo-img"
                 src={game.logoUrl}
@@ -1149,6 +1183,7 @@ const GameCover = memo(function GameCover({
                 decoding="async"
                 onLoad={(event) => {
                   logoProfileRef.current?.end("ok", {
+                    ...profileDetailsRef.current,
                     role: "logo",
                     gameId: game.id,
                     title: game.title,
@@ -1160,9 +1195,9 @@ const GameCover = memo(function GameCover({
                 }}
                 onError={() => {
                   if (game.logoUrl) {
-                    profileImageError(game.logoUrl, { role: "logo", gameId: game.id, title: game.title, lazy: true });
+                    profileImageError(game.logoUrl, { ...profileDetailsRef.current, role: "logo", gameId: game.id, title: game.title, lazy: true });
                   }
-                  logoProfileRef.current?.end("error", { role: "logo", gameId: game.id, title: game.title });
+                  logoProfileRef.current?.end("error", { ...profileDetailsRef.current, role: "logo", gameId: game.id, title: game.title });
                   logoProfileRef.current = undefined;
                 }}
               />
@@ -1206,6 +1241,7 @@ const GameCover = memo(function GameCover({
           Family
         </span>
       ) : null}
+      {badges ? <span className="cover-extra-badges">{badges}</span> : null}
     </div>
   );
 });
@@ -2543,6 +2579,609 @@ function LibraryScreen({
         query={query}
         onRequestSmartGroup={onCreateSmartGroup}
       />
+    </main>
+  );
+}
+
+function WishlistSourcePill({ item }: { item: SteamWishlistItem }) {
+  if (item.sourceMatches.length === 0) {
+    return null;
+  }
+  const sourceText = item.sourceMatches.map((match) => `${match.sourceName} (${match.count})`).join(", ");
+  return (
+    <span className="wishlist-source-pill available" title={sourceText}>
+      <Download size={12} />
+    </span>
+  );
+}
+
+function wishlistGame(item: SteamWishlistItem): Game {
+  return {
+    id: `steam:${item.appid}`,
+    title: item.title,
+    sortTitle: item.sortTitle,
+    sourceIds: [{ provider: "steam", externalId: item.appid }],
+    installState: "unknown",
+    coverUrl: item.coverUrl,
+    libraryCapsuleUrl: item.libraryCapsuleUrl,
+    headerUrl: item.headerUrl,
+    backgroundUrl: item.backgroundUrl,
+    logoUrl: item.logoUrl,
+    communityIconUrl: item.communityIconUrl,
+    screenshots: [],
+    genres: [],
+    tags: [],
+    playerModes: [],
+    developers: [],
+    publishers: [],
+    contentDescriptors: [],
+    releaseDate: item.releaseDate,
+    metadataStatus: item.metadataStatus
+  };
+}
+
+function wishlistReleaseLabel(item: SteamWishlistItem): string {
+  return formatDate(item.releaseDate) ?? item.releaseDateText ?? "TBA";
+}
+
+function wishlistReleaseTime(item: Pick<SteamWishlistItem, "releaseDate" | "releasePrecision">): number | undefined {
+  if (item.releasePrecision !== "exact" || !item.releaseDate) return undefined;
+  const timestamp = Date.parse(`${item.releaseDate}T00:00:00`);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function todayStartMs(): number {
+  const today = new Date();
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+}
+
+function isReleasingSoon(item: SteamWishlistItem): boolean {
+  const release = wishlistReleaseTime(item);
+  if (release === undefined) return false;
+  const today = todayStartMs();
+  return release >= today && release <= today + 30 * 24 * 60 * 60 * 1000;
+}
+
+function isFutureWishlistRelease(item: SteamWishlistItem): boolean {
+  const release = wishlistReleaseTime(item);
+  if (release === undefined) return false;
+  return release > todayStartMs();
+}
+
+function isPastTwoWeeks(item: SteamWishlistItem): boolean {
+  const release = wishlistReleaseTime(item);
+  if (release === undefined) return false;
+  const today = todayStartMs();
+  return release < today && release >= today - 14 * 24 * 60 * 60 * 1000;
+}
+
+function wishlistBadges(item: SteamWishlistItem): ReactNode {
+  return (
+    <>
+      {isReleasingSoon(item) ? <span className="wishlist-cover-pill soon">Releasing soon</span> : null}
+      {item.sourceMatches.length > 0 ? <WishlistSourcePill item={item} /> : null}
+    </>
+  );
+}
+
+function wishlistWithSourceMatches(item: SteamWishlistItem, matchesByTitle: Map<string, SourceExactMatch[]>): SteamWishlistItem {
+  return {
+    ...item,
+    sourceMatches: matchesByTitle.get(item.title) ?? item.sourceMatches
+  };
+}
+
+function monthKey(value: string): string {
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return "Unknown";
+  return parsed.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+function dayKey(date: Date): string {
+  return `${date.getFullYear()}-${twoDigit(date.getMonth() + 1)}-${twoDigit(date.getDate())}`;
+}
+
+function addDays(value: Date, days: number): Date {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function WishlistScreen({
+  settings,
+  onSelect,
+  onOpenSettings,
+  onCountChanged,
+  cardsPerRow
+}: {
+  settings?: AppSettings;
+  onSelect: (item: SteamWishlistItem) => void;
+  onOpenSettings: () => void;
+  onCountChanged: (count: number) => void;
+  cardsPerRow: number;
+}) {
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const [mode, setMode] = useState<WishlistViewMode>("list");
+  const [items, setItems] = useState<SteamWishlistItem[]>([]);
+  const [calendarItems, setCalendarItems] = useState<SteamWishlistItem[]>([]);
+  const [sourceMatchesByTitle, setSourceMatchesByTitle] = useState<Map<string, SourceExactMatch[]>>(() => new Map());
+  const [visibleCount, setVisibleCount] = useState(LIBRARY_GRID_INITIAL_SIZE);
+  const [query, setQuery] = useState("");
+  const [sourceAvailability, setSourceAvailability] = useState<"all" | "available" | "missing">("all");
+  const [sort, setSort] = useState<WishlistSortField>(defaultWishlistView.sort.field);
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">(defaultWishlistView.sort.direction);
+  const [accountSteamIds, setAccountSteamIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const dataAppliedAtRef = useRef<number | undefined>();
+  const firstCoverLoggedRef = useRef(false);
+  const wishlistViewHydratedRef = useRef(false);
+  const accounts = settings?.steamAccounts ?? [];
+  const normalizedCardsPerRow = normalizeCardsPerRow(cardsPerRow);
+  const gridStyle = useMemo(() => cardGridStyle(normalizedCardsPerRow), [normalizedCardsPerRow]);
+
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  useEffect(() => {
+    if (!settings || wishlistViewHydratedRef.current) return;
+    const view = normalizeWishlistView(settings.wishlistView);
+    wishlistViewHydratedRef.current = true;
+    setSort(view.sort.field);
+    setSortDirection(view.sort.direction);
+  }, [settings]);
+
+  useEffect(() => {
+    if (!wishlistViewHydratedRef.current) return;
+    const next = normalizeWishlistView({ sort: { field: sort, direction: sortDirection } });
+    void window.hynite.settings.update({ wishlistView: next }).catch((error: unknown) => {
+      console.error("Failed to persist wishlistView", error);
+    });
+  }, [sort, sortDirection]);
+
+  const loadWishlist = useCallback(async () => {
+    const details = {
+      queryLength: query.trim().length,
+      sourceAvailability,
+      sort,
+      sortDirection,
+      accountFilters: accountSteamIds.length,
+      cardsPerRow: normalizedCardsPerRow
+    };
+    const interaction = startRuntimeInteraction("wishlist:load", details);
+    const span = profileSpan("wishlist", "wishlist:renderer-load", details);
+    setLoading(true);
+    setError(undefined);
+    try {
+      const listSpan = profileSpan("wishlist", "wishlist:renderer-list-ipc", details);
+      const calendarSpan = profileSpan("wishlist", "wishlist:renderer-calendar-ipc", { ...details, months: 3 });
+      const listPromise = window.hynite.wishlist
+        .list({ search: query, sourceAvailability, sort, sortDirection, accountSteamIds })
+        .then((result) => {
+          listSpan.end("ok", {
+            items: result.length,
+            withCover: result.filter((item) => Boolean(item.coverUrl ?? item.libraryCapsuleUrl)).length,
+            withLogo: result.filter((item) => Boolean(item.logoUrl)).length
+          });
+          return result;
+        })
+        .catch((error: unknown) => {
+          listSpan.end("error", { error: error instanceof Error ? error.message : String(error) });
+          throw error;
+        });
+      const calendarPromise = window.hynite.wishlist
+        .calendar({ startDate: today, months: 3, accountSteamIds })
+        .then((result) => {
+          calendarSpan.end("ok", { items: result.length });
+          return result;
+        })
+        .catch((error: unknown) => {
+          calendarSpan.end("error", { error: error instanceof Error ? error.message : String(error) });
+          throw error;
+        });
+      const [nextItems, nextCalendar] = await Promise.all([listPromise, calendarPromise]);
+      const calendarSearch = query.trim().toLocaleLowerCase();
+      const filteredCalendar = nextCalendar.filter((item) => {
+        if (calendarSearch && !item.title.toLocaleLowerCase().includes(calendarSearch)) return false;
+        if (sourceAvailability === "available") return item.sourceMatches.length > 0;
+        if (sourceAvailability === "missing") return item.sourceMatches.length === 0;
+        return true;
+      });
+      firstCoverLoggedRef.current = false;
+      dataAppliedAtRef.current = performance.now();
+      setItems(nextItems);
+      setCalendarItems(filteredCalendar);
+      setVisibleCount(LIBRARY_GRID_INITIAL_SIZE);
+      const countSpan = profileSpan("wishlist", "wishlist:renderer-count-ipc", details);
+      const count = await window.hynite.wishlist.count();
+      countSpan.end("ok", { count });
+      onCountChanged(count);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const visibleItemsAfterLoad = Math.min(nextItems.length, LIBRARY_GRID_INITIAL_SIZE);
+          profilePoint("wishlist", "wishlist:first-paint-after-data", {
+            ...details,
+            items: nextItems.length,
+            visibleItems: visibleItemsAfterLoad,
+            calendarItems: filteredCalendar.length,
+            visibleWithCover: nextItems.slice(0, visibleItemsAfterLoad).filter((item) => Boolean(item.coverUrl ?? item.libraryCapsuleUrl)).length,
+            visibleWithLogo: nextItems.slice(0, visibleItemsAfterLoad).filter((item) => Boolean(item.logoUrl)).length
+          });
+        });
+      });
+      span.end("ok", { items: nextItems.length, calendarItems: filteredCalendar.length, count });
+      interaction.end("ok", { items: nextItems.length, calendarItems: filteredCalendar.length });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Wishlist could not be loaded.";
+      span.end("error", { error: message });
+      interaction.end("error", { error: message });
+      setError(err instanceof Error ? err.message : "Wishlist could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }, [accountSteamIds, normalizedCardsPerRow, onCountChanged, query, sort, sortDirection, sourceAvailability, today]);
+
+  useEffect(() => {
+    void loadWishlist();
+  }, [loadWishlist]);
+
+  async function refreshWishlist() {
+    setRefreshing(true);
+    setError(undefined);
+    try {
+      await window.hynite.wishlist.refresh();
+      await loadWishlist();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Wishlist refresh failed.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  function toggleAccount(steamId: string) {
+    setAccountSteamIds((current) => current.includes(steamId) ? current.filter((id) => id !== steamId) : [...current, steamId]);
+  }
+
+  const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
+  const hasMoreItems = visibleCount < items.length;
+  const pastItems = useMemo(() => items.filter(isPastTwoWeeks), [items]);
+  const visibleItemsWithSources = useMemo(
+    () => visibleItems.map((item) => wishlistWithSourceMatches(item, sourceMatchesByTitle)),
+    [sourceMatchesByTitle, visibleItems]
+  );
+  const pastItemsWithSources = useMemo(
+    () => pastItems.map((item) => wishlistWithSourceMatches(item, sourceMatchesByTitle)),
+    [pastItems, sourceMatchesByTitle]
+  );
+
+  useEffect(() => {
+    if (mode !== "list" || !hasMoreItems) return undefined;
+    const sentinel = loadMoreRef.current;
+    if (!sentinel) return undefined;
+
+    let disconnected = false;
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      if (disconnected) return;
+      disconnected = true;
+      observer.disconnect();
+      setVisibleCount((current) => {
+        const next = Math.min(items.length, current + LIBRARY_GRID_BATCH_SIZE);
+        if (next > current) {
+          const span = startRuntimeInteraction("wishlist:load-more-batch", {
+            fromVisibleItems: current,
+            toVisibleItems: next,
+            totalItems: items.length
+          });
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => span.end("ok", { visibleItems: next }));
+          });
+        }
+        return next;
+      });
+    }, { rootMargin: "540px 0px" });
+    observer.observe(sentinel);
+    return () => {
+      disconnected = true;
+      observer.disconnect();
+    };
+  }, [hasMoreItems, items.length, mode, visibleCount]);
+
+  useEffect(() => {
+    profilePoint("wishlist", "wishlist:screen-state", {
+      mode,
+      items: items.length,
+      visibleItems: visibleItems.length,
+      calendarItems: calendarItems.length,
+      sourceAvailability,
+      queryLength: query.trim().length,
+      cardsPerRow: normalizedCardsPerRow
+    });
+    updateRuntimeProfileContext({
+      route: "wishlist",
+      area: "wishlist",
+      wishlistMode: mode,
+      wishlistItems: items.length,
+      wishlistVisibleItems: visibleItems.length,
+      wishlistCalendarItems: calendarItems.length,
+      wishlistQuery: query,
+      wishlistSourceAvailability: sourceAvailability,
+      cardsPerRow: normalizedCardsPerRow
+    });
+  }, [calendarItems.length, items.length, mode, normalizedCardsPerRow, query, sourceAvailability, visibleItems.length]);
+
+  useEffect(() => {
+    if (sourceAvailability !== "all") return;
+    const candidateItems = mode === "calendar" ? [...visibleItems, ...pastItems] : visibleItems;
+    const candidates = candidateItems
+      .filter((item) => !isFutureWishlistRelease(item) && !sourceMatchesByTitle.has(item.title));
+    if (candidates.length === 0) return;
+    let cancelled = false;
+    const batch = [...new Map(candidates.map((item) => [item.title, item])).values()].slice(0, 24);
+    const span = profileSpan("wishlist", "wishlist:visible-source-match-batch", {
+      candidates: candidates.length,
+      batchSize: batch.length,
+      visibleItems: visibleItems.length,
+      pastItems: pastItems.length
+    });
+    let cacheHits = 0;
+    let matchedTitles = 0;
+    const nextMatchesByTitle = new Map<string, SourceExactMatch[]>();
+    const pendingTitles: string[] = [];
+    for (const item of batch) {
+      const cached = sourceAvailabilityCache.get(item.title);
+      if (cached) {
+        cacheHits += 1;
+        if (cached.length > 0) matchedTitles += 1;
+        nextMatchesByTitle.set(item.title, cached);
+        continue;
+      }
+      pendingTitles.push(item.title);
+    }
+    if (nextMatchesByTitle.size > 0) {
+      setSourceMatchesByTitle((current) => {
+        const next = new Map(current);
+        for (const [title, matches] of nextMatchesByTitle) {
+          next.set(title, matches);
+        }
+        return next;
+      });
+    }
+    if (pendingTitles.length === 0) {
+      span.end("ok", { pending: 0, cacheHits, matchedTitles });
+      return undefined;
+    }
+    void window.hynite.sources.exactTitleMatchesBatch(pendingTitles)
+      .then((results) => {
+        for (const result of results) {
+          if (result.matches.length > 0) matchedTitles += 1;
+          sourceAvailabilityCache.set(result.title, result.matches);
+          nextMatchesByTitle.set(result.title, result.matches);
+        }
+        if (!cancelled) {
+          setSourceMatchesByTitle((current) => {
+            const next = new Map(current);
+            for (const [title, matches] of nextMatchesByTitle) {
+              next.set(title, matches);
+            }
+            return next;
+          });
+        }
+        span.end(cancelled ? "cancelled" : "ok", { pending: pendingTitles.length, cacheHits, matchedTitles });
+      })
+      .catch((error: unknown) => {
+        span.end("error", { pending: pendingTitles.length, cacheHits, matchedTitles, error: error instanceof Error ? error.message : String(error) });
+        console.error(error);
+      });
+    return () => {
+      cancelled = true;
+      if (pendingTitles.length === 0) span.end("cancelled", { pending: 0, cacheHits, matchedTitles });
+    };
+  }, [mode, pastItems, sourceAvailability, sourceMatchesByTitle, visibleItems]);
+
+  const dayRows = useMemo(() => {
+    const map = new Map<string, SteamWishlistItem[]>();
+    for (const item of calendarItems) {
+      if (!item.releaseDate) continue;
+      const key = item.releaseDate;
+      map.set(key, [...(map.get(key) ?? []), item]);
+    }
+    const start = new Date(`${today}T00:00:00`);
+    const rows: Array<{ key: string; label: string; month: string; items: SteamWishlistItem[]; monthStart: boolean }> = [];
+    for (let index = 0; index < 92; index += 1) {
+      const date = addDays(start, index);
+      const key = dayKey(date);
+      rows.push({
+        key,
+        label: date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }),
+        month: monthKey(key),
+        items: map.get(key) ?? [],
+        monthStart: index === 0 || date.getDate() === 1
+      });
+    }
+    return rows;
+  }, [calendarItems, today]);
+
+  const handleWishlistCoverLoad = useCallback((details: Record<string, unknown>) => {
+    if (firstCoverLoggedRef.current) return;
+    firstCoverLoggedRef.current = true;
+    profilePoint("wishlist", "wishlist:first-cover-loaded", {
+      ...details,
+      mode,
+      msSinceDataApplied: dataAppliedAtRef.current ? Math.round(performance.now() - dataAppliedAtRef.current) : undefined
+    });
+  }, [mode]);
+
+  const wishlistCoverProfileDetails = useCallback((item: SteamWishlistItem, surface: string): Record<string, unknown> => ({
+    area: "wishlist",
+    surface,
+    appid: item.appid,
+    releaseDate: item.releaseDate,
+    releasePrecision: item.releasePrecision,
+    hasCover: Boolean(item.coverUrl ?? item.libraryCapsuleUrl),
+    hasLogo: Boolean(item.logoUrl),
+    sourceMatches: item.sourceMatches.length
+  }), []);
+
+  if (accounts.length === 0 && items.length === 0 && !loading) {
+    return (
+      <main className="page">
+        <div className="empty-state">
+          <CalendarDays size={34} />
+          <h2>No paired Steam accounts</h2>
+          <p>Pair a Steam account to cache its wishlist.</p>
+          <button className="primary-action" type="button" onClick={onOpenSettings}>
+            <Settings size={16} />
+            Open settings
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="page wishlist-page">
+      <div className="library-head wishlist-head">
+        <div>
+          <h1>Wishlist</h1>
+          <p>{items.length} games / {new Set(items.flatMap((item) => item.accounts.map((account) => account.steamId))).size || accounts.length} accounts</p>
+        </div>
+        <div className="toolbar library-toolbar wishlist-toolbar">
+          <div className="segmented-control">
+            <button type="button" className={mode === "list" ? "active" : ""} onClick={() => setMode("list")}>All games</button>
+            <button type="button" className={mode === "calendar" ? "active" : ""} onClick={() => setMode("calendar")}>Calendar</button>
+          </div>
+          <button type="button" className="secondary-action" onClick={() => void refreshWishlist()} disabled={refreshing}>
+            <RefreshCw size={14} />
+            {refreshing ? "Refreshing" : "Refresh"}
+          </button>
+        </div>
+        {error ? <p className="form-error">{error}</p> : null}
+      </div>
+
+      <div className="wishlist-filters">
+        <label className="search-box">
+          <Search size={15} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search wishlist" />
+        </label>
+        <select className="plain-select" value={sourceAvailability} onChange={(event) => setSourceAvailability(event.target.value as typeof sourceAvailability)}>
+          <option value="all">All sources</option>
+          <option value="available">Available</option>
+          <option value="missing">Missing</option>
+        </select>
+        <select className="plain-select" value={sort} onChange={(event) => setSort(event.target.value as WishlistSortField)}>
+          <option value="title">Title</option>
+          <option value="release">Release</option>
+          <option value="added">Added</option>
+          <option value="account">Account</option>
+        </select>
+        <button type="button" className="secondary-action" onClick={() => setSortDirection(sortDirection === "asc" ? "desc" : "asc")} aria-label="Toggle sort direction">
+          {sortDirection === "asc" ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+          {sortDirection.toUpperCase()}
+        </button>
+      </div>
+
+      {accounts.length > 1 ? (
+        <div className="wishlist-account-filter">
+          {accounts.map((account) => (
+            <button
+              key={account.steamId}
+              type="button"
+              className={accountSteamIds.includes(account.steamId) ? "active" : ""}
+              onClick={() => toggleAccount(account.steamId)}
+            >
+              {account.personaName ?? account.steamId}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {mode === "list" ? (
+        <ProfileScope id="WishlistGrid">
+        <div className="wishlist-grid-wrap" aria-busy={loading}>
+          <div className="library-grid wishlist-grid" style={gridStyle}>
+            {visibleItemsWithSources.map((item) => (
+              <GameCover
+                key={item.appid}
+                game={wishlistGame(item)}
+                onSelect={() => onSelect(item)}
+                inLibrary={false}
+                badges={wishlistBadges(item)}
+                profileDetails={wishlistCoverProfileDetails(item, "list")}
+                onCoverLoad={handleWishlistCoverLoad}
+              />
+            ))}
+          </div>
+          {hasMoreItems ? <div ref={loadMoreRef} className="wishlist-load-more-sentinel" aria-hidden="true" /> : null}
+          {!loading && items.length === 0 ? (
+            <div className="empty-state">
+              <BookOpen size={34} />
+              <h2>No wishlist games match these filters</h2>
+            </div>
+          ) : null}
+        </div>
+        </ProfileScope>
+      ) : (
+        <ProfileScope id="WishlistCalendar">
+        <div className="wishlist-calendar">
+          {pastItems.length > 0 ? (
+            <section className="wishlist-past-section">
+              <div className="wishlist-month-marker">
+                <span>Past 2 weeks</span>
+              </div>
+              <div className="library-grid wishlist-grid wishlist-past-grid" style={gridStyle}>
+                {pastItemsWithSources.map((item) => (
+                  <GameCover
+                    key={item.appid}
+                    game={wishlistGame(item)}
+                    onSelect={() => onSelect(item)}
+                    inLibrary={false}
+                    badges={wishlistBadges(item)}
+                    profileDetails={wishlistCoverProfileDetails(item, "calendar-past")}
+                    onCoverLoad={handleWishlistCoverLoad}
+                  />
+                ))}
+              </div>
+            </section>
+          ) : null}
+          <div className="wishlist-day-list">
+            {dayRows.map((row) => (
+              <section key={row.key} className={row.items.length > 0 ? "wishlist-day-row has-items" : "wishlist-day-row"}>
+                {row.monthStart ? (
+                  <div className="wishlist-month-marker">
+                    <span>{row.month}</span>
+                  </div>
+                ) : null}
+                <div className="wishlist-day-heading">
+                  <span>{row.label}</span>
+                </div>
+                {row.items.length > 0 ? (
+                  <div className="library-grid wishlist-grid wishlist-day-grid" style={gridStyle}>
+                    {row.items.map((item) => (
+                      <GameCover
+                        key={item.appid}
+                        game={wishlistGame(item)}
+                        onSelect={() => onSelect(item)}
+                        inLibrary={false}
+                        badges={wishlistBadges(item)}
+                        profileDetails={wishlistCoverProfileDetails(item, "calendar-day")}
+                        onCoverLoad={handleWishlistCoverLoad}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+            ))}
+          </div>
+          {!loading && calendarItems.length === 0 && pastItems.length === 0 ? (
+            <div className="empty-state">
+              <CalendarDays size={34} />
+              <h2>No exact-dated wishlist releases in the next 3 months.</h2>
+            </div>
+          ) : null}
+        </div>
+        </ProfileScope>
+      )}
     </main>
   );
 }
@@ -5650,6 +6289,7 @@ function LauncherShell() {
   const [recentGames, setRecentGames] = useState<Game[]>([]);
   const [allGames, setAllGames] = useState<Game[]>([]);
   const [libraryGameIds, setLibraryGameIds] = useState<Set<string>>(() => new Set());
+  const [wishlistCount, setWishlistCount] = useState(0);
   const [selected, setSelected] = useState<GameDetail | undefined>();
   const [settings, setSettings] = useState<AppSettings | undefined>();
   const [localIssueCount, setLocalIssueCount] = useState(0);
@@ -5758,7 +6398,7 @@ function LauncherShell() {
     };
 
     const onScroll = () => {
-      if (routeRef.current !== "library") return;
+      if (routeRef.current !== "library" && routeRef.current !== "wishlist") return;
       const now = performance.now();
       const scrollTop = content.scrollTop;
       const elapsedMs = Math.max(1, now - lastScrollAt);
@@ -5767,15 +6407,16 @@ function LauncherShell() {
       lastScrollAt = now;
 
       updateRuntimeProfileContext({
-        route: "library",
-        area: "library",
+        route: routeRef.current,
+        area: routeRef.current,
         scrollTop: Math.round(scrollTop),
         scrollVelocityPxPerMs: Math.round(velocity * 100) / 100
       });
 
       if (!scrollSpan) {
-        scrollSpan = startRuntimeInteraction("library:scroll-session", {
-          route: "library",
+        const route = routeRef.current;
+        scrollSpan = startRuntimeInteraction(`${route}:scroll-session`, {
+          route,
           scrollTop: Math.round(scrollTop)
         });
       }
@@ -6160,13 +6801,14 @@ function LauncherShell() {
       route,
       bigPicture,
       area: bigPicture ? "big-picture" : route,
-      totalGames: route === "library" ? games.length : allGames.length,
+      totalGames: route === "library" ? games.length : route === "wishlist" ? wishlistCount : allGames.length,
+      wishlistItems: wishlistCount,
       cardsPerRow,
       activeGroupId: activeGroup?.id,
       activeGroupName: activeGroup?.name,
       libraryQuery: activeQuery
     });
-  }, [activeGroup?.id, activeGroup?.name, activeQuery, allGames.length, bigPicture, cardsPerRow, games.length, route]);
+  }, [activeGroup?.id, activeGroup?.name, activeQuery, allGames.length, bigPicture, cardsPerRow, games.length, route, wishlistCount]);
 
   // Big Picture uses the user's library sort and stacks the Big Picture filter
   // sheet on top. "All Games" and group tabs get filtered+sorted; Recent and
@@ -6313,15 +6955,17 @@ function LauncherShell() {
     });
     const homePromise = loadHome();
     const librarySpan = profileSpan("library", "renderer:library-refresh-ipc");
-    const [nextGames, nextRecentGames, nextSettings] = await Promise.all([
+    const [nextGames, nextRecentGames, nextSettings, nextWishlistCount] = await Promise.all([
       window.hynite.library.list(libraryQueryForView(effectiveQuery, effectiveLibraryView, effectiveGroup)),
       window.hynite.library.list({ search: "", sort: "recent", installState: "all" }),
-      loadedSettings ? Promise.resolve(loadedSettings) : window.hynite.settings.get()
+      loadedSettings ? Promise.resolve(loadedSettings) : window.hynite.settings.get(),
+      window.hynite.wishlist.count()
     ]);
     librarySpan.end("ok", { games: nextGames.length, recentGames: nextRecentGames.length });
     setGames(nextGames);
     setAllGames(nextRecentGames);
     setLibraryGameIds(new Set(nextRecentGames.map((game) => game.id)));
+    setWishlistCount(nextWishlistCount);
     setRecentGames(nextRecentGames.filter((game) => gameActivityTime(game) > 0));
     settingsRef.current = nextSettings;
     soundEngine.applySettings(nextSettings);
@@ -6680,6 +7324,36 @@ function LauncherShell() {
     }
   }
 
+  function selectWishlistItem(item: SteamWishlistItem) {
+    const libraryGame = allGamesRef.current.find((game) => game.id === `steam:${item.appid}`) ?? gamesRef.current.find((game) => game.id === `steam:${item.appid}`);
+    if (libraryGame) {
+      void selectGame(libraryGame);
+      return;
+    }
+    void selectGame({
+      id: `steam:${item.appid}`,
+      title: item.title,
+      sortTitle: item.sortTitle,
+      sourceIds: [{ provider: "steam", externalId: item.appid }],
+      installState: "unknown",
+      coverUrl: item.coverUrl,
+      libraryCapsuleUrl: item.libraryCapsuleUrl,
+      headerUrl: item.headerUrl,
+      backgroundUrl: item.backgroundUrl,
+      logoUrl: item.logoUrl,
+      communityIconUrl: item.communityIconUrl,
+      screenshots: [],
+      genres: [],
+      tags: [],
+      playerModes: [],
+      developers: [],
+      publishers: [],
+      contentDescriptors: [],
+      releaseDate: item.releaseDate,
+      metadataStatus: item.metadataStatus
+    });
+  }
+
   async function setCardsPerRow(value: number) {
     setSettings(await window.hynite.settings.update({ cardsPerRow: normalizeCardsPerRow(value) }));
   }
@@ -6708,6 +7382,19 @@ function LauncherShell() {
             onRenameGroup={renameGroup}
             onDeleteGroup={deleteGroup}
             onOpenSettings={() => setRoute("settings")}
+            cardsPerRow={cardsPerRow}
+          />
+        </ProfileScope>
+      );
+    }
+    if (route === "wishlist") {
+      return (
+        <ProfileScope id="WishlistScreen">
+          <WishlistScreen
+            settings={settings}
+            onSelect={selectWishlistItem}
+            onOpenSettings={() => setRoute("settings")}
+            onCountChanged={setWishlistCount}
             cardsPerRow={cardsPerRow}
           />
         </ProfileScope>
@@ -6744,7 +7431,7 @@ function LauncherShell() {
         onSeed={() => void window.hynite.debug.seed().then(() => refresh())}
       />
     );
-  }, [route, home, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy, cardsPerRow]);
+  }, [route, home, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy, cardsPerRow, wishlistCount]);
 
   return (
     <>
@@ -6773,6 +7460,7 @@ function LauncherShell() {
                 <Icon size={17} />
                 <span className="rail-label">{item.label}</span>
                 {isLibrary ? <span className="rail-count-pill">{allGames.length}</span> : null}
+                {item.id === "wishlist" ? <span className="rail-count-pill">{wishlistCount}</span> : null}
                 {item.id === "local" && localIssueCount > 0 ? (
                   <span className="rail-issue-badge" title={`${localIssueCount} item${localIssueCount === 1 ? "" : "s"} need review`}>
                     {localIssueCount}

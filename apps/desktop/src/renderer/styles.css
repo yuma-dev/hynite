@@ -699,6 +699,11 @@ button {
   background-position: center;
 }
 
+.game-cover .cover-art,
+.wide-game .cover-art {
+  background: #15171c;
+}
+
 .hero-cover {
   width: 100%;
   max-width: 640px;
@@ -1843,11 +1848,34 @@ button {
   overflow: hidden;
   aspect-ratio: 2 / 3;
   border-radius: 8px;
-  background-color: #050608;
+  background-color: #15171c;
   background-clip: padding-box;
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.32);
   contain: layout paint;
   transition: box-shadow 200ms ease, transform 180ms ease;
+}
+
+.game-cover .cover-art::before,
+.wide-game .cover-art::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.08) 48%, transparent 96%),
+    #15171c;
+  background-size: 220% 100%, 100% 100%;
+  animation: coverSkeletonShimmer 1500ms ease-in-out infinite;
+}
+
+.cover-art:has(.cover-img.loaded)::before {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes coverSkeletonShimmer {
+  from { background-position: 160% 0, 0 0; }
+  to { background-position: -60% 0, 0 0; }
 }
 
 .cover-strip .is-glow-target .cover-art::after,
@@ -1883,6 +1911,7 @@ button {
 
 .cover-reveal {
   display: none;
+  z-index: 4;
 }
 
 .game-cover:hover .cover-reveal,
@@ -1970,6 +1999,7 @@ button {
 .cover-img {
   position: absolute;
   inset: 0;
+  z-index: 1;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -1979,6 +2009,13 @@ button {
 
 .cover-img.loaded {
   opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-cover .cover-art::before,
+  .wide-game .cover-art::before {
+    animation: none;
+  }
 }
 
 .cover-action {
@@ -5524,8 +5561,12 @@ dd {
 .big-picture {
   --bp-pad-x: 64px;
   --bp-card-w: 200px;
+  --bp-card-gap: 22px;
   --bp-card-scale: 1.32;
+  --bp-focused-index: 0;
+  --bp-window-start: 0;
   --bp-bg-base: #08080b;
+  --bp-glow-color: #ffffff;
   position: absolute;
   inset: 0;
   display: grid;
@@ -5585,7 +5626,7 @@ dd {
   z-index: 2;
   min-width: 0;
   min-height: 0;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .bp-view-stage {
@@ -5593,13 +5634,15 @@ dd {
   inset: 0;
   width: 100%;
   height: 100%;
+  overflow: hidden;
+  contain: layout paint style;
   will-change: transform;
 }
 
 .bp-shelf-stage {
   display: grid;
   grid-template-rows: 1fr auto;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .bp-top {
@@ -5832,20 +5875,18 @@ dd {
   width: calc(var(--bp-card-w) * var(--bp-card-scale));
   height: calc(var(--bp-card-w) * 1.5 * var(--bp-card-scale));
   border-radius: 14px;
-  background: #fff;
+  background: color-mix(in srgb, var(--bp-glow-color) 82%, white 18%);
   filter: blur(72px);
   opacity: 0.46;
   pointer-events: none;
+  transition: background 450ms ease;
 }
 
 .bp-row {
   position: relative;
   z-index: 2;
-  display: flex;
-  gap: 22px;
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
-  scroll-behavior: smooth;
   padding: 54px max(var(--bp-pad-x), calc(100vw - var(--bp-pad-x) - var(--bp-card-w))) 78px var(--bp-pad-x);
   scrollbar-width: none;
   width: 100%;
@@ -5853,6 +5894,15 @@ dd {
 
 .bp-row::-webkit-scrollbar {
   display: none;
+}
+
+.bp-row-track {
+  display: flex;
+  gap: var(--bp-card-gap);
+  padding-left: calc(var(--bp-window-start) * (var(--bp-card-w) + var(--bp-card-gap)));
+  transform: translate3d(calc(var(--bp-focused-index) * -1 * (var(--bp-card-w) + var(--bp-card-gap))), 0, 0);
+  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
 }
 
 .bp-card {
@@ -6084,7 +6134,7 @@ dd {
 }
 
 .bp-grid-wrap {
-  overflow: visible;
+  overflow: hidden;
   padding: 12px var(--bp-pad-x) 24px;
 }
 
@@ -6170,6 +6220,7 @@ dd {
 
 @media (prefers-reduced-motion: reduce) {
   .bp-view-stage,
+  .bp-row-track,
   .bp-card,
   .bp-card img,
   .bp-grid-card,
@@ -6998,4 +7049,322 @@ dd {
   .music-bars span {
     animation: none;
   }
+}
+
+.wishlist-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-anchor: none;
+}
+
+.wishlist-toolbar,
+.wishlist-filters,
+.wishlist-account-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.wishlist-filters .search-box {
+  min-width: min(320px, 100%);
+  flex: 1 1 260px;
+}
+
+.plain-select {
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.88);
+  padding: 0 12px;
+  font: inherit;
+}
+
+.wishlist-account-filter button {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.68);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.wishlist-account-filter button.active {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.wishlist-list {
+  display: grid;
+  gap: 6px;
+}
+
+.wishlist-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(90px, 130px) minmax(132px, max-content);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 54px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: inherit;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.wishlist-row:hover,
+.wishlist-row:focus-visible,
+.wishlist-calendar-item:hover,
+.wishlist-calendar-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+
+.wishlist-cover {
+  width: 36px;
+  height: 42px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--cover-a), var(--cover-b));
+}
+
+.wishlist-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.wishlist-title {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.wishlist-title strong,
+.wishlist-calendar-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.wishlist-title em,
+.wishlist-calendar-item em,
+.wishlist-release {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.wishlist-source-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.wishlist-source-pill.available {
+  background: rgba(91, 213, 151, 0.14);
+  color: rgb(154, 239, 194);
+}
+
+.wishlist-source-pill.missing {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.wishlist-calendar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.wishlist-month {
+  min-width: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 10px;
+}
+
+.wishlist-month h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.wishlist-calendar-item {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: inherit;
+  padding: 10px;
+  text-align: left;
+  margin-bottom: 8px;
+}
+
+.wishlist-calendar-item > span {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (max-width: 980px) {
+  .wishlist-calendar {
+    grid-template-columns: 1fr;
+  }
+
+  .wishlist-row {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .wishlist-release,
+  .wishlist-row .wishlist-source-pill {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+.cover-extra-badges {
+  position: absolute;
+  z-index: 5;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.wishlist-cover-pill,
+.cover-extra-badges .wishlist-source-pill {
+  min-height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
+}
+
+.wishlist-cover-pill.soon {
+  background: rgba(255, 198, 84, 0.18);
+  color: rgb(255, 224, 151);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.cover-extra-badges .wishlist-source-pill {
+  width: 26px;
+  min-width: 26px;
+  padding: 0;
+}
+
+.wishlist-grid-wrap {
+  display: grid;
+  gap: 16px;
+  overflow-anchor: none;
+}
+
+.wishlist-load-more-sentinel {
+  width: 100%;
+  height: 1px;
+  overflow-anchor: none;
+}
+
+.wishlist-calendar {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  overflow-anchor: none;
+}
+
+.wishlist-past-section {
+  display: grid;
+  gap: 12px;
+}
+
+.wishlist-past-grid,
+.wishlist-day-grid {
+  margin-top: 8px;
+}
+
+.wishlist-day-list {
+  display: grid;
+  gap: 0;
+}
+
+.wishlist-day-row {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.wishlist-day-row.has-items {
+  padding: 10px 0 16px;
+}
+
+.wishlist-day-heading {
+  display: grid;
+  grid-template-columns: max-content minmax(40px, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+  color: rgba(255, 255, 255, 0.46);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wishlist-day-heading::after {
+  content: "";
+  height: 1px;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.wishlist-day-row.has-items .wishlist-day-heading {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.wishlist-day-row.has-items .wishlist-day-heading::after {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.wishlist-month-marker {
+  display: grid;
+  grid-template-columns: max-content minmax(40px, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin: 8px 0 2px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.wishlist-month-marker::after {
+  content: "";
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.04));
 }

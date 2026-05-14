@@ -351,6 +351,11 @@ export type SourceExactMatch = {
   count: number;
 };
 
+export type SourceExactMatchBatch = {
+  title: string;
+  matches: SourceExactMatch[];
+};
+
 export type SourceMatch = {
   id: string;
   sourceId: string;
@@ -361,6 +366,66 @@ export type SourceMatch = {
   uris: string[];
   confidence: SourceMatchConfidence;
   score: number;
+};
+
+export type WishlistReleasePrecision = "exact" | "month" | "year" | "unknown";
+
+export type SteamWishlistAccountRef = {
+  steamId: string;
+  personaName?: string;
+  priority?: number;
+  addedAt?: string;
+};
+
+export type SteamWishlistItem = {
+  appid: string;
+  title: string;
+  sortTitle: string;
+  accounts: SteamWishlistAccountRef[];
+  coverUrl?: string;
+  libraryCapsuleUrl?: string;
+  headerUrl?: string;
+  backgroundUrl?: string;
+  logoUrl?: string;
+  communityIconUrl?: string;
+  releaseDate?: string;
+  releaseDateText?: string;
+  releasePrecision: WishlistReleasePrecision;
+  sourceMatches: SourceExactMatch[];
+  refreshedAt: string;
+  metadataStatus: MetadataStatus;
+};
+
+export type WishlistViewMode = "list" | "calendar";
+
+export type WishlistSortField = "title" | "release" | "added" | "account";
+
+export type WishlistView = {
+  sort: {
+    field: WishlistSortField;
+    direction: "asc" | "desc";
+  };
+};
+
+export const defaultWishlistView: WishlistView = {
+  sort: {
+    field: "added",
+    direction: "desc"
+  }
+};
+
+export type WishlistListQuery = {
+  search?: string;
+  sort?: WishlistSortField;
+  sortDirection?: "asc" | "desc";
+  accountSteamIds?: string[];
+  sourceAvailability?: "all" | "available" | "missing";
+};
+
+export type WishlistCalendarQuery = {
+  startDate: string;
+  months: number;
+  accountSteamIds?: string[];
 };
 
 export type GameDetail = Game & {
@@ -625,6 +690,8 @@ export type AppSettings = {
   /** Target number of game cards shown across Home rows and Library grid at desktop widths. */
   cardsPerRow?: number;
   libraryView?: LibraryView;
+  /** Wishlist list filters/sort persisted separately from Library ownership. */
+  wishlistView?: WishlistView;
   /** Per-game preferred paired Steam account used when launching from details/library/recent. */
   launchAccountPreferences?: Record<string, string>;
   /** User-defined library groups. Manual groups pin game ids; smart groups store a library filter view. */

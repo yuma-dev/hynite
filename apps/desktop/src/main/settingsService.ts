@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import { controllerActionIds, defaultLibraryView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState } from "@hynite/core";
+import { controllerActionIds, defaultLibraryView, defaultWishlistView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState, type WishlistView } from "@hynite/core";
 import { readAudioMetadata } from "./audioMetadata";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
@@ -97,6 +97,7 @@ const defaultSettings: AppSettings = {
   backgroundPlaytimeTracking: true,
   cardsPerRow: 6,
   libraryView: defaultLibraryView,
+  wishlistView: defaultWishlistView,
   launchAccountPreferences: {},
   gameGroups: [],
   localRoots: [],
@@ -235,6 +236,20 @@ function sanitizeCardsPerRow(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(12, Math.max(4, Math.round(value)))
     : defaultSettings.cardsPerRow ?? 8;
+}
+
+function sanitizeWishlistView(value: unknown): WishlistView {
+  const candidate = value as Partial<WishlistView> | undefined;
+  const field = candidate?.sort?.field;
+  const direction = candidate?.sort?.direction;
+  return {
+    sort: {
+      field: field === "title" || field === "release" || field === "added" || field === "account"
+        ? field
+        : defaultWishlistView.sort.field,
+      direction: direction === "asc" || direction === "desc" ? direction : defaultWishlistView.sort.direction
+    }
+  };
 }
 
 function sanitizeBackgroundWorkload(value: unknown): BackgroundWorkload {
@@ -445,6 +460,7 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     backgroundWorkload: sanitizeBackgroundWorkload(raw.backgroundWorkload),
     backgroundPlaytimeTracking: raw.backgroundPlaytimeTracking !== false,
     cardsPerRow: sanitizeCardsPerRow(raw.cardsPerRow),
+    wishlistView: sanitizeWishlistView(raw.wishlistView),
     gameGroups: sanitizeGameGroups(raw.gameGroups),
     sound: sanitizeSoundSettings(raw.sound, bundledAudio),
     music: sanitizeMusicSettings(raw.music, bundledAudio),
@@ -655,6 +671,7 @@ export class SettingsService {
     next.backgroundWorkload = sanitizeBackgroundWorkload(next.backgroundWorkload);
     next.backgroundPlaytimeTracking = next.backgroundPlaytimeTracking !== false;
     next.cardsPerRow = sanitizeCardsPerRow(next.cardsPerRow);
+    next.wishlistView = sanitizeWishlistView(next.wishlistView);
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
     next.sound = sanitizeSoundSettings(next.sound, this.bundledAudio());
     next.music = sanitizeMusicSettings(next.music, this.bundledAudio());

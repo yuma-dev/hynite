@@ -11,7 +11,7 @@ import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider, type
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -21,6 +21,7 @@ import { SettingsService } from "./settingsService";
 import { SoundFileService } from "./soundFileService";
 import { SourceService } from "./sourceService";
 import { searchSteamStore } from "./steamSearchService";
+import { SteamWishlistService } from "./steamWishlistService";
 import { StartupProfileService } from "./startupProfileService";
 import { SyncStatusService } from "./syncStatusService";
 import { AssetCacheService } from "./assetCacheService";
@@ -50,6 +51,7 @@ let localImportService: LocalImportService;
 let launchTracker: LaunchTracker;
 let localPlaytimeMonitor: LocalPlaytimeMonitor;
 let backgroundService: BackgroundService;
+let steamWishlistService: SteamWishlistService;
 let activeLocalScan: { promise: Promise<unknown>; controller: AbortController } | undefined;
 let startupProfileService: StartupProfileService | undefined;
 let startupHeartbeatTimer: NodeJS.Timeout | undefined;
@@ -2069,7 +2071,8 @@ function scheduleForegroundStartupBackgroundWork(): void {
   foregroundStartupBackgroundWorkScheduled = true;
 
   void settingsService.get().then((settings) => {
-    const canSync = Boolean(settings.steamWebApiKey) && settings.steamAccounts.length > 0;
+    const hasSteamAccounts = settings.steamAccounts.length > 0;
+    const canSync = Boolean(settings.steamWebApiKey) && hasSteamAccounts;
     profile("startup:settings-loaded", "Startup settings loaded", {
       steamAccounts: settings.steamAccounts.length,
       hasSteamWebApiKey: Boolean(settings.steamWebApiKey),
@@ -2110,6 +2113,11 @@ function scheduleForegroundStartupBackgroundWork(): void {
         return;
       }
 
+      if (hasSteamAccounts) {
+        void steamWishlistService.sync({ refreshStaleMetadata: false }).catch((error: unknown) => {
+          console.warn("Startup Steam wishlist sync failed", error);
+        });
+      }
       profile("startup:background:rich-backfill", "Queueing rich metadata without startup Steam sync");
       enqueueRichMetadataBackfill();
       runStartupLocalScan();
@@ -2185,12 +2193,24 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
 
   if (eligibleAccounts.length === 0) {
     syncStatusService.start("steam");
+    let wishlistResult: SyncResult | undefined;
+    if (settings.steamAccounts.length > 0) {
+      try {
+        wishlistResult = await steamWishlistService.sync({ refreshStaleMetadata: options.refreshStaleMetadata ?? true, signal: options.signal });
+      } catch (error) {
+        syncStatusService.log("warning", "steam:wishlist", "Steam wishlist sync failed; preserving cached wishlist rows.", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
     syncStatusService.finish(
-      webApiKey ? "Steam sync skipped: no paired accounts" : "Steam sync skipped: add a Steam Web API key in Settings"
+      webApiKey
+        ? `Steam sync skipped: no paired accounts${wishlistResult ? `, ${wishlistResult.upserted} wishlist items` : ""}`
+        : `Steam sync skipped: add a Steam Web API key in Settings${wishlistResult ? `, ${wishlistResult.upserted} wishlist items` : ""}`
     );
-    runSpan.end("ok", { syncRunId, scanned: 0, upserted: 0, installed: 0, skipped: true, refreshStaleMetadata: options.refreshStaleMetadata });
+    runSpan.end("ok", { syncRunId, scanned: 0, upserted: 0, installed: 0, wishlistUpserted: wishlistResult?.upserted ?? 0, skipped: true, refreshStaleMetadata: options.refreshStaleMetadata });
     void startupProfileService?.writeReport();
-    return { providerId: "steam" as const, scanned: 0, upserted: 0, warnings: [] };
+    return { providerId: "steam" as const, scanned: wishlistResult?.scanned ?? 0, upserted: wishlistResult?.upserted ?? 0, warnings: wishlistResult?.warnings ?? [] };
   }
 
   const buildScanLogger = (account: SteamAccountSettings) => (level: "info" | "warning" | "error", message: string, details?: Record<string, unknown>) => {
@@ -2560,12 +2580,29 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       richBackfillSpan.end("ok", { syncRunId, skipped: true });
     }
     throwIfSteamSyncCancelled(options.signal);
-    syncStatusService.finish(`Steam sync complete: ${upserted} games, ${installedApps.size} local installs`);
+    let wishlistUpserted = 0;
+    try {
+      const wishlistResult = await steamWishlistService.sync({ refreshStaleMetadata, signal: options.signal });
+      wishlistUpserted = wishlistResult.upserted;
+      warnings.push(...wishlistResult.warnings);
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw error;
+      }
+      const message = "Steam wishlist sync failed; preserving cached wishlist rows.";
+      warnings.push(message);
+      syncStatusService.log("warning", "steam:wishlist", message, {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    throwIfSteamSyncCancelled(options.signal);
+    syncStatusService.finish(`Steam sync complete: ${upserted} games, ${installedApps.size} local installs, ${wishlistUpserted} wishlist items`);
     profile("steam-sync:end", "Steam sync completed", {
       syncRunId,
       scanned: imported.length,
       upserted,
       installed: installedApps.size,
+      wishlistUpserted,
       durationMs: roundDuration(syncStartedAt)
     });
     runSpan.end("ok", {
@@ -2573,6 +2610,7 @@ async function syncSteamLibrary(providerId?: ProviderId, options: { refreshStale
       scanned: imported.length,
       upserted,
       installed: installedApps.size,
+      wishlistUpserted,
       refreshStaleMetadata,
       trigger
     });
@@ -3136,6 +3174,51 @@ function registerIpc(): void {
   });
 
   handleIpc("library:list", (_event, query: LibraryQuery = {}) => repository.queryGames(query));
+  handleIpc("wishlist:list", (_event, query: WishlistListQuery = {}) => {
+    const span = profileSpan("wishlist", "wishlist:list", {
+      searchLength: query.search?.trim().length ?? 0,
+      sourceAvailability: query.sourceAvailability ?? "all",
+      sort: query.sort ?? "title",
+      sortDirection: query.sortDirection ?? "asc",
+      accountFilters: query.accountSteamIds?.length ?? 0
+    });
+    const items = steamWishlistService.list(query);
+    span.end("ok", {
+      items: items.length,
+      withSourceMatches: items.filter((item) => item.sourceMatches.length > 0).length,
+      withExactRelease: items.filter((item) => Boolean(item.releaseDate)).length,
+      withCover: items.filter((item) => Boolean(item.coverUrl ?? item.libraryCapsuleUrl)).length,
+      withLogo: items.filter((item) => Boolean(item.logoUrl)).length
+    });
+    return items;
+  });
+  handleIpc("wishlist:count", () => {
+    const span = profileSpan("wishlist", "wishlist:count");
+    const count = steamWishlistService.count();
+    span.end("ok", { count });
+    return count;
+  });
+  handleIpc("wishlist:calendar", (_event, query: WishlistCalendarQuery) => {
+    const span = profileSpan("wishlist", "wishlist:calendar", {
+      startDate: query.startDate,
+      months: query.months,
+      accountFilters: query.accountSteamIds?.length ?? 0
+    });
+    const items = steamWishlistService.calendar(query);
+    span.end("ok", {
+      items: items.length,
+      withSourceMatches: items.filter((item) => item.sourceMatches.length > 0).length,
+      withCover: items.filter((item) => Boolean(item.coverUrl ?? item.libraryCapsuleUrl)).length,
+      withLogo: items.filter((item) => Boolean(item.logoUrl)).length
+    });
+    return items;
+  });
+  handleIpc("wishlist:refresh", async () => {
+    if (onboardingPreview) {
+      return { providerId: "steam" as const, scanned: 0, upserted: 0, warnings: ["Onboarding preview did not run Steam wishlist sync."] };
+    }
+    return steamWishlistService.sync({ refreshStaleMetadata: true });
+  });
   handleIpc("library:clear", async () => {
     if (onboardingPreview) {
       return { cleared: 0 };
@@ -3300,7 +3383,23 @@ function registerIpc(): void {
     span.end("ok", { title, sourceMatches: matches.length });
     return matches;
   });
-  handleIpc("sources:exactTitleMatches", (_event, title: string) => sourceService.exactTitleMatches(title));
+  handleIpc("sources:exactTitleMatches", (_event, title: string) => {
+    const span = profileSpan("source-search", "sources:exact-title-matches", { title });
+    const matches = sourceService.exactTitleMatches(title);
+    span.end("ok", { title, sourceMatches: matches.length });
+    return matches;
+  });
+  handleIpc("sources:exactTitleMatchesBatch", (_event, titles: string[]) => {
+    const safeTitles = Array.isArray(titles) ? titles : [];
+    const span = profileSpan("source-search", "sources:exact-title-matches-batch", { titles: safeTitles.length });
+    const results = sourceService.exactTitleMatchesBatch(safeTitles);
+    span.end("ok", {
+      titles: results.length,
+      matchedTitles: results.filter((result) => result.matches.length > 0).length,
+      sourceMatches: results.reduce((total, result) => total + result.matches.length, 0)
+    });
+    return results;
+  });
   handleIpc("clipboard:copy", (_event, text: string) => clipboard.writeText(text));
   handleIpc("settings:get", () => settingsService.get());
   handleIpc("settings:list-backups", () => settingsService.listBackups());
@@ -3544,6 +3643,23 @@ app.whenReady().then(async () => {
   soundFileService.registerMusicProtocol(protocol);
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, transientUserDataPath(userData, "sync-status.json"));
+  steamWishlistService = new SteamWishlistService({
+    repository,
+    settingsService,
+    sourceService,
+    syncStatusService,
+    cacheMetadataAssets,
+    steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
+    metadataLogger: (entry) => {
+      diagnosticLogService.log({
+        level: entry.level,
+        phase: `metadata:${entry.providerId}`,
+        message: `${entry.gameTitle}: ${entry.message}`,
+        details: { appid: entry.appid, ...entry.details }
+      });
+      syncStatusService.log(entry.level, `metadata:${entry.providerId}`, `${entry.gameTitle}: ${entry.message}`, entry.details);
+    }
+  });
   launchTracker = new LaunchTracker(repository);
   launchTracker.on((event) => {
     if (event.kind === "started") {

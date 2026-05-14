@@ -18,7 +18,12 @@ import {
   makeSortTitle,
   type ProviderId,
   type SourceExactMatch,
-  type SourceMatch
+  type SourceMatch,
+  type SteamWishlistAccountRef,
+  type SteamWishlistItem,
+  type WishlistCalendarQuery,
+  type WishlistListQuery,
+  type WishlistReleasePrecision
 } from "@hynite/core";
 import { migrations } from "./schema";
 
@@ -72,6 +77,35 @@ type GameSourceRow = {
   family_owner_steamids_json: string | null;
   owner_steamid: string | null;
 };
+
+type SteamWishlistItemRow = {
+  appid: string;
+  title: string;
+  sort_title: string;
+  cover_url: string | null;
+  library_capsule_url: string | null;
+  header_url: string | null;
+  background_url: string | null;
+  logo_url: string | null;
+  community_icon_url: string | null;
+  release_date: string | null;
+  release_date_text: string | null;
+  release_precision: string;
+  metadata_status: SteamWishlistItem["metadataStatus"];
+  refreshed_at: string;
+  updated_at: string;
+};
+
+type SteamWishlistAccountRow = {
+  appid: string;
+  steam_id: string;
+  persona_name: string | null;
+  priority: number | null;
+  added_at: string | null;
+  refreshed_at: string;
+};
+
+export type SteamWishlistUpsertItem = Omit<SteamWishlistItem, "sourceMatches">;
 
 export type PersistedDownloadEntry = {
   id: string;
@@ -753,6 +787,197 @@ export class HyniteRepository {
     return Number(result.changes);
   }
 
+  upsertSteamWishlistItem(item: SteamWishlistUpsertItem): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO steam_wishlist_items (
+          appid, title, sort_title, cover_url, library_capsule_url, header_url,
+          background_url, logo_url, community_icon_url, release_date, release_date_text,
+          release_precision, metadata_status, refreshed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(appid) DO UPDATE SET
+          title = excluded.title,
+          sort_title = excluded.sort_title,
+          cover_url = COALESCE(excluded.cover_url, steam_wishlist_items.cover_url),
+          library_capsule_url = COALESCE(excluded.library_capsule_url, steam_wishlist_items.library_capsule_url),
+          header_url = COALESCE(excluded.header_url, steam_wishlist_items.header_url),
+          background_url = COALESCE(excluded.background_url, steam_wishlist_items.background_url),
+          logo_url = COALESCE(excluded.logo_url, steam_wishlist_items.logo_url),
+          community_icon_url = COALESCE(excluded.community_icon_url, steam_wishlist_items.community_icon_url),
+          release_date = excluded.release_date,
+          release_date_text = excluded.release_date_text,
+          release_precision = excluded.release_precision,
+          metadata_status = excluded.metadata_status,
+          refreshed_at = excluded.refreshed_at,
+          updated_at = excluded.updated_at`
+      )
+      .run(
+        item.appid,
+        item.title,
+        item.sortTitle || makeSortTitle(item.title),
+        item.coverUrl ?? null,
+        item.libraryCapsuleUrl ?? null,
+        item.headerUrl ?? null,
+        item.backgroundUrl ?? null,
+        item.logoUrl ?? null,
+        item.communityIconUrl ?? null,
+        item.releaseDate ?? null,
+        item.releaseDateText ?? null,
+        item.releasePrecision,
+        item.metadataStatus,
+        item.refreshedAt,
+        now
+      );
+  }
+
+  replaceSteamWishlistForAccount(steamId: string, items: SteamWishlistUpsertItem[]): void {
+    const trimmedSteamId = steamId.trim();
+    if (!trimmedSteamId) {
+      return;
+    }
+
+    this.transaction(() => {
+      this.db.prepare("DELETE FROM steam_wishlist_accounts WHERE steam_id = ?").run(trimmedSteamId);
+      const insertAccount = this.db.prepare(
+        `INSERT OR REPLACE INTO steam_wishlist_accounts (
+          appid, steam_id, persona_name, priority, added_at, refreshed_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`
+      );
+
+      const seen = new Set<string>();
+      for (const item of items) {
+        if (seen.has(item.appid)) continue;
+        seen.add(item.appid);
+        this.upsertSteamWishlistItem(item);
+        const account = item.accounts.find((entry) => entry.steamId === trimmedSteamId) ?? item.accounts[0];
+        insertAccount.run(
+          item.appid,
+          trimmedSteamId,
+          account?.personaName ?? null,
+          account?.priority ?? null,
+          account?.addedAt ?? null,
+          item.refreshedAt
+        );
+      }
+
+      this.deleteUnreferencedSteamWishlistItems();
+    });
+  }
+
+  clearSteamWishlistForAccounts(steamIds: string[]): void {
+    const ids = [...new Set(steamIds.map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0) return;
+    this.transaction(() => {
+      const deleteAccount = this.db.prepare("DELETE FROM steam_wishlist_accounts WHERE steam_id = ?");
+      for (const id of ids) {
+        deleteAccount.run(id);
+      }
+      this.deleteUnreferencedSteamWishlistItems();
+    });
+  }
+
+  querySteamWishlist(query: WishlistListQuery = {}): SteamWishlistUpsertItem[] {
+    let items = this.mapSteamWishlistRows(this.listSteamWishlistItemRows());
+    const accountIds = new Set((query.accountSteamIds ?? []).map((id) => id.trim()).filter(Boolean));
+    if (accountIds.size > 0) {
+      items = items.filter((item) => item.accounts.some((account) => accountIds.has(account.steamId)));
+    }
+
+    const normalizedSearch = (query.search ?? "").trim().toLocaleLowerCase();
+    if (normalizedSearch) {
+      items = items.filter((item) => item.title.toLocaleLowerCase().includes(normalizedSearch));
+    }
+
+    const sort = query.sort ?? "added";
+    const direction = query.sortDirection ?? (sort === "title" ? "asc" : "desc");
+    const factor = direction === "asc" ? 1 : -1;
+    return items.sort((a, b) => {
+      let comparison = 0;
+      if (sort === "release") {
+        comparison = (Date.parse(a.releaseDate ?? "") || Number.MAX_SAFE_INTEGER) - (Date.parse(b.releaseDate ?? "") || Number.MAX_SAFE_INTEGER);
+      } else if (sort === "added") {
+        comparison = Math.max(...a.accounts.map((account) => Date.parse(account.addedAt ?? "") || 0), 0) -
+          Math.max(...b.accounts.map((account) => Date.parse(account.addedAt ?? "") || 0), 0);
+      } else if (sort === "account") {
+        comparison = (a.accounts[0]?.personaName ?? a.accounts[0]?.steamId ?? "").localeCompare(b.accounts[0]?.personaName ?? b.accounts[0]?.steamId ?? "");
+      } else {
+        comparison = a.sortTitle.localeCompare(b.sortTitle);
+      }
+      return comparison * factor || a.sortTitle.localeCompare(b.sortTitle);
+    });
+  }
+
+  countSteamWishlist(): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM steam_wishlist_items").get() as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
+  querySteamWishlistCalendar(query: WishlistCalendarQuery): SteamWishlistUpsertItem[] {
+    const startMs = Date.parse(`${query.startDate}T00:00:00.000Z`);
+    const safeStart = Number.isFinite(startMs) ? new Date(startMs) : new Date();
+    const months = Math.max(1, Math.min(query.months, 6));
+    const end = new Date(Date.UTC(safeStart.getUTCFullYear(), safeStart.getUTCMonth() + months, safeStart.getUTCDate()));
+    return this.querySteamWishlist({ accountSteamIds: query.accountSteamIds, sort: "release", sortDirection: "asc" })
+      .filter((item) => {
+        if (item.releasePrecision !== "exact" || !item.releaseDate) return false;
+        const releaseMs = Date.parse(`${item.releaseDate}T00:00:00.000Z`);
+        return Number.isFinite(releaseMs) && releaseMs >= safeStart.getTime() && releaseMs < end.getTime();
+      });
+  }
+
+  private deleteUnreferencedSteamWishlistItems(): void {
+    this.db
+      .prepare(
+        `DELETE FROM steam_wishlist_items
+         WHERE NOT EXISTS (
+           SELECT 1 FROM steam_wishlist_accounts WHERE steam_wishlist_accounts.appid = steam_wishlist_items.appid
+         )`
+      )
+      .run();
+  }
+
+  private listSteamWishlistItemRows(): SteamWishlistItemRow[] {
+    return this.db.prepare("SELECT * FROM steam_wishlist_items ORDER BY sort_title ASC").all() as SteamWishlistItemRow[];
+  }
+
+  private mapSteamWishlistRows(rows: SteamWishlistItemRow[]): SteamWishlistUpsertItem[] {
+    if (rows.length === 0) return [];
+    const placeholders = rows.map(() => "?").join(", ");
+    const accounts = this.db
+      .prepare(`SELECT * FROM steam_wishlist_accounts WHERE appid IN (${placeholders})`)
+      .all(...rows.map((row) => row.appid)) as SteamWishlistAccountRow[];
+    const accountsByApp = new Map<string, SteamWishlistAccountRef[]>();
+    for (const account of accounts) {
+      const list = accountsByApp.get(account.appid) ?? [];
+      list.push({
+        steamId: account.steam_id,
+        personaName: account.persona_name ?? undefined,
+        priority: account.priority ?? undefined,
+        addedAt: account.added_at ?? undefined
+      });
+      accountsByApp.set(account.appid, list);
+    }
+
+    return rows.map((row) => ({
+      appid: row.appid,
+      title: row.title,
+      sortTitle: row.sort_title,
+      accounts: (accountsByApp.get(row.appid) ?? []).sort((a, b) => (a.personaName ?? a.steamId).localeCompare(b.personaName ?? b.steamId)),
+      coverUrl: row.cover_url ?? undefined,
+      libraryCapsuleUrl: row.library_capsule_url ?? undefined,
+      headerUrl: row.header_url ?? undefined,
+      backgroundUrl: row.background_url ?? undefined,
+      logoUrl: row.logo_url ?? undefined,
+      communityIconUrl: row.community_icon_url ?? undefined,
+      releaseDate: row.release_date ?? undefined,
+      releaseDateText: row.release_date_text ?? undefined,
+      releasePrecision: ["exact", "month", "year"].includes(row.release_precision) ? (row.release_precision as WishlistReleasePrecision) : "unknown",
+      refreshedAt: row.refreshed_at,
+      metadataStatus: row.metadata_status
+    }));
+  }
+
   pruneProviderSources(
     provider: ProviderId,
     ownerSteamids: string[],
@@ -985,6 +1210,56 @@ export class HyniteRepository {
       sourceName: row.sourceName,
       count: row.count
     }));
+  }
+
+  exactDownloadTitleMatchesBatch(normalizedTitles: string[]): Map<string, SourceExactMatch[]> {
+    const trimmedTitles = [...new Set(normalizedTitles.map((title) => title.trim()).filter(Boolean))];
+    const result = new Map<string, SourceExactMatch[]>(trimmedTitles.map((title) => [title, []]));
+    if (trimmedTitles.length === 0) return result;
+
+    const rows = this.db
+      .prepare(
+        `SELECT e.normalized_title, s.id as source_id, s.name as source_name
+         FROM download_entries e
+         INNER JOIN download_sources s ON s.id = e.source_id`
+      )
+      .all() as Array<{
+      normalized_title: string;
+      source_id: string;
+      source_name: string;
+    }>;
+
+    const needles = trimmedTitles.map((title) => ({ title, padded: ` ${title} ` }));
+    const countsByTitle = new Map<string, Map<string, { sourceId: string; sourceName: string; count: number }>>();
+    for (const row of rows) {
+      const paddedTitle = ` ${row.normalized_title} `;
+      for (const needle of needles) {
+        if (!paddedTitle.includes(needle.padded)) continue;
+        let counts = countsByTitle.get(needle.title);
+        if (!counts) {
+          counts = new Map();
+          countsByTitle.set(needle.title, counts);
+        }
+        const existing = counts.get(row.source_id);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          counts.set(row.source_id, { sourceId: row.source_id, sourceName: row.source_name, count: 1 });
+        }
+      }
+    }
+
+    for (const title of trimmedTitles) {
+      const counts = countsByTitle.get(title);
+      if (!counts) continue;
+      result.set(title, [...counts.values()].sort((a, b) => b.count - a.count || a.sourceName.localeCompare(b.sourceName)).map((row) => ({
+        sourceId: row.sourceId,
+        sourceName: row.sourceName,
+        count: row.count
+      })));
+    }
+
+    return result;
   }
 
   listSourceMatches(matches: SourceMatch[]): SourceMatch[] {

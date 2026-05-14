@@ -171,5 +171,42 @@ export const migrations = [
     sql: `
       ALTER TABLE games ADD COLUMN player_modes_json TEXT NOT NULL DEFAULT '[]';
     `
+  },
+  {
+    id: 10,
+    sql: `
+      CREATE TABLE IF NOT EXISTS steam_wishlist_items (
+        appid TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        sort_title TEXT NOT NULL,
+        cover_url TEXT,
+        library_capsule_url TEXT,
+        header_url TEXT,
+        background_url TEXT,
+        logo_url TEXT,
+        community_icon_url TEXT,
+        release_date TEXT,
+        release_date_text TEXT,
+        release_precision TEXT NOT NULL DEFAULT 'unknown',
+        metadata_status TEXT NOT NULL DEFAULT 'none',
+        refreshed_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS steam_wishlist_accounts (
+        appid TEXT NOT NULL,
+        steam_id TEXT NOT NULL,
+        persona_name TEXT,
+        priority INTEGER,
+        added_at TEXT,
+        refreshed_at TEXT NOT NULL,
+        PRIMARY KEY (appid, steam_id),
+        FOREIGN KEY (appid) REFERENCES steam_wishlist_items(appid) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_steam_wishlist_sort_title ON steam_wishlist_items(sort_title);
+      CREATE INDEX IF NOT EXISTS idx_steam_wishlist_release_date ON steam_wishlist_items(release_date);
+      CREATE INDEX IF NOT EXISTS idx_steam_wishlist_accounts_steam_id ON steam_wishlist_accounts(steam_id);
+    `
   }
 ] as const;

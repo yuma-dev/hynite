@@ -1,4 +1,4 @@
-import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, Profiler, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type UIEvent } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import { Play, X, Download, Info, SlidersHorizontal, Plus, Star } from "lucide-react";
 import type { AppSettings, ControllerActionId, ControllerSettings, Game, GameGroup } from "@hynite/core";
@@ -8,6 +8,7 @@ import ColorBends from "./ColorBends";
 import { bindingLabel, bindingPressed, normalizeControllerSettings, readGamepadState } from "./controllerInput";
 import { isProfileEnabled } from "./startupProfile";
 import { profileReactRender, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
+import { clampIndex, getGridRenderCount, getShelfWindow } from "./bigPictureLayout";
 
 type BigPictureTab = {
   id: string;
@@ -48,6 +49,11 @@ const VIEW_TRANSITION: { duration: number; ease: [number, number, number, number
   ease: [0.16, 1, 0.3, 1]
 };
 const GRID_FOCUS_SCROLL_PAD = 72;
+const SHELF_OVERSCAN_BEFORE = 1;
+const SHELF_OVERSCAN_AFTER = 8;
+const GRID_MIN_ROWS = 4;
+const GRID_OVERSCAN_ROWS = 2;
+const GRID_BATCH_ROWS = 3;
 const SHELF_CONTENT_VARIANTS: Variants = {
   initial: (direction: TransitionDirection) => ({
     x: direction === "left" ? "-100%" : direction === "right" ? "100%" : 0,
@@ -118,6 +124,94 @@ function isVerifiedVerticalCoverUrl(value: string | undefined): boolean {
 function canLaunch(game: Game): boolean {
   return game.installState === "installed";
 }
+
+type ShelfImagePriority = "focused" | "near" | "lazy";
+
+const BigPictureShelfCard = memo(function BigPictureShelfCard({
+  game,
+  absoluteIndex,
+  focused,
+  cover,
+  imagePriority,
+  onActivate,
+  onFocus
+}: {
+  game: Game;
+  absoluteIndex: number;
+  focused: boolean;
+  cover: string | undefined;
+  imagePriority: ShelfImagePriority;
+  onActivate: (game: Game) => void;
+  onFocus: (index: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-focused={focused}
+      className={focused ? "bp-card focused" : "bp-card"}
+      onClick={() => {
+        if (focused) {
+          onActivate(game);
+        } else {
+          onFocus(absoluteIndex);
+        }
+      }}
+      aria-label={game.title}
+    >
+      {cover ? (
+        <img
+          src={cover}
+          alt=""
+          loading={imagePriority === "lazy" ? "lazy" : "eager"}
+          decoding="async"
+          fetchPriority={imagePriority === "focused" ? "high" : "auto"}
+        />
+      ) : (
+        <span className="bp-card-fallback">{game.title}</span>
+      )}
+    </button>
+  );
+});
+
+const BigPictureGridCard = memo(function BigPictureGridCard({
+  game,
+  absoluteIndex,
+  focused,
+  cover,
+  onActivate,
+  onFocus
+}: {
+  game: Game;
+  absoluteIndex: number;
+  focused: boolean;
+  cover: string | undefined;
+  onActivate: (game: Game) => void;
+  onFocus: (index: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-focused={focused}
+      className={focused ? "bp-grid-card focused" : "bp-grid-card"}
+      onClick={() => {
+        if (focused) {
+          onActivate(game);
+        } else {
+          onFocus(absoluteIndex);
+        }
+      }}
+      aria-label={game.title}
+    >
+      <div className="bp-grid-card-cover">
+        {cover ? (
+          <img src={cover} alt="" loading="lazy" decoding="async" />
+        ) : (
+          <span className="bp-card-fallback">{game.title}</span>
+        )}
+      </div>
+    </button>
+  );
+});
 
 function buildTabs(
   games: Game[],
@@ -240,9 +334,9 @@ export function BigPictureScreen({
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("shelf");
   const [gridColumns, setGridColumns] = useState(6);
+  const [gridRenderCount, setGridRenderCount] = useState(0);
   const [transitionDirection, setTransitionDirection] = useState<TransitionDirection>("none");
 
-  const rowRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
   const navSoundReadyRef = useRef(false);
   const gamepadRepeatRef = useRef<Record<string, { pressed: boolean; lastAt: number; nextDelay: number }>>({});
@@ -255,12 +349,44 @@ export function BigPictureScreen({
   const defaultTabIdRef = useRef<string | undefined>(defaultTabId);
 
   const currentTab = tabs[Math.min(tabIndex, tabs.length - 1)];
-  const focusedGame: Game | undefined = currentTab?.games[Math.min(focusedIndex, (currentTab?.games.length ?? 1) - 1)];
+  const currentGameCount = currentTab?.games.length ?? 0;
+  const clampedFocusedIndex = clampIndex(focusedIndex, currentGameCount);
+  const focusedGame: Game | undefined = currentTab?.games[clampedFocusedIndex];
   currentTabIdRef.current = currentTab?.id;
   defaultTabIdRef.current = defaultTabId;
   const controller = useMemo<ControllerSettings>(() => normalizeControllerSettings(settings), [settings]);
   const binding = useCallback((action: ControllerActionId) => controller.bindings[action], [controller]);
   const reduceMotion = useReducedMotion();
+  const shelfWindow = useMemo(
+    () => getShelfWindow({
+      focusedIndex: clampedFocusedIndex,
+      count: currentGameCount,
+      overscanBefore: SHELF_OVERSCAN_BEFORE,
+      overscanAfter: SHELF_OVERSCAN_AFTER
+    }),
+    [clampedFocusedIndex, currentGameCount]
+  );
+  const shelfGames = useMemo(
+    () => currentTab?.games.slice(shelfWindow.start, shelfWindow.end) ?? [],
+    [currentTab?.games, shelfWindow.end, shelfWindow.start]
+  );
+  const visibleGridGames = useMemo(
+    () => currentTab?.games.slice(0, gridRenderCount) ?? [],
+    [currentTab?.games, gridRenderCount]
+  );
+  const computedGridRenderCount = useCallback((count: number, targetIndex: number, currentRenderCount: number) =>
+    getGridRenderCount({
+      count,
+      focusedIndex: targetIndex,
+      columns: gridColumns,
+      currentRenderCount,
+      minimumRows: GRID_MIN_ROWS,
+      overscanRows: GRID_OVERSCAN_ROWS,
+      batchRows: GRID_BATCH_ROWS
+    }), [gridColumns]);
+  const ensureGridRenderCount = useCallback((targetIndex: number, count = currentGameCount) => {
+    setGridRenderCount((current) => computedGridRenderCount(count, targetIndex, current));
+  }, [computedGridRenderCount, currentGameCount]);
   const finishInteractionAfterTransition = useCallback((span: ReturnType<typeof startRuntimeInteraction>, details?: Record<string, unknown>) => {
     window.setTimeout(() => span.end("ok", details), Math.round(VIEW_TRANSITION.duration * 1000) + 80);
   }, []);
@@ -280,20 +406,44 @@ export function BigPictureScreen({
     updateRuntimeProfileContext({
       bigPicture: true,
       area: "big-picture",
-      totalGames: currentTab?.games.length ?? 0,
-      visibleGames: currentTab?.games.length ?? 0,
+      totalGames: currentGameCount,
+      visibleGames: viewMode === "grid" ? gridRenderCount : shelfWindow.end - shelfWindow.start,
       bpViewMode: viewMode,
       bpTabId: currentTab?.id,
       bpTabLabel: currentTab?.label,
-      bpFocusedIndex: focusedIndex,
+      bpFocusedIndex: clampedFocusedIndex,
       bpFocusedTitle: focusedGame?.title,
-      bpGridColumns: gridColumns
+      bpGridColumns: gridColumns,
+      bpShelfWindowStart: viewMode === "shelf" ? shelfWindow.start : undefined,
+      bpShelfWindowEnd: viewMode === "shelf" ? shelfWindow.end : undefined
     });
-  }, [currentTab?.games.length, currentTab?.id, currentTab?.label, focusedGame?.title, focusedIndex, gridColumns, viewMode]);
+  }, [clampedFocusedIndex, currentGameCount, currentTab?.id, currentTab?.label, focusedGame?.title, gridColumns, gridRenderCount, shelfWindow.end, shelfWindow.start, viewMode]);
+
+  useEffect(() => {
+    setTabIndex((current) => clampIndex(current, tabs.length));
+  }, [tabs.length]);
+
+  useEffect(() => {
+    setFocusedIndex((current) => clampIndex(current, currentGameCount));
+  }, [currentGameCount]);
 
   useEffect(() => {
     setFocusedIndex(0);
-  }, [tabIndex, viewMode]);
+    setGridRenderCount(getGridRenderCount({
+      count: currentGameCount,
+      focusedIndex: 0,
+      columns: gridColumns,
+      currentRenderCount: 0,
+      minimumRows: GRID_MIN_ROWS,
+      overscanRows: GRID_OVERSCAN_ROWS,
+      batchRows: GRID_BATCH_ROWS
+    }));
+    gridRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [currentTab?.id]);
+
+  useEffect(() => {
+    setGridRenderCount((current) => computedGridRenderCount(currentGameCount, clampedFocusedIndex, current));
+  }, [clampedFocusedIndex, computedGridRenderCount, currentGameCount, gridColumns]);
 
   useEffect(() => {
     const timer = setTimeout(() => { exitBlockedRef.current = false; }, 500);
@@ -326,12 +476,12 @@ export function BigPictureScreen({
         }), { toTabId: toTab?.id, toGameCount: toTab?.games.length ?? 0 });
         setTransitionDirection(next > current ? "right" : "left");
         setFocusedIndex(0);
-        rowRef.current?.scrollTo({ left: 0, behavior: "auto" });
+        setGridRenderCount(computedGridRenderCount(toTab?.games.length ?? 0, 0, 0));
         gridRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       }
       return next;
     });
-  }, [finishInteractionAfterTransition, tabs, viewMode]);
+  }, [computedGridRenderCount, finishInteractionAfterTransition, tabs, viewMode]);
 
   const shiftTab = useCallback((delta: -1 | 1) => {
     setTabIndex((current) => {
@@ -349,16 +499,17 @@ export function BigPictureScreen({
         }), { toTabId: toTab?.id, toGameCount: toTab?.games.length ?? 0 });
         setTransitionDirection(delta > 0 ? "right" : "left");
         setFocusedIndex(0);
-        rowRef.current?.scrollTo({ left: 0, behavior: "auto" });
+        setGridRenderCount(computedGridRenderCount(toTab?.games.length ?? 0, 0, 0));
         gridRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       }
       return next;
     });
-  }, [finishInteractionAfterTransition, tabs, viewMode]);
+  }, [computedGridRenderCount, finishInteractionAfterTransition, tabs, viewMode]);
 
   const enterGrid = useCallback(() => {
     setViewMode((mode) => {
       if (mode !== "grid") {
+        ensureGridRenderCount(focusedIndex, currentTab?.games.length ?? 0);
         finishInteractionAfterTransition(startRuntimeInteraction("bp:enter-grid", {
           tabId: currentTabIdRef.current,
           gameCount: currentTab?.games.length ?? 0,
@@ -368,7 +519,7 @@ export function BigPictureScreen({
       }
       return "grid";
     });
-  }, [currentTab?.games.length, finishInteractionAfterTransition, focusedIndex]);
+  }, [currentTab?.games.length, ensureGridRenderCount, finishInteractionAfterTransition, focusedIndex]);
 
   const exitGrid = useCallback(() => {
     setViewMode((mode) => {
@@ -387,6 +538,9 @@ export function BigPictureScreen({
   const toggleGrid = useCallback(() => {
     setViewMode((mode) => {
       const enteringGrid = mode !== "grid";
+      if (enteringGrid) {
+        ensureGridRenderCount(focusedIndex, currentTab?.games.length ?? 0);
+      }
       finishInteractionAfterTransition(startRuntimeInteraction(enteringGrid ? "bp:enter-grid" : "bp:exit-grid", {
         tabId: currentTabIdRef.current,
         gameCount: currentTab?.games.length ?? 0,
@@ -396,7 +550,7 @@ export function BigPictureScreen({
       setTransitionDirection(mode === "grid" ? "up" : "down");
       return mode === "grid" ? "shelf" : "grid";
     });
-  }, [currentTab?.games.length, finishInteractionAfterTransition, focusedIndex]);
+  }, [currentTab?.games.length, ensureGridRenderCount, finishInteractionAfterTransition, focusedIndex]);
 
   // ── Palette: cover extraction is debounced and tweened toward over
   // PALETTE_TWEEN_MS via rAF. We tween across fixed COLOR_SLOTS so dominant
@@ -408,6 +562,7 @@ export function BigPictureScreen({
   const initialSlots = paletteToSlots(targetPaletteRef.current).map(rgbToHex);
   const [animColors, setAnimColors] = useState<string[]>(initialSlots);
   const backgroundBase = backgroundBaseFromColor(animColors[0]);
+  const shelfGlowColor = animColors[0] ?? "#ffffff";
 
   const palettesEqual = useCallback((a: CoverPalette, b: CoverPalette): boolean => {
     if (a.colors.length !== b.colors.length) return false;
@@ -552,19 +707,26 @@ export function BigPictureScreen({
       }
 
       const count = currentTab?.games.length ?? 0;
+      if (count <= 0) return;
       if (viewMode === "shelf") {
         if (event.key === "ArrowRight") {
           event.preventDefault();
           profileFocusMove("right");
           setTransitionDirection("right");
-          setFocusedIndex((i) => Math.min(i + 1, count - 1));
+          setFocusedIndex((i) => {
+            const next = Math.min(i + 1, count - 1);
+            return next;
+          });
           return;
         }
         if (event.key === "ArrowLeft") {
           event.preventDefault();
           profileFocusMove("left");
           setTransitionDirection("left");
-          setFocusedIndex((i) => Math.max(i - 1, 0));
+          setFocusedIndex((i) => {
+            const next = Math.max(i - 1, 0);
+            return next;
+          });
           return;
         }
         if (event.key === "ArrowDown") {
@@ -577,21 +739,33 @@ export function BigPictureScreen({
           event.preventDefault();
           profileFocusMove("right");
           setTransitionDirection("right");
-          setFocusedIndex((i) => Math.min(i + 1, count - 1));
+          setFocusedIndex((i) => {
+            const next = Math.min(i + 1, count - 1);
+            ensureGridRenderCount(next, count);
+            return next;
+          });
           return;
         }
         if (event.key === "ArrowLeft") {
           event.preventDefault();
           profileFocusMove("left");
           setTransitionDirection("left");
-          setFocusedIndex((i) => Math.max(i - 1, 0));
+          setFocusedIndex((i) => {
+            const next = Math.max(i - 1, 0);
+            ensureGridRenderCount(next, count);
+            return next;
+          });
           return;
         }
         if (event.key === "ArrowDown") {
           event.preventDefault();
           profileFocusMove("down");
           setTransitionDirection("down");
-          setFocusedIndex((i) => Math.min(i + gridColumns, count - 1));
+          setFocusedIndex((i) => {
+            const next = Math.min(i + gridColumns, count - 1);
+            ensureGridRenderCount(next, count);
+            return next;
+          });
           return;
         }
         if (event.key === "ArrowUp") {
@@ -603,7 +777,9 @@ export function BigPictureScreen({
               exitGrid();
               return i;
             }
-            return Math.max(i - gridColumns, 0);
+            const next = Math.max(i - gridColumns, 0);
+            ensureGridRenderCount(next, count);
+            return next;
           });
           return;
         }
@@ -611,7 +787,7 @@ export function BigPictureScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [currentTab, enterGrid, exitGrid, focusedGame, profileFocusMove, shiftTab, viewMode, gridColumns, onExit, onLaunch, onSelect]);
+  }, [currentTab, enterGrid, ensureGridRenderCount, exitGrid, focusedGame, profileFocusMove, shiftTab, viewMode, gridColumns, onExit, onLaunch, onSelect]);
 
   const moveFocus = useCallback((direction: "up" | "down" | "left" | "right") => {
     const count = currentTab?.games.length ?? 0;
@@ -636,17 +812,29 @@ export function BigPictureScreen({
     if (direction === "right") {
       profileFocusMove("right");
       setTransitionDirection("right");
-      setFocusedIndex((i) => Math.min(i + 1, count - 1));
+      setFocusedIndex((i) => {
+        const next = Math.min(i + 1, count - 1);
+        ensureGridRenderCount(next, count);
+        return next;
+      });
     }
     if (direction === "left") {
       profileFocusMove("left");
       setTransitionDirection("left");
-      setFocusedIndex((i) => Math.max(i - 1, 0));
+      setFocusedIndex((i) => {
+        const next = Math.max(i - 1, 0);
+        ensureGridRenderCount(next, count);
+        return next;
+      });
     }
     if (direction === "down") {
       profileFocusMove("down");
       setTransitionDirection("down");
-      setFocusedIndex((i) => Math.min(i + gridColumns, count - 1));
+      setFocusedIndex((i) => {
+        const next = Math.min(i + gridColumns, count - 1);
+        ensureGridRenderCount(next, count);
+        return next;
+      });
     }
     if (direction === "up") {
       profileFocusMove("up");
@@ -656,10 +844,12 @@ export function BigPictureScreen({
           exitGrid();
           return i;
         }
-        return Math.max(i - gridColumns, 0);
+        const next = Math.max(i - gridColumns, 0);
+        ensureGridRenderCount(next, count);
+        return next;
       });
     }
-  }, [currentTab?.games.length, enterGrid, exitGrid, gridColumns, profileFocusMove, viewMode]);
+  }, [currentTab?.games.length, ensureGridRenderCount, enterGrid, exitGrid, gridColumns, profileFocusMove, viewMode]);
 
   const runControllerAction = useCallback((action: string) => {
     if (action === "exitBigPicture") {
@@ -775,25 +965,6 @@ export function BigPictureScreen({
     return () => cancelAnimationFrame(raf);
   }, [controller, runControllerAction]);
 
-  // ── Scroll focused card flush to the left edge of the carousel.
-  // Focus styling must not change row layout; otherwise scroll targets drift.
-  useLayoutEffect(() => {
-    rowRef.current?.scrollTo({ left: 0, behavior: "auto" });
-    gridRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
-  }, [currentTab?.id, viewMode]);
-
-  useLayoutEffect(() => {
-    if (viewMode !== "shelf") return;
-    const row = rowRef.current;
-    if (!row) return;
-    const focused = row.querySelector<HTMLElement>('[data-focused="true"]');
-    if (!focused) return;
-    const rowStyle = getComputedStyle(row);
-    const padLeft = parseFloat(rowStyle.paddingLeft) || 0;
-    const targetLeft = focused.offsetLeft - padLeft;
-    row.scrollTo({ left: Math.max(0, targetLeft), behavior: "auto" });
-  }, [currentTab?.id, focusedIndex, viewMode]);
-
   // ── Scroll grid focused cell into view
   useEffect(() => {
     if (viewMode !== "grid") return;
@@ -841,6 +1012,28 @@ export function BigPictureScreen({
     return () => ro.disconnect();
   }, [viewMode, currentTab]);
 
+  const activateGame = useCallback((game: Game) => {
+    if (canLaunch(game)) onLaunch(game);
+    else onSelect(game);
+  }, [onLaunch, onSelect]);
+
+  const focusShelfIndex = useCallback((index: number) => {
+    setTransitionDirection(index > focusedIndex ? "right" : "left");
+    setFocusedIndex(index);
+  }, [focusedIndex]);
+
+  const focusGridIndex = useCallback((index: number) => {
+    setTransitionDirection(index > focusedIndex ? "right" : "left");
+    ensureGridRenderCount(index);
+    setFocusedIndex(index);
+  }, [ensureGridRenderCount, focusedIndex]);
+
+  const handleGridScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    const grid = event.currentTarget;
+    if (grid.scrollTop + grid.clientHeight < grid.scrollHeight - 600) return;
+    setGridRenderCount((current) => Math.min(currentGameCount, current + GRID_BATCH_ROWS * Math.max(1, gridColumns)));
+  }, [currentGameCount, gridColumns]);
+
   const groupPointerX = tabs.length > 1 ? (tabIndex / (tabs.length - 1)) * 1.6 - 0.8 : 0;
   const currentTabIsGroup = currentTab?.id?.startsWith("group:");
   const isDefaultTab = currentTab?.id === defaultTabId;
@@ -852,7 +1045,12 @@ export function BigPictureScreen({
         viewMode === "grid" ? "big-picture grid-view" : "big-picture",
         settings?.bigPictureGrayscaleCovers === false ? "bp-no-cover-grayscale" : ""
       ].filter(Boolean).join(" ")}
-      style={{ "--bp-bg-base": backgroundBase } as CSSProperties}
+      style={{
+        "--bp-bg-base": backgroundBase,
+        "--bp-glow-color": shelfGlowColor,
+        "--bp-focused-index": clampedFocusedIndex,
+        "--bp-window-start": shelfWindow.start
+      } as CSSProperties}
     >
       <div className="bp-background" aria-hidden>
         <ProfileScope id="BigPictureColorBends">
@@ -974,35 +1172,25 @@ export function BigPictureScreen({
               </section>
 
               <section className="bp-row-wrap">
-                <div className="bp-row" ref={rowRef}>
-                  {currentTab?.games.map((game, i) => {
-                    const cover = gameCoverUrl(game);
-                    const isFocused = i === focusedIndex;
-                    return (
-                      <button
-                        key={game.id}
-                        type="button"
-                        data-focused={isFocused}
-                        className={isFocused ? "bp-card focused" : "bp-card"}
-                        onClick={() => {
-                          if (i === focusedIndex && focusedGame) {
-                            if (canLaunch(focusedGame)) onLaunch(focusedGame);
-                            else onSelect(focusedGame);
-                          } else {
-                            setTransitionDirection(i > focusedIndex ? "right" : "left");
-                            setFocusedIndex(i);
-                          }
-                        }}
-                        aria-label={game.title}
-                      >
-                        {cover ? (
-                          <img src={cover} alt="" loading="lazy" />
-                        ) : (
-                          <span className="bp-card-fallback">{game.title}</span>
-                        )}
-                      </button>
-                    );
-                  })}
+                <div className="bp-row">
+                  <div className="bp-row-track">
+                    {shelfGames.map((game, localIndex) => {
+                      const absoluteIndex = shelfWindow.start + localIndex;
+                      const isFocused = absoluteIndex === clampedFocusedIndex;
+                      return (
+                        <BigPictureShelfCard
+                          key={game.id}
+                          game={game}
+                          absoluteIndex={absoluteIndex}
+                          focused={isFocused}
+                          cover={gameCoverUrl(game)}
+                          imagePriority={isFocused ? "focused" : absoluteIndex > clampedFocusedIndex && absoluteIndex <= clampedFocusedIndex + 2 ? "near" : "lazy"}
+                          onActivate={activateGame}
+                          onFocus={focusShelfIndex}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
               </section>
               </ProfileScope>
@@ -1018,37 +1206,18 @@ export function BigPictureScreen({
               exit="exit"
             >
               <ProfileScope id="BigPictureGrid">
-              <div className="bp-grid" ref={gridRef}>
-                {currentTab?.games.map((game, i) => {
-                  const cover = gameCoverUrl(game);
-                  const isFocused = i === focusedIndex;
-                  return (
-                    <button
-                      key={game.id}
-                      type="button"
-                      data-focused={isFocused}
-                      className={isFocused ? "bp-grid-card focused" : "bp-grid-card"}
-                      onClick={() => {
-                        if (i === focusedIndex && focusedGame) {
-                          if (canLaunch(focusedGame)) onLaunch(focusedGame);
-                          else onSelect(focusedGame);
-                        } else {
-                          setTransitionDirection(i > focusedIndex ? "right" : "left");
-                          setFocusedIndex(i);
-                        }
-                      }}
-                      aria-label={game.title}
-                    >
-                      <div className="bp-grid-card-cover">
-                        {cover ? (
-                          <img src={cover} alt="" loading="lazy" />
-                        ) : (
-                          <span className="bp-card-fallback">{game.title}</span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
+              <div className="bp-grid" ref={gridRef} onScroll={handleGridScroll}>
+                {visibleGridGames.map((game, i) => (
+                  <BigPictureGridCard
+                    key={game.id}
+                    game={game}
+                    absoluteIndex={i}
+                    focused={i === clampedFocusedIndex}
+                    cover={gameCoverUrl(game)}
+                    onActivate={activateGame}
+                    onFocus={focusGridIndex}
+                  />
+                ))}
               </div>
               </ProfileScope>
             </motion.section>

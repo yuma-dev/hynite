@@ -9,7 +9,8 @@ function makeRepository() {
     listSources: vi.fn(() => []),
     listDownloadEntries: vi.fn(() => []),
     searchDownloadEntries: vi.fn(() => []),
-    exactDownloadTitleMatches: vi.fn(() => [])
+    exactDownloadTitleMatches: vi.fn(() => []),
+    exactDownloadTitleMatchesBatch: vi.fn(() => new Map())
   } as unknown as HyniteRepository;
 }
 
@@ -57,5 +58,18 @@ describe("SourceService", () => {
     new SourceService(repository).exactTitleMatches("Baldur's Gate 3 Deluxe Edition");
 
     expect(repository.exactDownloadTitleMatches).toHaveBeenCalledWith("baldurs gate 3");
+  });
+
+  it("looks up exact title matches in a normalized batch", () => {
+    const repository = makeRepository();
+    const matches = [{ sourceId: "source-1", sourceName: "Source A", count: 2 }];
+    (repository.exactDownloadTitleMatchesBatch as ReturnType<typeof vi.fn>).mockReturnValue(new Map([
+      ["baldurs gate 3", matches]
+    ]));
+
+    expect(new SourceService(repository).exactTitleMatchesBatch(["Baldur's Gate 3", "Baldur's Gate 3", ""])).toEqual([
+      { title: "Baldur's Gate 3", matches }
+    ]);
+    expect(repository.exactDownloadTitleMatchesBatch).toHaveBeenCalledWith(["baldurs gate 3"]);
   });
 });
