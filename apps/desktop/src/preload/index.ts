@@ -126,6 +126,8 @@ const api = {
     removeAndIgnore: (gameId: string, folderPath?: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke("local:remove-and-ignore", { gameId, folderPath }),
     removeGame: (gameId: string): Promise<{ ok: true }> => ipcRenderer.invoke("local:remove-game", gameId),
+    updateLocation: (gameId: string, folderPath: string): Promise<{ ok: true; executablePath: string }> =>
+      ipcRenderer.invoke("local:update-location", { gameId, folderPath }),
     countUnder: (folderPath: string): Promise<number> => ipcRenderer.invoke("local:count-under", folderPath),
     removeUnder: (folderPath: string): Promise<{ removed: number }> => ipcRenderer.invoke("local:remove-under", folderPath),
     removeAll: (): Promise<{ removed: number }> => ipcRenderer.invoke("local:remove-all"),

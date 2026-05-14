@@ -282,7 +282,13 @@ export class HyniteRepository {
   }
 
   upsertImportedGameSummary(game: ImportedGame): UpsertImportedGameSummary {
-    const id = makeGameId(game.provider, game.externalId);
+    let id = makeGameId(game.provider, game.externalId);
+    if (game.provider === "local") {
+      const existingLocalSource = this.db
+        .prepare("SELECT game_id FROM game_sources WHERE provider = 'local' AND external_id = ? AND owner_steamid = ''")
+        .get(game.externalId) as { game_id: string } | undefined;
+      id = existingLocalSource?.game_id ?? id;
+    }
     const now = new Date().toISOString();
     this.upsertGameSummaryStatement ??= this.db.prepare(
         `INSERT INTO games (
@@ -675,6 +681,60 @@ export class HyniteRepository {
     this.db
       .prepare("UPDATE games SET executable_path = ?, updated_at = ? WHERE id = ?")
       .run(executablePath, new Date().toISOString(), gameId);
+  }
+
+  updateLocalGameLocation(args: {
+    gameId: string;
+    externalId: string;
+    installDirectory: string;
+    executablePath: string;
+  }): void {
+    this.transaction(() => {
+      const existing = this.db
+        .prepare(
+          `SELECT s.game_id
+           FROM game_sources s
+           WHERE s.provider = 'local' AND s.external_id = ? AND s.owner_steamid = ''`
+        )
+        .get(args.externalId) as { game_id: string } | undefined;
+      if (existing && existing.game_id !== args.gameId) {
+        throw new Error("That folder is already linked to another local game.");
+      }
+
+      const localSource = this.db
+        .prepare("SELECT game_id FROM game_sources WHERE game_id = ? AND provider = 'local'")
+        .get(args.gameId) as { game_id: string } | undefined;
+      if (!localSource) {
+        throw new Error("Only local games can be moved.");
+      }
+
+      const now = new Date().toISOString();
+      this.db
+        .prepare(
+          `UPDATE games SET
+            install_state = 'installed',
+            install_directory = ?,
+            executable_path = ?,
+            updated_at = ?
+           WHERE id = ?`
+        )
+        .run(args.installDirectory, args.executablePath, now, args.gameId);
+
+      const updated = this.db
+        .prepare(
+          `UPDATE game_sources SET external_id = ?
+           WHERE game_id = ? AND provider = 'local' AND owner_steamid = ''`
+        )
+        .run(args.externalId, args.gameId);
+      if (Number(updated.changes) === 0) {
+        this.db
+          .prepare(
+            `INSERT INTO game_sources (game_id, provider, external_id, share_type, family_owner_steamids_json, owner_steamid)
+             VALUES (?, 'local', ?, 'owned', NULL, '')`
+          )
+          .run(args.gameId, args.externalId);
+      }
+    });
   }
 
   /**

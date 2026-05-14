@@ -104,6 +104,45 @@ describe("HyniteRepository", () => {
     repository.close();
   });
 
+  it("updates a moved local game without creating a duplicate on rescan", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "old-folder",
+      title: "Moved Game",
+      installState: "installed",
+      installDirectory: "G:\\Games\\Old",
+      executablePath: "G:\\Games\\Old\\game.exe",
+      addedAt: "2024-01-01T00:00:00.000Z"
+    });
+
+    repository.updateLocalGameLocation({
+      gameId: "local:old-folder",
+      externalId: "new-folder",
+      installDirectory: "G:\\Games\\New",
+      executablePath: "G:\\Games\\New\\game.exe"
+    });
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "new-folder",
+      title: "Detected After Move",
+      installState: "installed",
+      installDirectory: "G:\\Games\\New",
+      executablePath: "G:\\Games\\New\\game.exe"
+    });
+
+    const games = repository.listLocalGames();
+    expect(games).toHaveLength(1);
+    expect(games[0]?.id).toBe("local:old-folder");
+    expect(games[0]?.title).toBe("Moved Game");
+    expect(games[0]?.installDirectory).toBe("G:\\Games\\New");
+    expect(games[0]?.sourceIds).toEqual([
+      expect.objectContaining({ provider: "local", externalId: "new-folder" })
+    ]);
+
+    repository.close();
+  });
+
   it("groups exact normalized download title matches by source", () => {
     const repository = createRepository();
     repository.saveDownloadSource({

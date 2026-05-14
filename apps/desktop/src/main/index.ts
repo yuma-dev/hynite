@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 import { HyniteRepository } from "@hynite/db";
-import { discoverInstalledSteamApps, readLoginUsers, SteamImporterProvider, type SteamFamilyScanStatus } from "@hynite/importers";
+import { discoverInstalledSteamApps, hashFolderPath, readLoginUsers, SteamImporterProvider, type SteamFamilyScanStatus } from "@hynite/importers";
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
@@ -845,6 +845,60 @@ function patchToAssetUpdate(patch: GameMetadataPatch, original: GameAssetUpdate)
 
 function isLocalGame(game: Game): boolean {
   return game.sourceIds.some((source) => source.provider === "local");
+}
+
+type MissingLocalGameIssue = Omit<LocalScanIssue, "reason"> & {
+  reason: "missing_install";
+  gameId: string;
+  gameTitle: string;
+};
+
+function normalizeFolderPrefix(path: string): string {
+  return path.replace(/[\\/]+$/, "").toLowerCase();
+}
+
+function isPathUnderFolder(path: string, folder: string): boolean {
+  const normalizedPath = normalizeFolderPrefix(path);
+  const normalizedFolder = normalizeFolderPrefix(folder);
+  return normalizedPath === normalizedFolder || normalizedPath.startsWith(`${normalizedFolder}\\`) || normalizedPath.startsWith(`${normalizedFolder}/`);
+}
+
+async function pathExists(path: string | undefined): Promise<boolean> {
+  if (!path) return false;
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getLocalIssues(settings: AppSettings): Promise<Array<LocalScanIssue | MissingLocalGameIssue>> {
+  const scanIssues = localImportService.lastReport?.issues ?? [];
+  const roots = (settings.localRoots ?? []).filter((root) => root.path.trim().length > 0);
+  if (roots.length === 0) return scanIssues;
+  const availableRoots = (
+    await Promise.all(roots.map(async (root) => ((await pathExists(root.path)) ? root : undefined)))
+  ).filter((root): root is { path: string; depth: number } => Boolean(root));
+  if (availableRoots.length === 0) return scanIssues;
+
+  const missing = await Promise.all(
+    repository
+      .listLocalGames()
+      .filter((game) => game.installDirectory && availableRoots.some((root) => isPathUnderFolder(game.installDirectory!, root.path)))
+      .map(async (game): Promise<MissingLocalGameIssue | undefined> => {
+        if (await pathExists(game.installDirectory)) return undefined;
+        return {
+          candidateId: game.id,
+          gameId: game.id,
+          gameTitle: game.title,
+          folderPath: game.installDirectory!,
+          folderName: game.title,
+          reason: "missing_install"
+        };
+      })
+  );
+  return [...scanIssues, ...missing.filter((issue): issue is MissingLocalGameIssue => Boolean(issue))];
 }
 
 function addAssetCandidate(
@@ -2851,10 +2905,13 @@ function registerIpc(): void {
       return { scanned: 0, skipped: 0, matched: 0, ambiguous: 0, unmatched: 0, issues: [] };
     }
     const result = await runLocalScan();
-    return result ?? { scanned: 0, skipped: 0, matched: 0, ambiguous: 0, unmatched: 0, issues: [] };
+    const settings = await settingsService.get();
+    const issues = await getLocalIssues(settings);
+    return result ? { ...result, issues } : { scanned: 0, skipped: 0, matched: 0, ambiguous: 0, unmatched: 0, issues };
   });
   handleIpc("local:get-issues", async () => {
-    return localImportService.lastReport?.issues ?? [];
+    const settings = await settingsService.get();
+    return getLocalIssues(settings);
   });
   handleIpc("local:probe", async (
     _event,
@@ -2978,6 +3035,38 @@ function registerIpc(): void {
     }
     repository.removeGame(gameId);
     return { ok: true };
+  });
+  handleIpc("local:update-location", async (_event, args: { gameId: string; folderPath: string }) => {
+    if (onboardingPreview) {
+      return { ok: true, executablePath: "C:\\Games\\Preview\\Preview.exe" };
+    }
+    const game = repository.getGame(args.gameId);
+    if (!game) {
+      throw new Error("Local game not found.");
+    }
+    if (!isLocalGame(game)) {
+      throw new Error("Only local games can be moved.");
+    }
+    const probe = await localImportService.probe(
+      { folderPath: args.folderPath },
+      {
+        log: (level, message, details) => {
+          diagnosticLogService.log({ level, phase: "local:update-location", message, details });
+          syncStatusService.log(level, "local:update-location", message, details);
+        }
+      }
+    );
+    repository.updateLocalGameLocation({
+      gameId: args.gameId,
+      externalId: hashFolderPath(probe.folderPath),
+      installDirectory: probe.folderPath,
+      executablePath: probe.chosenExe
+    });
+    const report = localImportService.lastReport;
+    if (report) {
+      report.issues = report.issues.filter((issue) => issue.candidateId !== args.gameId && issue.folderPath !== game.installDirectory);
+    }
+    return { ok: true, executablePath: probe.chosenExe };
   });
   handleIpc("local:add-single", async (
     _event,

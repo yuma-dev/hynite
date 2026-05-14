@@ -54,9 +54,11 @@ type ProbeResult = {
 
 type LocalScanIssue = {
   candidateId: string;
+  gameId?: string;
+  gameTitle?: string;
   folderPath: string;
   folderName: string;
-  reason: "no_exes" | "ambiguous_exe" | "ambiguous_match" | "unmatched";
+  reason: "no_exes" | "ambiguous_exe" | "ambiguous_match" | "unmatched" | "missing_install";
   detail?: unknown;
 };
 
@@ -229,6 +231,34 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
     }
   }
 
+  async function updateMissingGameLocation(issue: LocalScanIssue) {
+    if (!issue.gameId) return;
+    const path = await window.hynite.dialog.pickFolder({
+      title: `Pick the new folder for ${issue.gameTitle ?? issue.folderName}`
+    });
+    if (!path) return;
+    try {
+      await window.hynite.local.updateLocation(issue.gameId, path);
+      setIssues((await window.hynite.local.getIssues()) as LocalScanIssue[]);
+      pushToast({ level: "success", message: `Updated "${issue.gameTitle ?? issue.folderName}" to its new folder.` });
+      onLibraryRefresh();
+    } catch (error) {
+      pushToast({ level: "error", message: error instanceof Error ? error.message : "Failed to update game folder." });
+    }
+  }
+
+  async function deleteMissingGame(issue: LocalScanIssue) {
+    if (!issue.gameId) return;
+    try {
+      await window.hynite.local.removeGame(issue.gameId);
+      setIssues((prev) => prev.filter((entry) => entry.candidateId !== issue.candidateId));
+      pushToast({ level: "info", message: `Removed "${issue.gameTitle ?? issue.folderName}" from your library.` });
+      onLibraryRefresh();
+    } catch (error) {
+      pushToast({ level: "error", message: error instanceof Error ? error.message : "Failed to remove game." });
+    }
+  }
+
   async function dismissIssue(candidateId: string, folderPath: string) {
     try {
       await window.hynite.local.ignoreFolder(folderPath);
@@ -322,7 +352,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
         <section className="add-games-section">
           <header className="section-head">
             <h2>Need your input <span className="count-pill">{issues.length}</span></h2>
-            <p>The scanner couldn't auto-resolve these. Pick a match, point at the right exe, or ignore the folder.</p>
+            <p>The scanner couldn't auto-resolve these. Pick a match, point at the right exe, or tell Hynite when a game was moved or deleted.</p>
           </header>
           <div className="add-issues-list">
             {issues.map((issue) => (
@@ -336,6 +366,8 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
                 }}
                 onPickExe={() => setAddModal({ initialFolderPath: issue.folderPath })}
                 onSearchManually={() => setAddModal({ initialFolderPath: issue.folderPath })}
+                onMoved={() => void updateMissingGameLocation(issue)}
+                onDeleted={() => void deleteMissingGame(issue)}
                 onDismiss={() => void dismissIssue(issue.candidateId, issue.folderPath)}
               />
             ))}
@@ -512,12 +544,16 @@ function IssueRow({
   onResolveMatch,
   onPickExe,
   onSearchManually,
+  onMoved,
+  onDeleted,
   onDismiss
 }: {
   issue: LocalScanIssue;
   onResolveMatch: (candidates: IdentifyCandidateLite[]) => void;
   onPickExe: () => void;
   onSearchManually: () => void;
+  onMoved: () => void;
+  onDeleted: () => void;
   onDismiss: () => void;
 }) {
   const candidates = (issue.detail as IdentifyCandidateLite[] | undefined) ?? [];
@@ -525,16 +561,27 @@ function IssueRow({
     no_exes: "No executables found",
     ambiguous_exe: "Multiple executables — pick the launcher",
     ambiguous_match: "Multiple metadata matches — pick the right game",
-    unmatched: "No metadata match found"
+    unmatched: "No metadata match found",
+    missing_install: "Install folder is missing"
   };
   return (
     <div className="add-issue-row">
       <div className="add-issue-icon"><AlertCircle size={16} /></div>
       <div className="add-issue-text">
-        <strong>{issue.folderName}</strong>
+        <strong>{issue.gameTitle ?? issue.folderName}</strong>
         <span className="muted-text">{labels[issue.reason]} · {issue.folderPath}</span>
       </div>
       <div className="add-issue-actions">
+        {issue.reason === "missing_install" ? (
+          <>
+            <button className="secondary-action small" onClick={onMoved}>
+              <FolderIcon size={13} /> Moved
+            </button>
+            <button className="secondary-action small danger" onClick={onDeleted}>
+              <Trash2 size={13} /> Deleted
+            </button>
+          </>
+        ) : null}
         {issue.reason === "ambiguous_match" ? (
           <button className="secondary-action small" onClick={() => onResolveMatch(candidates)}>
             <Wand2 size={13} /> Pick a match
@@ -550,9 +597,11 @@ function IssueRow({
             <Search size={13} /> Search manually
           </button>
         ) : null}
-        <button className="row-icon-btn" onClick={onDismiss} title="Ignore this folder">
-          <EyeOff size={13} />
-        </button>
+        {issue.reason !== "missing_install" ? (
+          <button className="row-icon-btn" onClick={onDismiss} title="Ignore this folder">
+            <EyeOff size={13} />
+          </button>
+        ) : null}
       </div>
     </div>
   );
