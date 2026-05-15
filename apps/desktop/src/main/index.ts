@@ -1,8 +1,8 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, protocol, screen, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, protocol, screen, session, shell, Tray } from "electron";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
@@ -67,6 +67,7 @@ let servicesShutDown = false;
 let controllerPollingStarted = false;
 let foregroundStartupBackgroundWorkScheduled = false;
 let settingsBackupTimer: NodeJS.Timeout | undefined;
+let resetEverythingInProgress = false;
 
 function resolveWindowIconPath(): string {
   const devIconPath = join(__dirname, "../../assets/icons/app.ico");
@@ -114,6 +115,36 @@ const onboardingPreview = isOnboardingPreview();
 function transientUserDataPath(userData: string, name: string): string {
   return onboardingPreview ? join(app.getPath("temp"), `hynite-onboarding-preview-${process.pid}`, name) : join(userData, name);
 }
+
+const RESET_USER_DATA_ENTRIES = [
+  "hynite.db",
+  "hynite.db-shm",
+  "hynite.db-wal",
+  "settings.json",
+  "settings.json.bak",
+  "settings-backups",
+  "metadata-diagnostics.ndjson",
+  "home-cache.json",
+  "asset-cache",
+  "sync-status.json",
+  "local-scan-cache.json",
+  "profile-runs",
+  "Cache",
+  "Code Cache",
+  "GPUCache",
+  "DawnCache",
+  "blob_storage",
+  "Local Storage",
+  "IndexedDB",
+  "Session Storage",
+  "Service Worker",
+  "Shared Dictionary",
+  "Network",
+  "Cookies",
+  "Cookies-journal",
+  "DIPS",
+  "DIPS-journal"
+];
 protocol.registerSchemesAsPrivileged([
   { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
@@ -761,6 +792,78 @@ function steamImportedGameFromGame(game: Game): ImportedGame | undefined {
     addedAt: game.addedAt,
     communityIconUrl: game.communityIconUrl
   };
+}
+
+async function resetEverythingAndRelaunch(): Promise<{ ok: true; removed: string[]; failed: Array<{ entry: string; error: string }> }> {
+  if (onboardingPreview) {
+    return { ok: true, removed: [], failed: [] };
+  }
+  if (resetEverythingInProgress) {
+    return { ok: true, removed: [], failed: [] };
+  }
+  resetEverythingInProgress = true;
+  suppressWindowStateSave = true;
+  isQuitting = true;
+
+  if (startupReadyTimeout) {
+    clearTimeout(startupReadyTimeout);
+    startupReadyTimeout = undefined;
+  }
+  if (startupHeartbeatTimer) {
+    clearInterval(startupHeartbeatTimer);
+    startupHeartbeatTimer = undefined;
+  }
+  if (settingsBackupTimer) {
+    clearInterval(settingsBackupTimer);
+    settingsBackupTimer = undefined;
+  }
+  if (windowStateSaveTimer) {
+    clearTimeout(windowStateSaveTimer);
+    windowStateSaveTimer = undefined;
+  }
+
+  activeLocalScan?.controller.abort();
+  await withSteamSyncStartLock(() => cancelActiveSteamSync("Steam sync cancelled before resetting all app data")).catch(() => undefined);
+  clearRichMetadataQueue("Detail metadata cancelled before resetting all app data");
+  backgroundService?.stop();
+  stopResourceSampler();
+  stopSystemAudioMonitor();
+
+  await session.defaultSession.clearStorageData().catch(() => undefined);
+  await session.defaultSession.clearCache().catch(() => undefined);
+  await startupProfileService?.finish().catch(() => undefined);
+
+  try {
+    repository?.close();
+  } catch {
+    // Reset is best-effort after shutdown; stale handles should not block deletion.
+  }
+  try {
+    nativeBridge?.dispose();
+  } catch {
+    // Ignore bridge shutdown failures during reset.
+  }
+  servicesShutDown = true;
+
+  const userData = app.getPath("userData");
+  const results = await Promise.allSettled(RESET_USER_DATA_ENTRIES.map(async (entry) => {
+    await rm(join(userData, entry), { recursive: true, force: true });
+    return entry;
+  }));
+  const removed: string[] = [];
+  const failed: Array<{ entry: string; error: string }> = [];
+  results.forEach((result, index) => {
+    const entry = RESET_USER_DATA_ENTRIES[index]!;
+    if (result.status === "fulfilled") {
+      removed.push(entry);
+    } else {
+      failed.push({ entry, error: result.reason instanceof Error ? result.reason.message : String(result.reason) });
+    }
+  });
+
+  app.relaunch({ args: process.argv.slice(1) });
+  setImmediate(() => app.quit());
+  return { ok: true, removed, failed };
 }
 
 type SteamGridDbAsset = {
@@ -2989,7 +3092,7 @@ function registerIpc(): void {
     const issues = await localImportService.getIssues(current.localIgnoredPaths ?? []);
     const issue = issues.find((entry) => entry.folderPath === folderPath);
     if (issue) {
-      await localImportService.clearIssue(issue.candidateId, folderPath);
+      await localImportService.clearIssue(issue.candidateId);
     }
     return settingsService.update({ localIgnoredPaths: [...ignored] });
   });
@@ -3019,7 +3122,7 @@ function registerIpc(): void {
       return { ok: true };
     }
     repository.removeGame(args.gameId);
-    await localImportService.clearIssue(args.gameId, args.folderPath);
+    await localImportService.clearIssue(args.gameId);
     if (args.folderPath) {
       const current = await settingsService.get();
       const ignored = new Set(current.localIgnoredPaths ?? []);
@@ -3040,7 +3143,7 @@ function registerIpc(): void {
       throw new Error("Only local games can be deleted from this menu.");
     }
     repository.removeGame(gameId);
-    await localImportService.clearIssue(gameId, game.installDirectory);
+    await localImportService.clearIssue(gameId);
     return { ok: true };
   });
   handleIpc("local:update-location", async (_event, args: { gameId: string; folderPath: string }) => {
@@ -3071,9 +3174,9 @@ function registerIpc(): void {
     });
     const report = localImportService.lastReport;
     if (report) {
-      report.issues = report.issues.filter((issue) => issue.candidateId !== args.gameId && issue.folderPath !== game.installDirectory);
+      report.issues = report.issues.filter((issue) => issue.candidateId !== args.gameId);
     }
-    await localImportService.clearIssue(args.gameId, game.installDirectory);
+    await localImportService.clearIssue(args.gameId);
     return { ok: true, executablePath: probe.chosenExe };
   });
   handleIpc("local:add-single", async (
@@ -3710,6 +3813,7 @@ function registerIpc(): void {
     });
     return seeded;
   });
+  handleIpc("debug:reset-everything", () => resetEverythingAndRelaunch());
 }
 
 app.whenReady().then(async () => {

@@ -22,8 +22,20 @@ export class HomeService {
     } = {}
   ): Promise<HomeModel> {
     const previous = await this.readCache();
+    this.logDecision("home:get", "Home model requested", {
+      games: games.length,
+      hasCache: Boolean(previous),
+      cacheStale: previous?.stale,
+      cachePopularNow: previous?.popularNow.length ?? 0,
+      cacheTrendingRows: previous?.trendingRows.length ?? 0,
+      rebuildRunning: Boolean(this.rebuild)
+    });
+    const hasPreviousDiscovery = previous ? this.hasDiscovery(previous) : false;
     if (previous && this.hasUnsafeDiscoveryCache(previous)) {
       try {
+        this.logDecision("home:get", "Unsafe Home cache found; rebuilding before returning", {
+          games: games.length
+        });
         return await this.buildAndWrite(games, previous, options);
       } catch (error) {
         this.diagnosticLog?.log({
@@ -35,8 +47,37 @@ export class HomeService {
       }
     }
 
+    if (!hasPreviousDiscovery) {
+      if (this.rebuild) {
+        this.logDecision("home:get", "Waiting for active Home discovery rebuild because no discovery cache exists", {
+          games: games.length
+        });
+        await this.rebuild.catch(() => undefined);
+        const rebuilt = await this.readCache();
+        if (rebuilt && this.hasDiscovery(rebuilt)) {
+          return this.cachedOrLocalModel(games, rebuilt, false);
+        }
+      }
+
+      try {
+        this.logDecision("home:get", "No Home discovery cache exists; rebuilding before returning", {
+          games: games.length
+        });
+        return await this.buildAndWrite(games, previous, options);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.diagnosticLog?.log({
+          level: "error",
+          phase: "home:discovery",
+          message: "Home discovery first build failed; returning loading model",
+          details: { error: message }
+        });
+        return this.cachedOrLocalModel(games, undefined, true);
+      }
+    }
+
     this.startBackgroundRebuild(games, previous, options);
-    return this.cachedOrLocalModel(games, previous);
+    return this.cachedOrLocalModel(games, previous, false);
   }
 
   async clearCache(): Promise<void> {
@@ -52,9 +93,14 @@ export class HomeService {
     }
   ): void {
     if (this.rebuild) {
+      this.logDecision("home:discovery", "Home rebuild already running; returning cached/local model");
       return;
     }
 
+    this.logDecision("home:discovery", "Home background rebuild scheduled", {
+      games: games.length,
+      hasPrevious: Boolean(previous)
+    });
     this.rebuild = this.rebuildNow(games, previous, options).finally(() => {
       this.rebuild = undefined;
     });
@@ -69,7 +115,13 @@ export class HomeService {
     }
   ): Promise<void> {
     try {
-      await this.buildAndWrite(games, previous, options);
+      this.logDecision("home:discovery", "Home background rebuild started", { games: games.length });
+      const model = await this.buildAndWrite(games, previous, options);
+      this.logDecision("home:discovery", "Home background rebuild finished", {
+        popularNow: model.popularNow.length,
+        trendingRows: model.trendingRows.length,
+        trendingGames: model.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
+      });
     } catch (error) {
       this.diagnosticLog?.log({
         level: "error",
@@ -93,19 +145,35 @@ export class HomeService {
       steamAppInfoProvider: options.steamAppInfoProvider,
       logger: (entry) => this.diagnosticLog?.log(entry)
     });
-    await mkdir(dirname(this.cachePath), { recursive: true });
-    await writeFile(this.cachePath, JSON.stringify(model, null, 2));
+    if (!this.hasDiscovery(model)) {
+      this.diagnosticLog?.log({
+        level: "warning",
+        phase: "home:discovery",
+        message: "Home discovery rebuild produced no discovery rows",
+        details: {
+          localGames: games.length,
+          popularNow: model.popularNow.length,
+          trendingRows: model.trendingRows.length
+        }
+      });
+    }
+    await this.writeModel(model);
     return model;
   }
 
-  private cachedOrLocalModel(games: Game[], previous: HomeModel | undefined): HomeModel {
+  private async writeModel(model: HomeModel): Promise<void> {
+    await mkdir(dirname(this.cachePath), { recursive: true });
+    await writeFile(this.cachePath, JSON.stringify(model, null, 2));
+  }
+
+  private cachedOrLocalModel(games: Game[], previous: HomeModel | undefined, stale: boolean): HomeModel {
     const localRows = this.localRows(games);
     if (previous) {
       return {
         ...previous,
         ...localRows,
         popularNow: filterHomeHeroGames(previous.popularNow),
-        stale: true
+        stale
       };
     }
 
@@ -118,6 +186,17 @@ export class HomeService {
       generatedAt: new Date().toISOString(),
       stale: true
     };
+  }
+
+  private hasDiscovery(model: HomeModel): boolean {
+    return model.popularNow.length > 0 || model.trendingRows.some((row) => row.games.length > 0);
+  }
+
+  private logDecision(phase: string, message: string, details?: Record<string, unknown>): void {
+    if (process.env.HYNITE_HOME_DEBUG === "1" || process.env.HYNITE_HOME_DEBUG === "true") {
+      console.info(`[home] ${message}`, details ?? {});
+    }
+    this.diagnosticLog?.log({ level: "info", phase, message, details });
   }
 
   private localRows(games: Game[]): Pick<HomeModel, "recentActivity" | "continuePlaying" | "mostPlayed"> {

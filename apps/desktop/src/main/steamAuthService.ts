@@ -7,6 +7,7 @@ const realm = "https://hynite.local/";
 const familySessionPartition = "persist:steam-family";
 const familyTokenEndpoint = "https://store.steampowered.com/pointssummary/ajaxgetasyncconfig";
 const familyLoginEntry = "https://store.steampowered.com/login/";
+const familyLoginRevealDelayMs = 15_000;
 
 function buildSteamLoginUrl(): string {
   const params = new URLSearchParams({
@@ -214,6 +215,7 @@ export function authenticateSteamSession(parent?: BrowserWindow): Promise<SteamF
       height: 720,
       minWidth: 720,
       minHeight: 560,
+      show: false,
       parent,
       modal: Boolean(parent),
       title: "Connect Steam family library",
@@ -228,12 +230,20 @@ export function authenticateSteamSession(parent?: BrowserWindow): Promise<SteamF
 
     let settled = false;
     let probing = false;
+    const revealTimer = setTimeout(() => {
+      if (settled || authWindow.isDestroyed()) {
+        return;
+      }
+      authWindow.show();
+      authWindow.focus();
+    }, familyLoginRevealDelayMs);
 
     function settle(error: Error | undefined, result?: SteamFamilyAuthResult): void {
       if (settled) {
         return;
       }
       settled = true;
+      clearTimeout(revealTimer);
       if (error) {
         reject(error);
       } else if (result) {
@@ -292,6 +302,7 @@ export function authenticateSteamSession(parent?: BrowserWindow): Promise<SteamF
 
     authWindow.on("closed", () => {
       clearInterval(pollInterval);
+      clearTimeout(revealTimer);
       if (!settled) {
         reject(new Error("Steam family login was cancelled."));
       }

@@ -1,6 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  AlertTriangle,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -29,7 +28,6 @@ type StepId =
   | "steamgriddb"
   | "pair-steam"
   | "local-steam-user"
-  | "steam-family"
   | "local-games"
   | "sources"
   | "music"
@@ -71,10 +69,6 @@ const STEPS: StepDefinition[] = [
   {
     id: "local-steam-user",
     title: "Local Steam User"
-  },
-  {
-    id: "steam-family",
-    title: "Steam Family"
   },
   {
     id: "local-games",
@@ -278,6 +272,7 @@ export function OnboardingExperience({
   const [sourcePhase, setSourcePhase] = useState<"idle" | "open">("idle");
   const [sourceImport, setSourceImport] = useState<{ name: string; importedEntries: number; skippedEntries: number } | undefined>();
   const [musicDraft, setMusicDraft] = useState<MusicSettings>(() => normalizeMusicSettings());
+  const [musicStatus, setMusicStatus] = useState(() => musicEngine.getStatus());
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
   const [tasks, setTasks] = useState<Record<OnboardingTask["id"], OnboardingTask>>(INITIAL_TASKS);
   const tasksRef = useRef(tasks);
@@ -291,6 +286,7 @@ export function OnboardingExperience({
   const musicSettings = musicDraft;
   const preview = state.preview;
   const canContinueFromPreparing = !Object.values(tasks).some((task) => task.status === "running");
+  const musicPlaying = musicStatus.playing || musicStatus.audible;
 
   const updateTask = useCallback((id: OnboardingTask["id"], patch: Partial<OnboardingTask>) => {
     tasksRef.current = {
@@ -325,6 +321,7 @@ export function OnboardingExperience({
     let disposed = false;
     window.hynite.startup.signalReady({ mode: "onboarding" });
     const stopSyncStatus = window.hynite.sync.onStatusChanged(setSyncStatus);
+    const stopMusicStatus = musicEngine.subscribe(setMusicStatus);
     musicStartTimerRef.current = setTimeout(() => {
       musicStartTimerRef.current = undefined;
       musicEngine.onStartupComplete({ skipStartupDelay: true });
@@ -345,6 +342,7 @@ export function OnboardingExperience({
     return () => {
       disposed = true;
       stopSyncStatus();
+      stopMusicStatus();
       if (musicStartTimerRef.current) {
         clearTimeout(musicStartTimerRef.current);
         musicStartTimerRef.current = undefined;
@@ -428,7 +426,7 @@ export function OnboardingExperience({
 
   function nextStep(): void {
     setMessage(undefined);
-    if (step.id === "steam-family") {
+    if (step.id === "local-steam-user") {
       startSteamFirstPass();
     }
     if (step.id === "local-games") {
@@ -467,6 +465,7 @@ export function OnboardingExperience({
       }
       setSteamKeyDraft("");
       setMessage("Steam Web API key saved.");
+      setStepIndex((current) => Math.min(current + 1, STEPS.length - 1));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save Steam Web API key.");
     } finally {
@@ -487,6 +486,7 @@ export function OnboardingExperience({
       }
       setSteamGridDbDraft("");
       setMessage("SteamGridDB fallback saved.");
+      setStepIndex((current) => Math.min(current + 1, STEPS.length - 1));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save SteamGridDB key.");
     } finally {
@@ -499,16 +499,30 @@ export function OnboardingExperience({
     setMessage(undefined);
     try {
       if (preview) {
+        const nextIndex = (settings?.steamAccounts ?? []).length;
+        const nextAccount = makePreviewAccount(nextIndex);
         setSettings((current) => {
           const existing = current?.steamAccounts ?? [];
           return {
             ...(current as AppSettings),
-            steamAccounts: [...existing, makePreviewAccount(existing.length)]
+            steamAccounts: [
+              ...existing,
+              {
+                ...nextAccount,
+                familySession: {
+                  accessToken: previewSecret(),
+                  steamId: nextAccount.steamId,
+                  expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+                  connectedAt: new Date().toISOString()
+                }
+              }
+            ]
           };
         });
       } else {
-        await window.hynite.steam.pair();
+        const paired = await window.hynite.steam.pair();
         setSettings(await window.hynite.settings.get());
+        void connectFamily(paired.steamId);
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Steam pairing was not completed.");
@@ -643,6 +657,7 @@ export function OnboardingExperience({
           ]}
         >
           <div className="onboarding-form-stack">
+            <p className="onboarding-warning-text">Steam Guard mobile authenticator is required for this key.</p>
             <div className="onboarding-link-row">
               <button type="button" className="secondary-action" onClick={() => void window.hynite.native.openExternal(STEAM_WEB_API_URL)}>
                 <ExternalLink size={14} />
@@ -767,38 +782,6 @@ export function OnboardingExperience({
             {accounts.some((account) => account.localUsername && accountByLocalUsername.has(account.localUsername)) ? (
               <span className="onboarding-pill ready">Mapping saved</span>
             ) : null}
-          </div>
-        </StepSplitLayout>
-      );
-    }
-
-    if (step.id === "steam-family") {
-      return (
-        <StepSplitLayout
-          visual={<FamilyVisual accounts={accounts} />}
-          bubbles={[]}
-        >
-          <div className="onboarding-list">
-            {accounts.length === 0 ? (
-              <div className="onboarding-empty-row">No paired Steam accounts.</div>
-            ) : accounts.map((account) => (
-              <div className="onboarding-row family-row" key={account.steamId}>
-                <Users size={15} />
-                <span>
-                  <strong>{account.personaName ?? "Steam account"}</strong>
-                  <em>{account.familySession ? "Family connected" : "Family not connected"}</em>
-                </span>
-                <button
-                  type="button"
-                  className="secondary-action"
-                  disabled={Boolean(account.familySession) || busy === `family-${account.steamId}`}
-                  onClick={() => void connectFamily(account.steamId)}
-                >
-                  {busy === `family-${account.steamId}` ? <Loader2 size={14} className="spin" /> : <Link2 size={14} />}
-                  Connect
-                </button>
-              </div>
-            ))}
           </div>
         </StepSplitLayout>
       );
@@ -945,27 +928,9 @@ export function OnboardingExperience({
     }
 
     return (
-      <StepSplitLayout
-        visual={<PreparingVisual tasks={Object.values(tasks)} syncStatus={syncStatus} />}
-        bubbles={[]}
-      >
-        <div className="onboarding-task-list">
-          {Object.values(tasks).filter((task) => task.status !== "idle").map((task) => (
-            <motion.div
-              key={task.id}
-              className={`onboarding-task-row ${task.status}`}
-              initial={reduced ? false : { opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              {task.status === "running" ? <Loader2 size={15} className="spin" /> : task.status === "warning" ? <AlertTriangle size={15} /> : <Check size={15} />}
-              <span>
-                <strong>{task.label}</strong>
-                <em>{task.id === "steam" && syncStatus?.active ? syncStatus.message : task.message}</em>
-              </span>
-            </motion.div>
-          ))}
-        </div>
-      </StepSplitLayout>
+      <StepVisualOnlyLayout>
+        <PreparingVisual tasks={Object.values(tasks)} syncStatus={syncStatus} />
+      </StepVisualOnlyLayout>
     );
   })();
 
@@ -973,6 +938,15 @@ export function OnboardingExperience({
     <div className="onboarding-shell">
       <OnboardingTitleBar />
       <main className="onboarding-stage">
+        {musicPlaying ? (
+          <button
+            type="button"
+            className="onboarding-mute-hint"
+            onClick={() => void updateMusic({ enabled: false })}
+          >
+            click me to mute music
+          </button>
+        ) : null}
         <section className="onboarding-panel">
           {message ? <div className="onboarding-message">{message}</div> : null}
           <AnimatePresence mode="wait">
@@ -1003,11 +977,6 @@ export function OnboardingExperience({
               <button type="button" className="secondary-action" disabled={busy === "complete"} onClick={() => void complete(true)}>
                 Skip onboarding
               </button>
-              {step.id !== "preparing" ? (
-                <button type="button" className="secondary-action" onClick={nextStep}>
-                  Skip step
-                </button>
-              ) : null}
               <button type="button" className="primary-action" disabled={step.id === "preparing" && !canContinueFromPreparing} onClick={nextStep}>
                 {step.id === "preparing" && !canContinueFromPreparing ? <Loader2 size={15} className="spin" /> : step.id === "zoom" || step.id === "preparing" ? <Check size={15} /> : <ChevronRight size={15} />}
                 {step.id === "preparing" ? "Enter Hynite" : step.id === "zoom" ? "Finish" : "Continue"}
@@ -1062,6 +1031,14 @@ function StepSplitLayout({
   );
 }
 
+function StepVisualOnlyLayout({ children }: { children: ReactNode }) {
+  return (
+    <div className="onboarding-visual-only-layout">
+      <div className="onboarding-visual">{children}</div>
+    </div>
+  );
+}
+
 function StepPlainLayout({ children }: { children: ReactNode }) {
   return (
     <div className="onboarding-plain-layout">
@@ -1095,20 +1072,6 @@ function LocalUserMap({ accounts, localAccounts }: { accounts: SteamAccountSetti
           <strong>{account.localUsername ?? localAccounts[index]?.accountName ?? "local user"}</strong>
         </div>
       ))}
-    </div>
-  );
-}
-
-function FamilyVisual({ accounts }: { accounts: SteamAccountSettings[] }) {
-  const rows = accounts.length ? accounts : [makePreviewAccount(0), makePreviewAccount(1)];
-  return (
-    <div className="family-visual">
-      <Users size={30} />
-      <div>
-        {rows.slice(0, 3).map((account) => (
-          <span key={account.steamId}>{account.personaName ?? account.steamId}</span>
-        ))}
-      </div>
     </div>
   );
 }
@@ -1151,13 +1114,40 @@ function ZoomPreview({ cardsPerRow }: { cardsPerRow: number }) {
   );
 }
 
+function shortProgressText(value: string, limit = 44): string {
+  return value.length > limit ? `${value.slice(0, limit - 1).trimEnd()}…` : value;
+}
+
+function taskTooltip(task: OnboardingTask, syncStatus?: SyncStatus): string {
+  if (task.id === "steam" && syncStatus?.active) {
+    const total = syncStatus.total;
+    const current = syncStatus.current ?? 0;
+    return typeof total === "number" && total > 0
+      ? `${syncStatus.message} (${Math.min(current, total)}/${total})`
+      : syncStatus.message;
+  }
+  return task.message;
+}
+
+function taskTitle(task: OnboardingTask): string {
+  return task.id === "steam" ? "Steam sync" : "Local scan";
+}
+
 function PreparingVisual({ tasks, syncStatus }: { tasks: OnboardingTask[]; syncStatus?: SyncStatus }) {
-  const running = tasks.some((task) => task.status === "running");
+  const activeTask = tasks.find((task) => task.status === "running")
+    ?? tasks.find((task) => task.status === "warning")
+    ?? tasks.find((task) => task.status === "success")
+    ?? tasks[0];
+  const running = activeTask?.status === "running";
+  const title = activeTask ? taskTitle(activeTask) : "Ready";
+  const tooltip = activeTask ? taskTooltip(activeTask, syncStatus) : "Setup complete";
   return (
     <div className="preparing-visual">
-      <Loader2 size={34} className={running ? "spin" : ""} />
-      <strong>{running ? "Working" : "Ready"}</strong>
-      <span>{syncStatus?.active ? syncStatus.message : "Opening Hynite..."}</span>
+      {running ? <Loader2 size={34} className="spin" /> : <Check size={34} />}
+      <span className="preparing-title-wrap">
+        <strong>{running ? title : "Ready"}</strong>
+        <span className="preparing-tooltip">{shortProgressText(tooltip, 96)}</span>
+      </span>
     </div>
   );
 }

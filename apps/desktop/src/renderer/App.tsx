@@ -124,6 +124,20 @@ function writeTrailerAudioState(value: { volume: number; muted: boolean }): void
   }
 }
 
+function homeDebugEnabled(): boolean {
+  try {
+    return window.localStorage.getItem("hynite:homeDebug") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function homeDebug(message: string, details?: Record<string, unknown>): void {
+  if (homeDebugEnabled()) {
+    console.info(`[home] ${message}`, details ?? {});
+  }
+}
+
 function requestSteamSwitchConfirmation(prompt: Omit<SteamSwitchPrompt, "resolve">): Promise<boolean> {
   return new Promise((resolve) => {
     const detail = { ...prompt, handled: false, resolve };
@@ -208,6 +222,9 @@ const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
 ];
 
 const HERO_AUTOPLAY_MS = 9000;
+const HOME_REFRESH_DEBOUNCE_MS = 250;
+const HOME_STALE_RETRY_DELAY_MS = 2000;
+const HOME_STALE_RETRY_MAX = 15;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
 const LIBRARY_GRID_INITIAL_SIZE = 48;
@@ -1514,6 +1531,7 @@ function Hero({
   const description = heroGame ? heroDescription(heroGame) : undefined;
   const reduceHeroMotion = Boolean(settings?.reduceMotion);
   const heroImageKey = `${heroGame?.id ?? "empty"}:${heroImage ?? "fallback"}`;
+  const loadingDiscovery = Boolean(home?.stale && heroGames.length === 0 && (settings?.steamAccounts.length || settings?.steamWebApiKey));
 
   useEffect(() => {
     setHeroDirection(1);
@@ -1688,12 +1706,14 @@ function Hero({
             </div>
           ) : null}
         </>
+      ) : loadingDiscovery ? (
+        <HomeHeroSkeleton />
       ) : (
         <div className="hero-empty">
           <h1 className="hero-logo-title">
             <BrandLogo className="hero-logo" sizes="clamp(72px, 8vw, 104px)" />
           </h1>
-          <p>Pair Steam to build the first library view.</p>
+          <p>{settings?.steamAccounts.length || settings?.steamWebApiKey ? "Discovery is loading. Trending updates when Home finishes refreshing." : "Pair Steam in Settings to start the first library view."}</p>
           <button className="primary-action" onClick={onOpenSettings}>
             <Settings size={16} />
             Open settings
@@ -1701,6 +1721,20 @@ function Hero({
         </div>
       )}
     </section>
+  );
+}
+
+function HomeHeroSkeleton() {
+  return (
+    <div className="home-hero-skeleton" aria-label="Loading discovery">
+      <span className="home-skeleton-title" />
+      <span className="home-skeleton-line long" />
+      <span className="home-skeleton-line" />
+      <div className="home-skeleton-actions">
+        <span />
+        <span />
+      </div>
+    </div>
   );
 }
 
@@ -1766,8 +1800,16 @@ function TrendingScreen({
   const spotlight = rows.find((row) => row.games.length > 0)?.games[0] ?? home?.popularNow[0];
   const spotlightImage = spotlight ? heroStill(spotlight) : undefined;
   const reduceMotion = Boolean(settings?.reduceMotion);
+  const loadingDiscovery = Boolean(home?.stale && rows.length === 0);
 
   if (!spotlight || rows.length === 0) {
+    if (loadingDiscovery) {
+      return (
+        <main className="page trending-page">
+          <TrendingSkeleton />
+        </main>
+      );
+    }
     return (
       <main className="page">
         <div className="empty-state">
@@ -1844,6 +1886,32 @@ function TrendingScreen({
         ))}
       </div>
     </main>
+  );
+}
+
+function TrendingSkeleton() {
+  return (
+    <>
+      <section className="trend-hero trend-hero-skeleton" aria-label="Loading trending">
+        <div className="trend-skeleton-frame" />
+        <div className="trend-skeleton-copy">
+          <span className="home-skeleton-line short" />
+          <span className="home-skeleton-title" />
+          <span className="home-skeleton-line long" />
+          <span className="home-skeleton-line" />
+        </div>
+      </section>
+      <div className="trend-skeleton-rows">
+        {Array.from({ length: 3 }, (_, row) => (
+          <div key={row} className="trend-skeleton-row">
+            <span />
+            <div>
+              {Array.from({ length: 6 }, (_, item) => <i key={item} />)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -3777,6 +3845,8 @@ function SettingsScreen({
   const [steamGridDbKey, setSteamGridDbKey] = useState("");
   const [steamMessage, setSteamMessage] = useState<string | undefined>();
   const [metadataMessage, setMetadataMessage] = useState<string | undefined>();
+  const [devMessage, setDevMessage] = useState<string | undefined>();
+  const [resettingEverything, setResettingEverything] = useState(false);
   const [localAccounts, setLocalAccounts] = useState<SteamLocalAccount[]>([]);
   const [activeSteamUser, setActiveSteamUser] = useState<string | undefined>();
   const [pairing, setPairing] = useState(false);
@@ -3912,6 +3982,26 @@ function SettingsScreen({
     const result = await window.hynite.library.clear();
     onLibraryCleared();
     setSteamMessage(`Cleared ${result.cleared} games from the local library.`);
+  }
+
+  async function resetEverything() {
+    const confirmed = window.confirm(
+      "Reset all Hynite data? This deletes library data, settings, accounts, source catalogs, cached assets, diagnostics, profile runs, and local UI storage, then restarts Hynite."
+    );
+    if (!confirmed) return;
+    const confirmedAgain = window.confirm("Last chance: reset EVERYTHING and restart?");
+    if (!confirmedAgain) return;
+    setDevMessage("Resetting all app data and restarting...");
+    setResettingEverything(true);
+    try {
+      const result = await window.hynite.debug.resetEverything();
+      if (result.failed.length > 0) {
+        setDevMessage(`Reset requested. ${result.failed.length} entries could not be removed before restart.`);
+      }
+    } catch (error) {
+      setResettingEverything(false);
+      setDevMessage(error instanceof Error ? error.message : "Failed to reset app data.");
+    }
   }
 
   async function setAutoHideAfterLaunch(value: boolean) {
@@ -4862,7 +4952,12 @@ function SettingsScreen({
                   <button className="secondary-action" onClick={onSeed}>
                     Add demo game
                   </button>
+                  <button className="secondary-action danger" disabled={resettingEverything} onClick={() => void resetEverything()}>
+                    <Trash2 size={14} />
+                    {resettingEverything ? "Resetting..." : "Reset everything"}
+                  </button>
                 </div>
+                {devMessage ? <p className="result-line">{devMessage}</p> : null}
               </section>
             </>
           ) : null}
@@ -6352,6 +6447,7 @@ function LauncherShell() {
   const refreshPromiseRef = useRef<Promise<void> | undefined>();
   const homePromiseRef = useRef<Promise<HomeModel> | undefined>();
   const homeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const homeRefreshRetryRef = useRef(0);
   const homeApplyTokenRef = useRef(0);
   const prefersReducedMotion = usePrefersReducedMotion();
   const reduceLaunchMotion = Boolean(settings?.reduceMotion || prefersReducedMotion);
@@ -6887,10 +6983,25 @@ function LauncherShell() {
   function loadHome(options: { dedupe?: boolean } = {}): Promise<HomeModel> {
     const dedupe = options.dedupe !== false;
     if (dedupe && homePromiseRef.current) {
+      homeDebug("renderer get reused in-flight request");
       return homePromiseRef.current;
     }
 
-    const promise = window.hynite.home.get().finally(() => {
+    const startedAt = performance.now();
+    homeDebug("renderer get started", { dedupe });
+    const promise = window.hynite.home.get().then((nextHome) => {
+      homeDebug("renderer get finished", {
+        durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        stale: nextHome.stale,
+        popularNow: nextHome.popularNow.length,
+        trendingRows: nextHome.trendingRows.length,
+        trendingGames: nextHome.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
+      });
+      return nextHome;
+    }).catch((error: unknown) => {
+      console.error("[home] renderer get failed", error);
+      throw error;
+    }).finally(() => {
       if (homePromiseRef.current === promise) {
         homePromiseRef.current = undefined;
       }
@@ -6901,19 +7012,43 @@ function LauncherShell() {
     return promise;
   }
 
-  function scheduleHomeRefresh(): void {
+  function scheduleHomeRefresh(options: { retryIfStale?: boolean; delayMs?: number } = {}): void {
     const token = ++homeApplyTokenRef.current;
     if (homeRefreshTimerRef.current) {
       clearTimeout(homeRefreshTimerRef.current);
     }
+    const delayMs = options.delayMs ?? HOME_REFRESH_DEBOUNCE_MS;
+    homeDebug("renderer refresh scheduled", {
+      token,
+      delayMs,
+      retryIfStale: options.retryIfStale,
+      staleRetry: homeRefreshRetryRef.current
+    });
     homeRefreshTimerRef.current = setTimeout(() => {
       homeRefreshTimerRef.current = undefined;
       void loadHome({ dedupe: false }).then((nextHome) => {
         if (homeApplyTokenRef.current === token) {
           setHome(nextHome);
         }
+        if (nextHome.stale && options.retryIfStale && homeRefreshRetryRef.current < HOME_STALE_RETRY_MAX) {
+          homeRefreshRetryRef.current += 1;
+          homeDebug("renderer stale result; retrying", {
+            attempt: homeRefreshRetryRef.current,
+            max: HOME_STALE_RETRY_MAX
+          });
+          scheduleHomeRefresh({ retryIfStale: true, delayMs: HOME_STALE_RETRY_DELAY_MS });
+        } else {
+          if (nextHome.stale && options.retryIfStale) {
+            console.warn("[home] renderer stale retries exhausted", {
+              attempts: homeRefreshRetryRef.current,
+              popularNow: nextHome.popularNow.length,
+              trendingRows: nextHome.trendingRows.length
+            });
+          }
+          homeRefreshRetryRef.current = 0;
+        }
       }).catch(console.error);
-    }, 250);
+    }, delayMs);
   }
 
   function refresh(): Promise<void> {
@@ -6999,6 +7134,9 @@ function LauncherShell() {
         trendingRows: nextHome.trendingRows.length
       });
       setHome(nextHome);
+      if (nextHome.stale) {
+        scheduleHomeRefresh({ retryIfStale: true });
+      }
       homeSpan.end("ok", { stale: nextHome.stale, popularNow: nextHome.popularNow.length, trendingRows: nextHome.trendingRows.length });
     }).catch((error: unknown) => {
       profileStartup("home:error", "Renderer home model failed", { error: error instanceof Error ? error.message : String(error) });
@@ -7012,14 +7150,14 @@ function LauncherShell() {
   }
 
   useEffect(() => {
-    if (!initialLoadComplete || !homeFirstLoaded) return;
+    if (!initialLoadComplete) return;
     profileStartup("startup-overlay:paint-wait", "Initial load complete; waiting for paint");
     requestAnimationFrame(() => requestAnimationFrame(() => {
       profileStartup("startup-overlay:hidden", "Startup overlay hidden");
       setStartupDone(true);
       window.hynite.startup.signalReady({ mode: "app" });
     }));
-  }, [initialLoadComplete, homeFirstLoaded]);
+  }, [initialLoadComplete]);
 
   useEffect(() => {
     if (!startupDone || startupSoundPlayedRef.current) {
@@ -7084,7 +7222,7 @@ function LauncherShell() {
       setRecentGames((current) => mergeRecentActivityGame(current, game));
       setLibraryGameIds((current) => new Set([...current, game.id]));
       setSelected((current) => (current?.id === game.id ? game : current));
-      scheduleHomeRefresh();
+      scheduleHomeRefresh({ retryIfStale: true, delayMs: HOME_STALE_RETRY_DELAY_MS });
       updateSpan.end("ok");
     });
     return () => {

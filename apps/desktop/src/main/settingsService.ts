@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { controllerActionIds, defaultLibraryView, defaultWishlistView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState, type WishlistView } from "@hynite/core";
@@ -522,8 +523,13 @@ function hasMeaningfulUserState(settings: AppSettings): boolean {
 
 export class SettingsService {
   private bundledAudioCache: BundledAudioDefaults | undefined;
+  private mutationChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly filePath: string, private readonly audioRoot?: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly audioRoot?: string,
+    private readonly deps: { rename?: typeof rename; sleep?: (ms: number) => Promise<void> } = {}
+  ) {}
 
   private bundledAudio(): BundledAudioDefaults {
     this.bundledAudioCache ??= loadBundledAudioDefaults(this.audioRoot);
@@ -562,10 +568,49 @@ export class SettingsService {
     if (existsSync(this.filePath)) {
       await copyFile(this.filePath, this.backupPath()).catch(() => undefined);
     }
-    const tempPath = join(dirname(this.filePath), `.${basename(this.filePath)}.${process.pid}.${Date.now()}.tmp`);
+    const tempPath = join(
+      dirname(this.filePath),
+      `.${basename(this.filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
+    );
     await writeFile(tempPath, JSON.stringify(settings, null, 2));
-    await rename(tempPath, this.filePath);
+    await this.renameWithRetry(tempPath, this.filePath);
     await copyFile(this.filePath, this.backupPath()).catch(() => undefined);
+  }
+
+  private async renameWithRetry(from: string, to: string): Promise<void> {
+    const attempts = process.platform === "win32" ? 5 : 1;
+    let lastError: unknown;
+    for (let index = 0; index < attempts; index += 1) {
+      try {
+        await (this.deps.rename ?? rename)(from, to);
+        return;
+      } catch (error) {
+        lastError = error;
+        const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+        if (process.platform !== "win32" || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) {
+          throw error;
+        }
+        if (index < attempts - 1) {
+          await (this.deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms))))(40 * (index + 1));
+        }
+      }
+    }
+    await rm(from, { force: true }).catch(() => undefined);
+    throw lastError instanceof Error ? lastError : new Error(`Failed to rename ${from} to ${to}.`);
+  }
+
+  private async runExclusive<T>(task: () => Promise<T>): Promise<T> {
+    const previous = this.mutationChain;
+    let release!: () => void;
+    this.mutationChain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
   }
 
   private periodicBackupFiles(): SettingsBackupInfo[] {
@@ -609,14 +654,16 @@ export class SettingsService {
   }
 
   async restoreBackup(id: string): Promise<AppSettings> {
-    const backup = this.periodicBackupFiles().find((entry) => entry.id === id || entry.fileName === id);
-    if (!backup) {
-      throw new Error(`Settings backup ${id} was not found.`);
-    }
-    const raw = JSON.parse(await readFile(join(this.periodicBackupDir(), backup.fileName), "utf8")) as LegacySettings;
-    const restored = migrate(raw, this.bundledAudio());
-    await this.writeSettings(restored);
-    return restored;
+    return this.runExclusive(async () => {
+      const backup = this.periodicBackupFiles().find((entry) => entry.id === id || entry.fileName === id);
+      if (!backup) {
+        throw new Error(`Settings backup ${id} was not found.`);
+      }
+      const raw = JSON.parse(await readFile(join(this.periodicBackupDir(), backup.fileName), "utf8")) as LegacySettings;
+      const restored = migrate(raw, this.bundledAudio());
+      await this.writeSettings(restored);
+      return restored;
+    });
   }
 
   async detectHealthWarning(): Promise<SettingsHealthWarning | undefined> {
@@ -661,6 +708,52 @@ export class SettingsService {
   }
 
   async update(patch: Partial<AppSettings>): Promise<AppSettings> {
+    return this.runExclusive(() => this.updateUnlocked(patch));
+  }
+
+  async upsertSteamAccount(account: SteamAccountSettings): Promise<AppSettings> {
+    return this.runExclusive(async () => {
+      const current = await this.get();
+      const others = current.steamAccounts.filter((existing) => existing.steamId !== account.steamId);
+      return this.updateUnlocked({ steamAccounts: [...others, account] });
+    });
+  }
+
+  async patchSteamAccount(steamId: string, patch: Partial<SteamAccountSettings>): Promise<AppSettings> {
+    return this.runExclusive(async () => {
+      const current = await this.get();
+      const next = current.steamAccounts.map((account) =>
+        account.steamId === steamId ? { ...account, ...patch } : account
+      );
+      return this.updateUnlocked({ steamAccounts: next });
+    });
+  }
+
+  async removeSteamAccount(steamId: string): Promise<AppSettings> {
+    return this.runExclusive(async () => {
+      const current = await this.get();
+      return this.updateUnlocked({ steamAccounts: current.steamAccounts.filter((account) => account.steamId !== steamId) });
+    });
+  }
+
+  async setLaunchAccountPreference(gameId: string, steamId: string | undefined): Promise<AppSettings> {
+    return this.runExclusive(async () => {
+      const current = await this.get();
+      const next = { ...(current.launchAccountPreferences ?? {}) };
+      if (steamId) {
+        next[gameId] = steamId;
+      } else {
+        delete next[gameId];
+      }
+      return this.updateUnlocked({ launchAccountPreferences: next });
+    });
+  }
+
+  async setGameGroups(gameGroups: GameGroup[]): Promise<AppSettings> {
+    return this.runExclusive(async () => this.updateUnlocked({ gameGroups }));
+  }
+
+  private async updateUnlocked(patch: Partial<AppSettings>): Promise<AppSettings> {
     const next: AppSettings = { ...(await this.get()), ...patch };
     if (!Array.isArray(next.steamAccounts)) {
       next.steamAccounts = [];
@@ -681,39 +774,5 @@ export class SettingsService {
     next.bigPictureGrayscaleCovers = next.bigPictureGrayscaleCovers !== false;
     await this.writeSettings(next);
     return next;
-  }
-
-  async upsertSteamAccount(account: SteamAccountSettings): Promise<AppSettings> {
-    const current = await this.get();
-    const others = current.steamAccounts.filter((existing) => existing.steamId !== account.steamId);
-    return this.update({ steamAccounts: [...others, account] });
-  }
-
-  async patchSteamAccount(steamId: string, patch: Partial<SteamAccountSettings>): Promise<AppSettings> {
-    const current = await this.get();
-    const next = current.steamAccounts.map((account) =>
-      account.steamId === steamId ? { ...account, ...patch } : account
-    );
-    return this.update({ steamAccounts: next });
-  }
-
-  async removeSteamAccount(steamId: string): Promise<AppSettings> {
-    const current = await this.get();
-    return this.update({ steamAccounts: current.steamAccounts.filter((account) => account.steamId !== steamId) });
-  }
-
-  async setLaunchAccountPreference(gameId: string, steamId: string | undefined): Promise<AppSettings> {
-    const current = await this.get();
-    const next = { ...(current.launchAccountPreferences ?? {}) };
-    if (steamId) {
-      next[gameId] = steamId;
-    } else {
-      delete next[gameId];
-    }
-    return this.update({ launchAccountPreferences: next });
-  }
-
-  async setGameGroups(gameGroups: GameGroup[]): Promise<AppSettings> {
-    return this.update({ gameGroups });
   }
 }

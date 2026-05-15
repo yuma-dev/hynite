@@ -92,6 +92,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
 
   const [scanning, setScanning] = useState(false);
   const [issues, setIssues] = useState<LocalScanIssue[]>([]);
+  const [issuesLoaded, setIssuesLoaded] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [excludeOpen, setExcludeOpen] = useState(false);
   const [igdbOpen, setIgdbOpen] = useState(false);
@@ -106,17 +107,13 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    void window.hynite.local
-      .getIssues()
-      .then((value) => { if (!cancelled) setIssues(value as LocalScanIssue[]); })
-      .catch(() => {});
-    return () => { cancelled = true; };
+    void refreshIssues();
   }, []);
 
   useEffect(() => {
+    if (!issuesLoaded) return;
     onIssueCountChange?.(issues.length);
-  }, [issues.length, onIssueCountChange]);
+  }, [issues.length, issuesLoaded, onIssueCountChange]);
 
   // Close context menu on any click outside.
   useEffect(() => {
@@ -140,6 +137,16 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
     };
   }, [roots.length, localGames, issues]);
 
+  async function refreshIssues() {
+    try {
+      const nextIssues = (await window.hynite.local.getIssues()) as LocalScanIssue[];
+      setIssues(nextIssues);
+      setIssuesLoaded(true);
+    } catch {
+      setIssuesLoaded(true);
+    }
+  }
+
   async function runScan() {
     if (roots.length === 0) {
       pushToast({ level: "warning", message: "Add at least one folder before scanning." });
@@ -149,11 +156,13 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
     try {
       const result = await window.hynite.local.scan();
       setIssues(result.issues as LocalScanIssue[]);
+      setIssuesLoaded(true);
       pushToast({
         level: result.matched > 0 ? "success" : "info",
         message: `Scanned ${result.scanned} folder(s) — ${result.matched} matched, ${result.ambiguous} need review.`
       });
       onLibraryRefresh();
+      void refreshIssues();
     } catch (error) {
       pushToast({ level: "error", message: error instanceof Error ? error.message : "Scan failed." });
     } finally {
@@ -239,7 +248,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
     if (!path) return;
     try {
       await window.hynite.local.updateLocation(issue.gameId, path);
-      setIssues((await window.hynite.local.getIssues()) as LocalScanIssue[]);
+      await refreshIssues();
       pushToast({ level: "success", message: `Updated "${issue.gameTitle ?? issue.folderName}" to its new folder.` });
       onLibraryRefresh();
     } catch (error) {
@@ -251,7 +260,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
     if (!issue.gameId) return;
     try {
       await window.hynite.local.removeGame(issue.gameId);
-      setIssues((prev) => prev.filter((entry) => entry.candidateId !== issue.candidateId));
+      await refreshIssues();
       pushToast({ level: "info", message: `Removed "${issue.gameTitle ?? issue.folderName}" from your library.` });
       onLibraryRefresh();
     } catch (error) {
@@ -259,10 +268,10 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
     }
   }
 
-  async function dismissIssue(candidateId: string, folderPath: string) {
+  async function dismissIssue(folderPath: string) {
     try {
-      await window.hynite.local.ignoreFolder(folderPath);
-      setIssues((prev) => prev.filter((i) => i.candidateId !== candidateId));
+      setSettings(await window.hynite.local.ignoreFolder(folderPath));
+      await refreshIssues();
       pushToast({ level: "info", message: "Folder ignored." });
     } catch (error) {
       pushToast({ level: "error", message: error instanceof Error ? error.message : "Failed to ignore." });
@@ -368,7 +377,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
                 onSearchManually={() => setAddModal({ initialFolderPath: issue.folderPath })}
                 onMoved={() => void updateMissingGameLocation(issue)}
                 onDeleted={() => void deleteMissingGame(issue)}
-                onDismiss={() => void dismissIssue(issue.candidateId, issue.folderPath)}
+                onDismiss={() => void dismissIssue(issue.folderPath)}
               />
             ))}
           </div>
@@ -465,8 +474,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
               setAddModal(undefined);
               pushToast({ level: "success", message: `Added ${title}.` });
               onLibraryRefresh();
-              // Refresh issues — the just-added game may correspond to one of them.
-              void window.hynite.local.getIssues().then((value) => setIssues(value as LocalScanIssue[]));
+              void refreshIssues();
             }}
             onError={(message) => pushToast({ level: "error", message })}
           />

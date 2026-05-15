@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsService } from "./settingsService";
 import { readAudioArtwork } from "./audioMetadata";
 
@@ -10,6 +10,11 @@ let tempDir: string | undefined;
 function createService(): SettingsService {
   tempDir = mkdtempSync(join(tmpdir(), "hynite-settings-"));
   return new SettingsService(join(tempDir, "settings.json"));
+}
+
+function createServiceWithDeps(deps: ConstructorParameters<typeof SettingsService>[2]): SettingsService {
+  tempDir = mkdtempSync(join(tmpdir(), "hynite-settings-"));
+  return new SettingsService(join(tempDir, "settings.json"), undefined, deps);
 }
 
 function synchsafe(size: number): Buffer {
@@ -145,6 +150,45 @@ describe("SettingsService", () => {
       reduceMotion: true,
       autoHideAfterLaunch: true
     });
+  });
+
+  it("serializes concurrent settings updates without dropping unrelated fields", async () => {
+    const service = createService();
+    await service.update({
+      cacheTtlHours: 6,
+      reduceMotion: true,
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }]
+    });
+
+    await Promise.all([
+      service.update({ autoHideAfterLaunch: false }),
+      service.update({ cardsPerRow: 8 })
+    ]);
+
+    await expect(service.get()).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      reduceMotion: true,
+      autoHideAfterLaunch: false,
+      cardsPerRow: 8,
+      steamAccounts: [{ steamId: "owner-a", pairedAt: "2026-01-01T00:00:00.000Z" }]
+    });
+  });
+
+  it("retries rename failures while writing settings", async () => {
+    const rename = vi.fn(async () => {
+      if (rename.mock.calls.length < 3) {
+        const error = new Error("operation not permitted") as NodeJS.ErrnoException;
+        error.code = "EPERM";
+        throw error;
+      }
+    });
+    const service = createServiceWithDeps({ rename, sleep: async () => undefined });
+
+    await expect(service.update({ cacheTtlHours: 12, reduceMotion: true })).resolves.toMatchObject({
+      cacheTtlHours: 12,
+      reduceMotion: true
+    });
+    expect(rename).toHaveBeenCalledTimes(3);
   });
 
   it("sanitizes onboarding marker", async () => {

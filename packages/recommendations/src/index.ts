@@ -122,6 +122,7 @@ const fallbackPopular = [
 ];
 const HOME_LOCAL_ROW_LIMIT = 72;
 const DISCOVERY_ENRICHMENT_CONCURRENCY = 2;
+const DISCOVERY_ENRICHMENT_BUDGET_MS = 2_500;
 const HOME_HERO_NSFW_PATTERN =
   /\b(?:nsfw|hentai|porn(?:ographic|ography)?|erotic|sexual(?:\s+(?:content|themes?))?|nudity|nude|adult\s+only|sex)\b/i;
 
@@ -161,6 +162,17 @@ function emptyGame(appid: string, title: string): Game {
     publishers: [],
     contentDescriptors: [],
     metadataStatus: "none"
+  };
+}
+
+function gameFromCandidate(candidate: Candidate, discovery: GameDiscovery): Game {
+  const title = candidate.title?.trim() || `Steam App ${candidate.appid}`;
+  return {
+    ...emptyGame(candidate.appid, title),
+    headerUrl: candidate.headerUrl,
+    backgroundUrl: candidate.headerUrl,
+    discovery,
+    metadataStatus: "partial"
   };
 }
 
@@ -436,6 +448,40 @@ async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper:
 
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
   return results;
+}
+
+async function enrichWithinBudget(
+  candidates: Candidate[],
+  previousRanks: Map<string, number>,
+  fetchImpl: typeof fetch,
+  cachedGames: Map<string, Game>,
+  options: BuildHomeOptions
+): Promise<Game[]> {
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<Game[]>((resolve) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      options.logger?.({
+        level: "warning",
+        phase: "home:discovery",
+        message: "Home discovery enrichment exceeded budget; using feed data for banner/trending rows",
+        details: { budgetMs: DISCOVERY_ENRICHMENT_BUDGET_MS, candidates: candidates.length }
+      });
+      resolve([]);
+    }, DISCOVERY_ENRICHMENT_BUDGET_MS);
+  });
+  const enriched = mapWithConcurrency(
+    candidates,
+    DISCOVERY_ENRICHMENT_CONCURRENCY,
+    (candidate) => enrichCandidate(candidate, scoreCandidate(candidate, previousRanks), fetchImpl, cachedGames, options)
+  ).then((games) => timedOut ? [] : games.filter((game): game is Game => Boolean(game)));
+
+  return Promise.race([enriched, timeout]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
 }
 
 function normalizedReviewScore(candidate: Candidate): number {
@@ -876,13 +922,11 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
     .sort((a, b) => candidatePriority(b.candidate, b.discovery) - candidatePriority(a.candidate, a.discovery))
     .slice(0, 72);
   const enrichmentCandidates = mergeCandidates([...prioritized.map((item) => item.candidate), ...trendingCandidatePool(sources)]);
-  const enriched = (
-    await mapWithConcurrency(
-      enrichmentCandidates,
-      DISCOVERY_ENRICHMENT_CONCURRENCY,
-      (candidate) => enrichCandidate(candidate, scoreCandidate(candidate, previousRanks), fetchImpl, cachedGames, options)
-    )
-  )
+  const feedGames = enrichmentCandidates.map((candidate) => gameFromCandidate(candidate, scoreCandidate(candidate, previousRanks)));
+  const enriched = [
+    ...feedGames,
+    ...(await enrichWithinBudget(enrichmentCandidates, previousRanks, fetchImpl, cachedGames, options))
+  ]
     .filter((game): game is Game => Boolean(game))
     .filter((game) => !/^Steam App \d+$/i.test(game.title));
 

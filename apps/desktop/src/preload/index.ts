@@ -235,6 +235,8 @@ const api = {
   debug: {
     profileEnabled: process.env.HYNITE_STARTUP_PROFILE === "1" || process.env.HYNITE_STARTUP_PROFILE === "true",
     seed: (): Promise<Game> => ipcRenderer.invoke("debug:seed"),
+    resetEverything: (): Promise<{ ok: true; removed: string[]; failed: Array<{ entry: string; error: string }> }> =>
+      ipcRenderer.invoke("debug:reset-everything"),
     profile: (entry: { phase: string; message: string; details?: Record<string, unknown>; rendererElapsedMs?: number }): void =>
       ipcRenderer.send("debug:profile", entry),
     profileSpanStart: (entry: Record<string, unknown>): void => ipcRenderer.send("debug:profile-record", entry),
