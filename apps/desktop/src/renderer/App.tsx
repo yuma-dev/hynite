@@ -65,6 +65,9 @@ import { OnboardingExperience } from "./onboarding/OnboardingExperience";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
 import { bindingLabel, bindingPressed, controllerBindingOrder, CONTROLLER_ACTION_HELP, CONTROLLER_ACTION_LABELS, firstPressedBinding, normalizeControllerSettings, pressedButtonIndexes, readGamepadState } from "./controllerInput";
+import logo64Url from "../../../../assets/icons/logo-64.png?url";
+import logo128Url from "../../../../assets/icons/logo-128.png?url";
+import logo256Url from "../../../../assets/icons/logo-256.png?url";
 
 type SteamSwitchPrompt = {
   gameId: string;
@@ -225,6 +228,8 @@ const HERO_AUTOPLAY_MS = 9000;
 const HOME_REFRESH_DEBOUNCE_MS = 250;
 const HOME_STALE_RETRY_DELAY_MS = 2000;
 const HOME_STALE_RETRY_MAX = 15;
+const HOME_DETAIL_PREFETCH_LIMIT = 8;
+const HOME_DETAIL_PREFETCH_CONCURRENCY = 2;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
 const LIBRARY_GRID_INITIAL_SIZE = 48;
@@ -234,19 +239,14 @@ const MIN_CARDS_PER_ROW = 4;
 const MAX_CARDS_PER_ROW = 12;
 const DOWNLOAD_MATCH_BATCH_SIZE = 20;
 const DOWNLOAD_MATCH_SEARCH_LIMIT = 500;
-const APP_ASSET_BASE_URL = import.meta.env.BASE_URL;
 const sourceAvailabilityCache = new Map<string, SourceExactMatch[]>();
-
-function appAsset(name: string): string {
-  return `${APP_ASSET_BASE_URL}${name}`;
-}
 
 function BrandLogo({ className, sizes }: { className?: string; sizes: string }) {
   return (
     <img
       className={className}
-      src={appAsset("logo-128.png")}
-      srcSet={`${appAsset("logo-64.png")} 64w, ${appAsset("logo-128.png")} 128w, ${appAsset("logo-256.png")} 256w`}
+      src={logo128Url}
+      srcSet={`${logo64Url} 64w, ${logo128Url} 128w, ${logo256Url} 256w`}
       sizes={sizes}
       alt="Hynite"
       draggable={false}
@@ -309,7 +309,11 @@ function TitleBar({ onEnterBigPicture }: { onEnterBigPicture: () => void }) {
 }
 
 function StartupLoading() {
-  return <main className="startup-screen" />;
+  return (
+    <main className="startup-screen">
+      <BrandLogo className="startup-logo" sizes="80px" />
+    </main>
+  );
 }
 
 function ProfileScope({ id, children }: { id: string; children: ReactNode }) {
@@ -6449,6 +6453,8 @@ function LauncherShell() {
   const homeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const homeRefreshRetryRef = useRef(0);
   const homeApplyTokenRef = useRef(0);
+  const homeDetailCacheRef = useRef<Map<string, GameDetail>>(new Map());
+  const homeDetailPrefetchRef = useRef<Map<string, Promise<GameDetail>>>(new Map());
   const prefersReducedMotion = usePrefersReducedMotion();
   const reduceLaunchMotion = Boolean(settings?.reduceMotion || prefersReducedMotion);
   const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
@@ -7408,9 +7414,107 @@ function LauncherShell() {
     }).catch(console.error);
   }
 
+  function hydrateHomeDetail(game: Game): Promise<GameDetail> {
+    const cached = homeDetailCacheRef.current.get(game.id);
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+
+    const inFlight = homeDetailPrefetchRef.current.get(game.id);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const startedAt = performance.now();
+    const promise = (async () => {
+      const detail = libraryGameIds.has(game.id)
+        ? await window.hynite.games.get(game.id)
+        : await window.hynite.games.hydrateDiscovery(game);
+      homeDetailCacheRef.current.set(game.id, detail);
+      homeDebug("detail prefetch loaded", {
+        id: game.id,
+        title: game.title,
+        durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        screenshots: detail.screenshots.length,
+        hasTrailer: Boolean(detail.trailerUrl),
+        hasAboutText: Boolean(detail.aboutText)
+      });
+      return detail;
+    })().finally(() => {
+      homeDetailPrefetchRef.current.delete(game.id);
+    });
+
+    homeDetailPrefetchRef.current.set(game.id, promise);
+    return promise;
+  }
+
+  useEffect(() => {
+    if (!home || home.stale || home.popularNow.length === 0) {
+      return;
+    }
+
+    const queue = home.popularNow
+      .filter((game, index, rows) => rows.findIndex((candidate) => candidate.id === game.id) === index)
+      .slice(0, HOME_DETAIL_PREFETCH_LIMIT)
+      .filter((game) => !homeDetailCacheRef.current.has(game.id));
+    if (queue.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    let cursor = 0;
+    const worker = async () => {
+      while (!cancelled) {
+        const game = queue[cursor];
+        cursor += 1;
+        if (!game) {
+          return;
+        }
+        try {
+          await hydrateHomeDetail(game);
+        } catch (error) {
+          homeDebug("detail prefetch failed", {
+            id: game.id,
+            title: game.title,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(HOME_DETAIL_PREFETCH_CONCURRENCY, queue.length) }, () => worker());
+    void Promise.allSettled(workers);
+    return () => {
+      cancelled = true;
+    };
+  }, [home, libraryGameIds]);
+
   async function selectGame(game: Game) {
     const span = profileSpan("renderer-render", "renderer:detail-open", { id: game.id, title: game.title });
     soundEngine.play("gameSelect");
+    const cachedHomeDetail = homeDetailCacheRef.current.get(game.id);
+    if (cachedHomeDetail) {
+      const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "home-detail-cache" });
+      setSelected(cachedHomeDetail);
+      applySpan.end("ok");
+      span.end("ok", { id: game.id, title: game.title, source: "home-detail-cache" });
+      return;
+    }
+
+    const warmingHomeDetail = homeDetailPrefetchRef.current.get(game.id);
+    if (warmingHomeDetail) {
+      try {
+        const detail = await warmingHomeDetail;
+        const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "home-detail-prefetch" });
+        setSelected(detail);
+        applySpan.end("ok");
+        span.end("ok", { id: game.id, title: game.title, source: "home-detail-prefetch" });
+        return;
+      } catch {
+        // Fall through to the normal detail path if background warming failed.
+      }
+    }
+
     try {
       const ipcSpan = profileSpan("renderer-render", "renderer:detail-open:games-get", { id: game.id, title: game.title });
       const detail = await window.hynite.games.get(game.id);
@@ -7423,6 +7527,7 @@ function LauncherShell() {
         hasAboutText: Boolean(detail.aboutText)
       });
       const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "library" });
+      homeDetailCacheRef.current.set(game.id, detail);
       setSelected(detail);
       applySpan.end("ok");
       span.end("ok", { id: game.id, title: game.title, source: "library" });
@@ -7443,6 +7548,7 @@ function LauncherShell() {
           hasAboutText: Boolean(detail.aboutText)
         });
         const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "discovery" });
+        homeDetailCacheRef.current.set(game.id, detail);
         setSelected(detail);
         applySpan.end("ok");
       } catch {

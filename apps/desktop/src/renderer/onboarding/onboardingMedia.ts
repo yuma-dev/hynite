@@ -1,5 +1,5 @@
-import steamWebApiKeyMp4 from "../../../../../assets/onboarding/SteamWebAPI.mp4";
-import steamGridDbApiKeyImage from "../../../../../assets/onboarding/SteamGridDB.png";
+import steamWebApiKeyMp4 from "../../../../../assets/onboarding/SteamWebAPI.mp4?url";
+import steamGridDbApiKeyImage from "../../../../../assets/onboarding/SteamGridDB.png?url";
 
 export type OnboardingMediaAsset =
   | {

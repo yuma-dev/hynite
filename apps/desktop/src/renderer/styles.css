@@ -142,7 +142,17 @@ button {
 .startup-screen {
   width: 100vw;
   height: 100vh;
+  display: grid;
+  place-items: center;
   background: #09080d;
+}
+
+.startup-logo {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 22px rgba(205, 80, 255, 0.22));
+  user-select: none;
 }
 
 .launch-handoff {
