@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, protocol, screen, session, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, powerMonitor, protocol, screen, session, shell, Tray } from "electron";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -11,7 +11,7 @@ import { discoverInstalledSteamApps, hashFolderPath, readLoginUsers, SteamImport
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -27,6 +27,7 @@ import { SyncStatusService } from "./syncStatusService";
 import { AssetCacheService } from "./assetCacheService";
 import { BackgroundService } from "./backgroundService";
 import { LocalPlaytimeMonitor } from "./localPlaytimeMonitor";
+import { SpotlightService } from "./spotlightService";
 import {
   authenticateSteamSession,
   disconnectSteamFamilySession,
@@ -36,8 +37,12 @@ import {
 
 let mainWindow: Electron.BrowserWindow | undefined;
 let splashWindow: Electron.BrowserWindow | undefined;
+let spotlightWindow: Electron.BrowserWindow | undefined;
 let tray: Tray | undefined;
 let startupReadyTimeout: ReturnType<typeof setTimeout> | undefined;
+let revealMainWindowInProgress = false;
+let pendingMainWindowFocus = false;
+let pendingMainWindowMaximize = false;
 let repository: HyniteRepository;
 let settingsService: SettingsService;
 let homeService: HomeService;
@@ -51,6 +56,7 @@ let localImportService: LocalImportService;
 let launchTracker: LaunchTracker;
 let localPlaytimeMonitor: LocalPlaytimeMonitor;
 let backgroundService: BackgroundService;
+let spotlightService: SpotlightService;
 let steamWishlistService: SteamWishlistService;
 let activeLocalScan: { promise: Promise<unknown>; controller: AbortController } | undefined;
 let startupProfileService: StartupProfileService | undefined;
@@ -68,6 +74,10 @@ let controllerPollingStarted = false;
 let foregroundStartupBackgroundWorkScheduled = false;
 let settingsBackupTimer: NodeJS.Timeout | undefined;
 let resetEverythingInProgress = false;
+let spotlightState: SpotlightState = { enabled: true, hotkey: "Alt+Space", registered: false };
+let registeredSpotlightHotkey: string | undefined;
+let pendingSpotlightAction: SpotlightPendingAction | undefined;
+let spotlightLaunchHandoffActive = false;
 
 function resolveWindowIconPath(): string {
   const devIconPath = join(__dirname, "../../assets/icons/app.ico");
@@ -1820,6 +1830,10 @@ function startBackgroundControllerPolling(): void {
       const pressedSet = new Set(pressed);
       const comboActive = COMBO_BUTTONS.every((b) => pressedSet.has(b));
       if (comboActive && !focusComboPressedPrev) {
+        if (startupRevealPending()) {
+          focusComboPressedPrev = comboActive;
+          return;
+        }
         if (!win.isDestroyed()) {
           if (win.isMinimized()) win.restore();
           if (!win.isVisible()) win.show();
@@ -1861,9 +1875,7 @@ function createWindow(windowState: WindowState | undefined, options: { showWhenR
       backgroundThrottling: false
     }
   });
-  if (!options.onboarding && windowState?.isMaximized) {
-    mainWindow.maximize();
-  }
+  pendingMainWindowMaximize = !options.onboarding && windowState?.isMaximized === true;
   profile("window:create:end", "BrowserWindow created");
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -2012,21 +2024,198 @@ function createSplashWindow(): void {
   });
 }
 
-function dismissSplash(): void {
+function createSpotlightWindow(): void {
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const width = 860;
+  const height = 600;
+  const x = Math.round(display.workArea.x + (display.workArea.width - width) / 2);
+  const y = Math.round(display.workArea.y + Math.max(24, (display.workArea.height - height) * 0.28));
+
+  spotlightWindow = new BrowserWindow({
+    width,
+    height,
+    minWidth: 660,
+    minHeight: 400,
+    x,
+    y,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    fullscreenable: false,
+    autoHideMenuBar: true,
+    icon: windowIconPath,
+    webPreferences: {
+      preload: join(__dirname, "../preload/index.js"),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false
+    }
+  });
+
+  if (process.env.ELECTRON_RENDERER_URL) {
+    void spotlightWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}/spotlight.html`);
+  } else {
+    void spotlightWindow.loadFile(join(__dirname, "../renderer/spotlight.html"));
+  }
+
+  spotlightWindow.on("blur", () => {
+    if (spotlightLaunchHandoffActive) {
+      spotlightLaunchHandoffActive = false;
+      spotlightWindow?.webContents.send("spotlight:launch-handoff-blur");
+      spotlightWindow?.hide();
+      return;
+    }
+    spotlightWindow?.hide();
+  });
+  spotlightWindow.on("closed", () => {
+    spotlightWindow = undefined;
+  });
+}
+
+function showSpotlightWindow(): void {
+  if (!spotlightWindow || spotlightWindow.isDestroyed()) {
+    createSpotlightWindow();
+  }
+  const win = spotlightWindow;
+  if (!win || win.isDestroyed()) return;
+
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const bounds = win.getBounds();
+  win.setBounds({
+    ...bounds,
+    x: Math.round(display.workArea.x + (display.workArea.width - bounds.width) / 2),
+    y: Math.round(display.workArea.y + Math.max(24, (display.workArea.height - bounds.height) * 0.28))
+  });
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  win.webContents.send("spotlight:show");
+}
+
+function hideSpotlightWindow(): void {
+  if (spotlightWindow && !spotlightWindow.isDestroyed()) {
+    spotlightWindow.hide();
+  }
+}
+
+function toggleSpotlightWindow(): void {
+  if (spotlightWindow && !spotlightWindow.isDestroyed() && spotlightWindow.isVisible()) {
+    hideSpotlightWindow();
+    return;
+  }
+  showSpotlightWindow();
+}
+
+function applySpotlightSettings(settings: AppSettings): SpotlightState {
+  if (registeredSpotlightHotkey) {
+    globalShortcut.unregister(registeredSpotlightHotkey);
+    registeredSpotlightHotkey = undefined;
+  }
+  const configured = settings.spotlight ?? { enabled: true, hotkey: "Alt+Space" };
+  spotlightState = {
+    enabled: configured.enabled !== false,
+    hotkey: configured.hotkey,
+    registered: false
+  };
+  if (!spotlightState.enabled) {
+    return spotlightState;
+  }
+  if (onboardingPreview) {
+    spotlightState = { ...spotlightState, registered: false, registrationError: "Disabled in onboarding preview." };
+    return spotlightState;
+  }
+  try {
+    const registered = globalShortcut.register(spotlightState.hotkey, toggleSpotlightWindow);
+    spotlightState = {
+      ...spotlightState,
+      registered,
+      registrationError: registered ? undefined : "Hotkey is already in use by another app."
+    };
+    if (registered) {
+      registeredSpotlightHotkey = spotlightState.hotkey;
+    }
+  } catch (error) {
+    spotlightState = {
+      ...spotlightState,
+      registered: false,
+      registrationError: error instanceof Error ? error.message : String(error)
+    };
+  }
+  return spotlightState;
+}
+
+async function queueMainWindowAction(action: SpotlightPendingAction): Promise<void> {
+  pendingSpotlightAction = action;
+  await showMainWindow({ withSplash: false, focus: true });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("spotlight:pending-action", action);
+  }
+}
+
+function startupRevealPending(): boolean {
+  return Boolean(startupReadyTimeout || splashWindow || revealMainWindowInProgress);
+}
+
+function revealMainWindow(focus: boolean): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  if (!mainWindow.isVisible()) {
+    if (pendingMainWindowMaximize && !mainWindow.isMaximized()) {
+      mainWindow.maximize();
+    }
+    pendingMainWindowMaximize = false;
+    mainWindow.show();
+  }
+  if (focus) {
+    mainWindow.focus();
+  }
+}
+
+function dismissSplash(focus = pendingMainWindowFocus): void {
   if (startupReadyTimeout) {
     clearTimeout(startupReadyTimeout);
     startupReadyTimeout = undefined;
   }
-  if (!splashWindow || splashWindow.isDestroyed()) {
-    mainWindow?.show();
-    mainWindow?.focus();
+
+  pendingMainWindowFocus = pendingMainWindowFocus || focus;
+  if (revealMainWindowInProgress) {
     return;
   }
-  void splashWindow.webContents.executeJavaScript("document.body.classList.add('dismiss')").catch(() => undefined);
+  revealMainWindowInProgress = true;
+
+  const finishReveal = () => {
+    revealMainWindowInProgress = false;
+    const shouldFocus = pendingMainWindowFocus;
+    pendingMainWindowFocus = false;
+    revealMainWindow(shouldFocus);
+  };
+
+  const splash = splashWindow;
+  if (!splash || splash.isDestroyed()) {
+    finishReveal();
+    return;
+  }
+
+  void splash.webContents.executeJavaScript("document.body.classList.add('dismiss')").catch(() => undefined);
   setTimeout(() => {
-    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
-    mainWindow?.show();
-    mainWindow?.focus();
+    if (splash.isDestroyed()) {
+      finishReveal();
+      return;
+    }
+    splash.once("closed", finishReveal);
+    splash.close();
   }, 300);
 }
 
@@ -2159,6 +2348,7 @@ async function ensureTray(): Promise<void> {
 
 async function onSettingsChanged(settings: AppSettings): Promise<AppSettings> {
   applyLoginItemSettings(settings);
+  applySpotlightSettings(settings);
   rebuildTrayMenu(settings);
   void settingsService?.createPeriodicBackupIfDue().catch((error: unknown) => {
     console.warn("Failed to create periodic settings backup", error);
@@ -2184,9 +2374,19 @@ function startSettingsBackupTimer(): void {
 
 async function showMainWindow(options: { withSplash: boolean; focus: boolean }): Promise<void> {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    if (!mainWindow.isVisible()) mainWindow.show();
-    if (options.focus) mainWindow.focus();
+    pendingMainWindowFocus = pendingMainWindowFocus || options.focus;
+    if (startupRevealPending()) {
+      if (mainWindow.isVisible()) {
+        mainWindow.hide();
+      }
+      profile("window:show:deferred", "Main window show deferred until startup reveal completes", {
+        withSplash: options.withSplash,
+        hasSplash: Boolean(splashWindow),
+        timeoutPending: Boolean(startupReadyTimeout)
+      });
+    } else {
+      revealMainWindow(options.focus);
+    }
     if (!onboardingPreview) {
       backgroundService?.start("foreground");
     }
@@ -2197,9 +2397,10 @@ async function showMainWindow(options: { withSplash: boolean; focus: boolean }):
     settingsService.getWindowState(),
     getOnboardingState()
   ]);
+  pendingMainWindowFocus = options.focus;
   createWindow(windowState, {
-    showWhenReady: !options.withSplash,
-    focusWhenReady: options.focus && !options.withSplash,
+    showWhenReady: false,
+    focusWhenReady: false,
     onboarding: onboardingState.shouldShow
   });
   if (!onboardingPreview) {
@@ -2210,12 +2411,15 @@ async function showMainWindow(options: { withSplash: boolean; focus: boolean }):
 
   if (options.withSplash) {
     createSplashWindow();
-    startupReadyTimeout = setTimeout(() => {
-      profile("startup:ready-timeout", "Startup ready timeout - showing main window");
-      dismissSplash();
-    }, 30_000);
-    startupReadyTimeout.unref?.();
   }
+  startupReadyTimeout = setTimeout(() => {
+    profile("startup:ready-timeout", "Startup ready timeout - revealing main window", {
+      withSplash: options.withSplash,
+      hasSplash: Boolean(splashWindow)
+    });
+    dismissSplash(options.focus);
+  }, 30_000);
+  startupReadyTimeout.unref?.();
 }
 
 function scheduleForegroundStartupBackgroundWork(): void {
@@ -2301,7 +2505,10 @@ async function startSteamSync(providerId?: ProviderId, options: { refreshStaleMe
       await cancelActiveSteamSync("Steam sync replaced by a newer request");
     }
     const controller = new AbortController();
-    const promise = syncSteamLibrary(providerId, { ...options, signal: controller.signal }).finally(() => {
+    const promise = syncSteamLibrary(providerId, { ...options, signal: controller.signal }).then((result) => {
+      spotlightService?.refresh();
+      return result;
+    }).finally(() => {
       if (activeSteamSync?.promise === promise) {
         activeSteamSync = undefined;
       }
@@ -2959,6 +3166,7 @@ async function runLocalScan(options: { skipUnchanged?: boolean; refreshMetadata?
       if (activeLocalScan?.promise === promise) {
         activeLocalScan = undefined;
       }
+      spotlightService?.refresh();
       span.end("ok", { rootCount: roots.length });
     });
 
@@ -3109,19 +3317,24 @@ function registerIpc(): void {
     if (onboardingPreview) {
       return { removed: 0 };
     }
-    return { removed: repository.removeLocalGamesUnder(folderPath) };
+    const removed = repository.removeLocalGamesUnder(folderPath);
+    spotlightService.refresh();
+    return { removed };
   });
   handleIpc("local:remove-all", () => {
     if (onboardingPreview) {
       return { removed: 0 };
     }
-    return { removed: repository.removeAllLocalGames() };
+    const removed = repository.removeAllLocalGames();
+    spotlightService.refresh();
+    return { removed };
   });
   handleIpc("local:remove-and-ignore", async (_event, args: { gameId: string; folderPath?: string }) => {
     if (onboardingPreview) {
       return { ok: true };
     }
     repository.removeGame(args.gameId);
+    spotlightService.refresh();
     await localImportService.clearIssue(args.gameId);
     if (args.folderPath) {
       const current = await settingsService.get();
@@ -3143,6 +3356,7 @@ function registerIpc(): void {
       throw new Error("Only local games can be deleted from this menu.");
     }
     repository.removeGame(gameId);
+    spotlightService.refresh();
     await localImportService.clearIssue(gameId);
     return { ok: true };
   });
@@ -3172,6 +3386,7 @@ function registerIpc(): void {
       installDirectory: probe.folderPath,
       executablePath: probe.chosenExe
     });
+    spotlightService.refresh();
     const report = localImportService.lastReport;
     if (report) {
       report.issues = report.issues.filter((issue) => issue.candidateId !== args.gameId);
@@ -3239,13 +3454,16 @@ function registerIpc(): void {
       report.issues = report.issues.filter((issue) => issue.candidateId !== result.candidateId);
     }
     await localImportService.clearIssue(result.candidateId);
+    spotlightService.refresh();
     return result;
   });
   handleIpc("local:repair-library", () => {
     if (onboardingPreview) {
       return { deleted: 0 };
     }
-    return repository.repairPhantomLocalGames();
+    const deleted = repository.repairPhantomLocalGames();
+    spotlightService.refresh();
+    return deleted;
   });
   handleIpc("local:resolve-ambiguous", async (
     _event,
@@ -3298,6 +3516,7 @@ function registerIpc(): void {
     if (patch && Object.keys(patch).length > 0) {
       repository.applyMetadata(localId, patch);
     }
+    spotlightService.refresh();
     // Remove the resolved issue from the in-memory scan report so the UI updates.
     const report = localImportService.lastReport;
     if (report) {
@@ -3311,6 +3530,7 @@ function registerIpc(): void {
       return { ok: true };
     }
     repository.setExecutablePath(args.gameId, args.executablePath);
+    spotlightService.refresh();
     return { ok: true };
   });
   handleIpc("dialog:pick-folder", async (_event, args: { title?: string; defaultPath?: string } = {}) => {
@@ -3428,6 +3648,7 @@ function registerIpc(): void {
     await withSteamSyncStartLock(() => cancelActiveSteamSync("Steam sync cancelled before clearing the library"));
     clearRichMetadataQueue("Detail metadata cancelled before clearing the library");
     const cleared = repository.clearLibrary();
+    spotlightService.refresh();
     await homeService.clearCache();
     return { cleared };
   });
@@ -3493,6 +3714,7 @@ function registerIpc(): void {
       const cachedPatch = await cacheMetadataAssets(assetUpdateToPatch(update), true);
       repository.updateGameAssets(id, patchToAssetUpdate(cachedPatch, update));
     }
+    spotlightService.refresh();
     const updated = repository.getGame(id);
     if (!updated) {
       throw new Error(`Game ${id} was not found after asset update.`);
@@ -3617,6 +3839,37 @@ function registerIpc(): void {
       return settingsService.get();
     }
     return onSettingsChanged(await settingsService.update(patch));
+  });
+  handleIpc("spotlight:state", () => spotlightState);
+  handleIpc("spotlight:search", (_event, query: string, options) => {
+    const span = profileSpan("spotlight", "spotlight:search", { queryLength: query.trim().length });
+    const results = spotlightService.search(query, options);
+    span.end("ok", { results: results.length, offset: options?.offset ?? 0, limit: options?.limit });
+    return results;
+  });
+  handleIpc("spotlight:launch", async (_event, gameId: string): Promise<LaunchResult> => {
+    const result = await resolveLaunchOrSwitch(gameId);
+    if (result.kind === "launched") {
+      return result;
+    }
+    if (result.kind === "requires-switch") {
+      hideSpotlightWindow();
+      await queueMainWindowAction({ kind: "launch", gameId });
+    }
+    return result;
+  });
+  handleIpc("spotlight:open-details", async (_event, gameId: string) => {
+    hideSpotlightWindow();
+    await queueMainWindowAction({ kind: "details", gameId });
+  });
+  handleIpc("spotlight:hide", () => hideSpotlightWindow());
+  handleIpc("spotlight:set-launch-handoff-active", (_event, active: boolean) => {
+    spotlightLaunchHandoffActive = active === true;
+  });
+  handleIpc("spotlight:consume-pending-action", () => {
+    const action = pendingSpotlightAction;
+    pendingSpotlightAction = undefined;
+    return action;
   });
   handleIpc("steam:pair", async () => {
     if (onboardingPreview) {
@@ -3771,6 +4024,7 @@ function registerIpc(): void {
   handleIpc("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
   handleIpc("window:focusBigPicture", () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (startupRevealPending()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
@@ -3837,8 +4091,15 @@ app.whenReady().then(async () => {
   settingsService = new SettingsService(join(userData, "settings.json"), audioAssetsRoot);
   startSettingsBackupTimer();
   diagnosticLogService = new DiagnosticLogService(transientUserDataPath(userData, "metadata-diagnostics.ndjson"));
-  homeService = new HomeService(transientUserDataPath(userData, "home-cache.json"), diagnosticLogService);
+  homeService = new HomeService(transientUserDataPath(userData, "home-cache.json"), diagnosticLogService, (model) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    mainWindow.webContents.send("home:updated", model);
+  });
   sourceService = new SourceService(repository);
+  spotlightService = new SpotlightService(repository);
+  spotlightService.refresh();
   assetCacheService = new AssetCacheService(transientUserDataPath(userData, "asset-cache"), startupProfileService);
   assetCacheService.registerProtocol(protocol);
   soundFileService = new SoundFileService(() => settingsService.get());
@@ -3899,6 +4160,7 @@ app.whenReady().then(async () => {
   profile("ipc:registered", "IPC handlers registered");
   const settings = await settingsService.get();
   applyLoginItemSettings(settings);
+  applySpotlightSettings(settings);
   if (!onboardingPreview) {
     await ensureTray();
     backgroundService.start(isBackgroundLaunch() ? "tray" : "foreground");
@@ -3951,6 +4213,7 @@ app.on("before-quit", () => {
   }
   stopResourceSampler();
   stopSystemAudioMonitor();
+  globalShortcut.unregisterAll();
   backgroundService?.stop();
   if (!onboardingPreview) {
     syncStatusService?.flush();

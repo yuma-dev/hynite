@@ -1,0 +1,281 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f5f5f6;
+  background: transparent;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.spotlight-root {
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 70px;
+  background: transparent;
+}
+
+.spotlight-root.launching {
+  padding: 0;
+  pointer-events: none;
+}
+
+.spotlight-panel {
+  width: min(720px, 100%);
+  height: min(460px, 100%);
+  display: grid;
+  grid-template-rows: 58px minmax(0, 1fr) 32px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(16, 17, 20, 0.97);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.5);
+}
+
+.spotlight-launch-handoff {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: transparent;
+}
+
+.spotlight-launch-identity {
+  width: min(520px, 78vw);
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+}
+
+.spotlight-launch-logo {
+  max-width: 100%;
+  max-height: 170px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.75));
+  user-select: none;
+}
+
+.spotlight-launch-identity h1 {
+  max-width: 100%;
+  margin: 0;
+  color: #f5f5f6;
+  font-size: 38px;
+  line-height: 1.02;
+  letter-spacing: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+  text-shadow: 0 12px 28px rgba(0, 0, 0, 0.78);
+}
+
+.spotlight-launch-line {
+  width: min(320px, 62vw);
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.spotlight-launch-line span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.95), transparent);
+  transform: translateX(-115%);
+  animation: spotlightLaunchLine 1.35s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+@keyframes spotlightLaunchLine {
+  0% {
+    transform: translateX(-115%);
+  }
+
+  72% {
+    transform: translateX(115%);
+  }
+
+  to {
+    transform: translateX(115%);
+  }
+}
+
+.spotlight-search {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.spotlight-search input {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #f5f5f6;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.spotlight-search input::placeholder {
+  color: rgba(255, 255, 255, 0.36);
+}
+
+.spotlight-list {
+  min-height: 0;
+  overflow: hidden auto;
+  padding: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
+}
+
+.spotlight-list::-webkit-scrollbar {
+  width: 7px;
+}
+
+.spotlight-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.spotlight-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.spotlight-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.spotlight-list::-webkit-scrollbar-button,
+.spotlight-list::-webkit-scrollbar-corner {
+  display: none;
+  background: transparent;
+}
+
+.spotlight-row {
+  width: 100%;
+  min-width: 0;
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.spotlight-row.active {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.spotlight-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #202229;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.spotlight-icon.has-image {
+  background: transparent;
+}
+
+.spotlight-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.spotlight-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.spotlight-copy strong,
+.spotlight-copy em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spotlight-copy strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.spotlight-copy em {
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.spotlight-action {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.spotlight-empty {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 13px;
+}
+
+.spotlight-loading {
+  min-height: 34px;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12px;
+}
+
+.spotlight-footer {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 12px;
+}
+
+.spotlight-footer span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

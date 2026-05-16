@@ -624,6 +624,45 @@ export type OnboardingState = {
   completedAt?: string;
 };
 
+export type SpotlightSettings = {
+  enabled: boolean;
+  hotkey: string;
+};
+
+export type SpotlightGame = {
+  id: string;
+  title: string;
+  sortTitle: string;
+  installState: InstallState;
+  launchable: boolean;
+  iconUrl?: string;
+  logoUrl?: string;
+  activityAt?: string;
+  ownership: LibraryOwnership;
+  sourceLabels: ProviderId[];
+};
+
+export type SpotlightSearchResult = SpotlightGame & {
+  score: number;
+  matchRanges?: Array<{ start: number; end: number }>;
+};
+
+export type SpotlightSearchOptions = {
+  limit?: number;
+  offset?: number;
+};
+
+export type SpotlightState = {
+  enabled: boolean;
+  hotkey: string;
+  registered: boolean;
+  registrationError?: string;
+};
+
+export type SpotlightPendingAction =
+  | { kind: "details"; gameId: string }
+  | { kind: "launch"; gameId: string };
+
 export type WindowBounds = {
   x: number;
   y: number;
@@ -714,6 +753,8 @@ export type AppSettings = {
   windowState?: WindowState;
   /** Big Picture controller navigation and background focus shortcut bindings. */
   controller?: ControllerSettings;
+  /** Global local-only command palette for launching/opening library games. */
+  spotlight?: SpotlightSettings;
   /** Tab ID to open by default when entering Big Picture mode. */
   bigPictureDefaultTabId?: string;
   /** Grayscale non-focused game covers in Big Picture shelf mode. */

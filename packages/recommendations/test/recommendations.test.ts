@@ -39,7 +39,9 @@ describe("recommendations", () => {
   });
 
   it("builds named discovery candidates from Steam sources", async () => {
+    const requestedUrls: string[] = [];
     const fetchMock = async (url: string) => {
+      requestedUrls.push(url);
       if (url.includes("featuredcategories")) {
         return new Response(
           JSON.stringify({
@@ -90,6 +92,8 @@ describe("recommendations", () => {
 
     const home = await buildHomeModel([], fetchMock as typeof fetch);
 
+    expect(requestedUrls.find((url) => url.includes("featuredcategories"))).toContain("cc=DE");
+    expect(requestedUrls.find((url) => url.includes("/api/featured/"))).toContain("cc=DE");
     expect(home.popularNow[0]?.title).toBe("Named Game");
     expect(home.popularNow[0]?.title).not.toMatch(/^Steam App/);
     expect(home.popularNow[0]?.discovery?.sources).toContain("featured:top_sellers");
@@ -194,6 +198,40 @@ describe("recommendations", () => {
     expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games.map((item) => item.title)).toEqual([
       "Explicit Trend Game",
       "Safe Trend Game"
+    ]);
+  });
+
+  it("filters explicit Store feed titles from the Home hero before rich descriptors load", async () => {
+    const fetchMock = async (url: string) => {
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "cat_topsellers",
+              name: "Top Sellers",
+              items: [
+                { id: 201, type: 0, name: "Horny Hentai Porn Game", final_price: 1999, currency: "USD", header_image: "explicit.jpg" },
+                { id: 202, type: 0, name: "Space Factory", final_price: 1999, currency: "USD", header_image: "safe.jpg" }
+              ]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      return new Response("", { status: 500 });
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch);
+
+    expect(home.popularNow.map((item) => item.title)).toEqual(["Space Factory"]);
+    expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games.map((item) => item.title)).toEqual([
+      "Horny Hentai Porn Game",
+      "Space Factory"
     ]);
   });
 

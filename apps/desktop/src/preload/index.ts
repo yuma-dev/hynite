@@ -19,6 +19,10 @@ import type {
   SourceImportResult,
   SourceMatch,
   SourceSearchOptions,
+  SpotlightPendingAction,
+  SpotlightSearchResult,
+  SpotlightSearchOptions,
+  SpotlightState,
   SoundEffectId,
   SteamActiveUser,
   SteamLocalAccount,
@@ -72,6 +76,20 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, game: GameDetail) => callback(game);
       ipcRenderer.on("games:updated", listener);
       return () => ipcRenderer.removeListener("games:updated", listener);
+    },
+    onOpenDetailsRequested: (callback: (gameId: string) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, action: SpotlightPendingAction) => {
+        if (action.kind === "details") callback(action.gameId);
+      };
+      ipcRenderer.on("spotlight:pending-action", listener);
+      return () => ipcRenderer.removeListener("spotlight:pending-action", listener);
+    },
+    onLaunchRequested: (callback: (gameId: string) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, action: SpotlightPendingAction) => {
+        if (action.kind === "launch") callback(action.gameId);
+      };
+      ipcRenderer.on("spotlight:pending-action", listener);
+      return () => ipcRenderer.removeListener("spotlight:pending-action", listener);
     }
   },
   local: {
@@ -134,7 +152,12 @@ const api = {
     repairLibrary: (): Promise<{ deleted: number }> => ipcRenderer.invoke("local:repair-library")
   },
   home: {
-    get: (): Promise<HomeModel> => ipcRenderer.invoke("home:get")
+    get: (): Promise<HomeModel> => ipcRenderer.invoke("home:get"),
+    onUpdated: (callback: (home: HomeModel) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, home: HomeModel) => callback(home);
+      ipcRenderer.on("home:updated", listener);
+      return () => ipcRenderer.removeListener("home:updated", listener);
+    }
   },
   sync: {
     status: (): Promise<SyncStatus> => ipcRenderer.invoke("sync:status"),
@@ -168,6 +191,26 @@ const api = {
     listBackups: (): Promise<SettingsBackupInfo[]> => ipcRenderer.invoke("settings:list-backups"),
     restoreBackup: (id: string): Promise<AppSettings> => ipcRenderer.invoke("settings:restore-backup", id),
     health: (): Promise<SettingsHealthWarning | undefined> => ipcRenderer.invoke("settings:health")
+  },
+  spotlight: {
+    state: (): Promise<SpotlightState> => ipcRenderer.invoke("spotlight:state"),
+    search: (query: string, options?: SpotlightSearchOptions): Promise<SpotlightSearchResult[]> =>
+      ipcRenderer.invoke("spotlight:search", query, options),
+    launch: (gameId: string): Promise<LaunchOutcome> => ipcRenderer.invoke("spotlight:launch", gameId),
+    openDetails: (gameId: string): Promise<void> => ipcRenderer.invoke("spotlight:open-details", gameId),
+    hide: (): Promise<void> => ipcRenderer.invoke("spotlight:hide"),
+    setLaunchHandoffActive: (active: boolean): Promise<void> => ipcRenderer.invoke("spotlight:set-launch-handoff-active", active),
+    consumePendingAction: (): Promise<SpotlightPendingAction | undefined> => ipcRenderer.invoke("spotlight:consume-pending-action"),
+    onShow: (callback: () => void): (() => void) => {
+      const listener = () => callback();
+      ipcRenderer.on("spotlight:show", listener);
+      return () => ipcRenderer.removeListener("spotlight:show", listener);
+    },
+    onLaunchHandoffBlur: (callback: () => void): (() => void) => {
+      const listener = () => callback();
+      ipcRenderer.on("spotlight:launch-handoff-blur", listener);
+      return () => ipcRenderer.removeListener("spotlight:launch-handoff-blur", listener);
+    }
   },
   sound: {
     url: (effectId: SoundEffectId): string => `hynite-sound:///${encodeURIComponent(effectId)}`

@@ -307,6 +307,77 @@ describe("HyniteRepository", () => {
     repository.close();
   });
 
+  it("lists compact Spotlight games from library rows only", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "1",
+      title: "Steam Installed",
+      installState: "installed",
+      communityIconUrl: "icon-a.png"
+    });
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "2",
+      title: "Steam Not Installed",
+      installState: "not_installed"
+    });
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "with-exe",
+      title: "Local With Exe",
+      installState: "installed",
+      executablePath: "C:\\Games\\Local\\local.exe"
+    });
+    repository.upsertImportedGame({
+      provider: "local",
+      externalId: "no-exe",
+      title: "Local Without Exe",
+      installState: "installed"
+    });
+    repository.applyMetadata("steam:2", { libraryCapsuleUrl: "capsule-b.jpg" });
+    repository.replaceSteamWishlistForAccount("owner-a", [{
+      appid: "wishlist-only",
+      title: "Wishlist Only",
+      sortTitle: "wishlist only",
+      accounts: [{ steamId: "owner-a" }],
+      releasePrecision: "unknown",
+      refreshedAt: "2026-05-16T00:00:00.000Z",
+      metadataStatus: "none"
+    }]);
+
+    expect(repository.listSpotlightGames()).toEqual([
+      expect.objectContaining({
+        id: "local:with-exe",
+        title: "Local With Exe",
+        launchable: true,
+        sourceLabels: ["local"]
+      }),
+      expect.objectContaining({
+        id: "local:no-exe",
+        title: "Local Without Exe",
+        launchable: false,
+        sourceLabels: ["local"]
+      }),
+      expect.objectContaining({
+        id: "steam:1",
+        title: "Steam Installed",
+        launchable: true,
+        iconUrl: "icon-a.png",
+        sourceLabels: ["steam"]
+      }),
+      expect.objectContaining({
+        id: "steam:2",
+        title: "Steam Not Installed",
+        launchable: true,
+        iconUrl: "capsule-b.jpg",
+        sourceLabels: ["steam"]
+      })
+    ]);
+
+    repository.close();
+  });
+
   it("persists rich metadata fields", () => {
     const repository = createRepository();
     repository.upsertImportedGame({ provider: "steam", externalId: "1086940", title: "Baldur's Gate 3", installState: "unknown" });

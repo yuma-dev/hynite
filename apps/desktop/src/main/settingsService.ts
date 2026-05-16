@@ -2,7 +2,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import { controllerActionIds, defaultLibraryView, defaultWishlistView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SteamAccountSettings, type WindowBounds, type WindowState, type WishlistView } from "@hynite/core";
+import { controllerActionIds, defaultLibraryView, defaultWishlistView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SpotlightSettings, type SteamAccountSettings, type WindowBounds, type WindowState, type WishlistView } from "@hynite/core";
 import { readAudioMetadata } from "./audioMetadata";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
@@ -67,6 +67,11 @@ const DEFAULT_CONTROLLER_SETTINGS: ControllerSettings = {
   bindings: DEFAULT_CONTROLLER_BINDINGS
 };
 
+const DEFAULT_SPOTLIGHT_SETTINGS: SpotlightSettings = {
+  enabled: true,
+  hotkey: "Alt+Space"
+};
+
 const SETTINGS_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const SETTINGS_BACKUP_MAX_FILES = 30;
 
@@ -106,6 +111,7 @@ const defaultSettings: AppSettings = {
   sound: DEFAULT_SOUND_SETTINGS,
   music: DEFAULT_MUSIC_SETTINGS,
   controller: DEFAULT_CONTROLLER_SETTINGS,
+  spotlight: DEFAULT_SPOTLIGHT_SETTINGS,
   windowState: undefined,
   bigPictureGrayscaleCovers: true
 };
@@ -405,6 +411,16 @@ function sanitizeControllerSettings(value: unknown): ControllerSettings {
   };
 }
 
+function sanitizeSpotlightSettings(value: unknown): SpotlightSettings {
+  const candidate = value && typeof value === "object" ? value as Partial<SpotlightSettings> : {};
+  const hotkey = typeof candidate.hotkey === "string" ? candidate.hotkey.trim().replace(/\s+/g, "") : "";
+  const validHotkey = /^[A-Za-z0-9+]+$/.test(hotkey) && hotkey.includes("+");
+  return {
+    enabled: candidate.enabled !== false,
+    hotkey: validHotkey ? hotkey : DEFAULT_SPOTLIGHT_SETTINGS.hotkey
+  };
+}
+
 function sanitizeIsoString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -467,6 +483,7 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     music: sanitizeMusicSettings(raw.music, bundledAudio),
     onboarding: sanitizeOnboarding(raw.onboarding),
     controller: sanitizeControllerSettings(raw.controller),
+    spotlight: sanitizeSpotlightSettings(raw.spotlight),
     windowState: sanitizeWindowState(raw.windowState),
     bigPictureGrayscaleCovers: raw.bigPictureGrayscaleCovers !== false
   };
@@ -516,6 +533,8 @@ function hasMeaningfulUserState(settings: AppSettings): boolean {
     settings.backgroundUpdatesEnabled === false ||
     settings.backgroundPlaytimeTracking === false ||
     settings.backgroundWorkload !== "balanced" ||
+    settings.spotlight?.enabled === false ||
+    settings.spotlight?.hotkey !== DEFAULT_SPOTLIGHT_SETTINGS.hotkey ||
     settings.cardsPerRow !== defaultSettings.cardsPerRow ||
     settings.bigPictureGrayscaleCovers === false
   );
@@ -697,7 +716,8 @@ export class SettingsService {
         steamAccounts: [],
         sound: sanitizeSoundSettings(defaultSettings.sound, this.bundledAudio()),
         music: sanitizeMusicSettings(defaultSettings.music, this.bundledAudio()),
-        controller: sanitizeControllerSettings(defaultSettings.controller)
+        controller: sanitizeControllerSettings(defaultSettings.controller),
+        spotlight: sanitizeSpotlightSettings(defaultSettings.spotlight)
       };
     }
     return migrate(raw, this.bundledAudio());
@@ -770,6 +790,7 @@ export class SettingsService {
     next.music = sanitizeMusicSettings(next.music, this.bundledAudio());
     next.onboarding = sanitizeOnboarding(next.onboarding);
     next.controller = sanitizeControllerSettings(next.controller);
+    next.spotlight = sanitizeSpotlightSettings(next.spotlight);
     next.windowState = sanitizeWindowState(next.windowState);
     next.bigPictureGrayscaleCovers = next.bigPictureGrayscaleCovers !== false;
     await this.writeSettings(next);

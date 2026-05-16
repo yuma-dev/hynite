@@ -51,12 +51,12 @@ import {
   X
 } from "lucide-react";
 import { memo, Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
+import { defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
 import { isProfileEnabled, profileImageError, profileImageStart, profilePoint, profileSpan, profileStartup } from "./startupProfile";
 import { profileReactRender, startRuntimeFrameProfiler, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
@@ -227,9 +227,8 @@ const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
 const HERO_AUTOPLAY_MS = 9000;
 const HOME_REFRESH_DEBOUNCE_MS = 250;
 const HOME_STALE_RETRY_DELAY_MS = 2000;
-const HOME_STALE_RETRY_MAX = 15;
-const HOME_DETAIL_PREFETCH_LIMIT = 8;
-const HOME_DETAIL_PREFETCH_CONCURRENCY = 2;
+const HOME_STALE_RETRY_MAX = 1;
+const HOME_DETAIL_INTENT_PREFETCH_DELAY_MS = 150;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
 const LIBRARY_GRID_INITIAL_SIZE = 48;
@@ -309,11 +308,7 @@ function TitleBar({ onEnterBigPicture }: { onEnterBigPicture: () => void }) {
 }
 
 function StartupLoading() {
-  return (
-    <main className="startup-screen">
-      <BrandLogo className="startup-logo" sizes="80px" />
-    </main>
-  );
+  return <main className="startup-screen" />;
 }
 
 function ProfileScope({ id, children }: { id: string; children: ReactNode }) {
@@ -1081,7 +1076,8 @@ const GameCover = memo(function GameCover({
   badges,
   showLogo = true,
   profileDetails,
-  onCoverLoad
+  onCoverLoad,
+  onIntent
 }: {
   game: Game;
   onSelect: (game: Game) => void;
@@ -1092,6 +1088,7 @@ const GameCover = memo(function GameCover({
   showLogo?: boolean;
   profileDetails?: Record<string, unknown>;
   onCoverLoad?: (details: Record<string, unknown>) => void;
+  onIntent?: (game: Game) => void;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const cover = primaryCover(game);
@@ -1145,6 +1142,8 @@ const GameCover = memo(function GameCover({
       tabIndex={0}
       aria-label={game.title}
       onClick={() => onSelect(game)}
+      onPointerEnter={() => onIntent?.(game)}
+      onFocus={() => onIntent?.(game)}
       onContextMenu={(event) => onContextMenu?.(event, game)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -1273,7 +1272,8 @@ function GameRow({
   games,
   cardsPerRow,
   onSelect,
-  onGameContextMenu
+  onGameContextMenu,
+  onGameIntent
 }: {
   title: string;
   description?: string;
@@ -1281,6 +1281,7 @@ function GameRow({
   cardsPerRow: number;
   onSelect: (game: Game) => void;
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
+  onGameIntent?: (game: Game) => void;
 }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(stripRef);
@@ -1368,7 +1369,7 @@ function GameRow({
         ) : null}
         <div className="cover-strip" ref={stripRef} style={cardGridStyle(cardsPerRow)} onScroll={onRowScroll} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
           {visibleGames.map((game) => (
-            <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
+            <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} onIntent={onGameIntent} />
           ))}
         </div>
         {canScrollRight ? (
@@ -1508,13 +1509,15 @@ function Hero({
   settings,
   libraryGameIds,
   onSelect,
-  onOpenSettings
+  onOpenSettings,
+  onGameIntent
 }: {
   home?: HomeModel;
   settings?: AppSettings;
   libraryGameIds: Set<string>;
   onSelect: (game: Game) => void;
   onOpenSettings: () => void;
+  onGameIntent?: (game: Game) => void;
 }) {
   const heroGames = useMemo(() => {
     const rows = home?.popularNow ?? [];
@@ -1602,9 +1605,15 @@ function Hero({
   return (
     <section
       className={isHeroPaused ? "hero paused" : "hero"}
-      onPointerEnter={() => setHeroPaused(true)}
+      onPointerEnter={() => {
+        setHeroPaused(true);
+        if (heroGame) onGameIntent?.(heroGame);
+      }}
       onPointerLeave={() => setHeroPaused(false)}
-      onFocus={() => setHeroPaused(true)}
+      onFocus={() => {
+        setHeroPaused(true);
+        if (heroGame) onGameIntent?.(heroGame);
+      }}
       onBlur={() => setHeroPaused(false)}
       onKeyDown={(e) => {
         if (e.key === "ArrowLeft") { e.preventDefault(); stepHero(-1); }
@@ -1748,7 +1757,8 @@ function HomeScreen({
   libraryGameIds,
   onSelect,
   onOpenSettings,
-  onGameContextMenu
+  onGameContextMenu,
+  onGameIntent
 }: {
   home?: HomeModel;
   settings?: AppSettings;
@@ -1756,13 +1766,14 @@ function HomeScreen({
   onSelect: (game: Game) => void;
   onOpenSettings: () => void;
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
+  onGameIntent?: (game: Game) => void;
 }) {
   const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
   return (
     <main className="page">
-      <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onOpenSettings={onOpenSettings} />
-      <GameRow title="Recently played" games={home?.continuePlaying ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
-      <GameRow title="Most played" games={home?.mostPlayed ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
+      <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onOpenSettings={onOpenSettings} onGameIntent={onGameIntent} />
+      <GameRow title="Recently played" games={home?.continuePlaying ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} onGameIntent={onGameIntent} />
+      <GameRow title="Most played" games={home?.mostPlayed ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} onGameIntent={onGameIntent} />
     </main>
   );
 }
@@ -3861,6 +3872,8 @@ function SettingsScreen({
   const musicSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const [controllerCapture, setControllerCapture] = useState<ControllerActionId | undefined>();
   const controllerCaptureRef = useRef<ControllerActionId | undefined>();
+  const [spotlightState, setSpotlightState] = useState<SpotlightState | undefined>();
+  const [spotlightCapture, setSpotlightCapture] = useState(false);
 
   useEffect(() => {
     void window.hynite.steam.listLocalAccounts().then(setLocalAccounts).catch(() => undefined);
@@ -3878,6 +3891,10 @@ function SettingsScreen({
   useEffect(() => {
     controllerCaptureRef.current = controllerCapture;
   }, [controllerCapture]);
+
+  useEffect(() => {
+    void window.hynite.spotlight.state().then(setSpotlightState).catch(() => undefined);
+  }, [settings?.spotlight?.enabled, settings?.spotlight?.hotkey]);
 
   useEffect(() => {
     if (!controllerCapture) return;
@@ -4016,6 +4033,25 @@ function SettingsScreen({
   async function updateBackgroundSetting(patch: Partial<Pick<AppSettings, "startWithWindows" | "closeToTray" | "backgroundUpdatesEnabled" | "backgroundWorkload" | "backgroundPlaytimeTracking">>) {
     const next = await window.hynite.settings.update(patch);
     setSettings(next);
+  }
+
+  function acceleratorFromKeyboardEvent(event: ReactKeyboardEvent<HTMLButtonElement>): string | undefined {
+    const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
+    if (["Control", "Shift", "Alt", "Meta"].includes(key)) return undefined;
+    const parts: string[] = [];
+    if (event.ctrlKey) parts.push("Ctrl");
+    if (event.altKey) parts.push("Alt");
+    if (event.shiftKey) parts.push("Shift");
+    if (event.metaKey) parts.push("Super");
+    parts.push(key);
+    return parts.length > 1 ? parts.join("+") : undefined;
+  }
+
+  async function updateSpotlightSetting(patch: Partial<NonNullable<AppSettings["spotlight"]>>) {
+    const current = settings?.spotlight ?? { enabled: true, hotkey: "Alt+Space" };
+    const next = await window.hynite.settings.update({ spotlight: { ...current, ...patch } });
+    setSettings(next);
+    setSpotlightState(await window.hynite.spotlight.state());
   }
 
   async function setCardsPerRow(value: number) {
@@ -4931,6 +4967,51 @@ function SettingsScreen({
                   </select>
                   <strong>{settings?.backgroundWorkload ?? "balanced"}</strong>
                 </label>
+              </section>
+              <section className="settings-section">
+                <h2>Spotlight</h2>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings?.spotlight?.enabled !== false}
+                    onChange={(event) => void updateSpotlightSetting({ enabled: event.currentTarget.checked })}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Spotlight hotkey</strong>
+                    <em>Opens a local game search while Hynite is foregrounded, minimized, or in the tray.</em>
+                  </span>
+                </label>
+                <div className="settings-hotkey-row">
+                  <span>Shortcut</span>
+                  <button
+                    type="button"
+                    className={spotlightCapture ? "hotkey-capture active" : "hotkey-capture"}
+                    onClick={() => setSpotlightCapture(true)}
+                    onBlur={() => setSpotlightCapture(false)}
+                    onKeyDown={(event) => {
+                      if (!spotlightCapture) return;
+                      event.preventDefault();
+                      if (event.key === "Escape") {
+                        setSpotlightCapture(false);
+                        return;
+                      }
+                      const accelerator = acceleratorFromKeyboardEvent(event);
+                      if (!accelerator) return;
+                      setSpotlightCapture(false);
+                      void updateSpotlightSetting({ hotkey: accelerator });
+                    }}
+                  >
+                    {spotlightCapture ? "Press shortcut" : settings?.spotlight?.hotkey ?? "Alt+Space"}
+                  </button>
+                  <strong className={spotlightState?.registered ? "hotkey-status ready" : settings?.spotlight?.enabled === false ? "hotkey-status" : "hotkey-status warn"}>
+                    {settings?.spotlight?.enabled === false
+                      ? "Disabled"
+                      : spotlightState?.registered
+                        ? "Registered"
+                        : spotlightState?.registrationError ?? "Not registered"}
+                  </strong>
+                </div>
               </section>
               <section className="settings-section">
                 <h2>Launch behavior</h2>
@@ -6436,7 +6517,6 @@ function LauncherShell() {
   const navigationSoundReadyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
-  const [homeFirstLoaded, setHomeFirstLoaded] = useState(false);
   const homeFirstLoadedRef = useRef(false);
   const [startupDone, setStartupDone] = useState(false);
   const [musicStatus, setMusicStatus] = useState<MusicStatus>(() => musicEngine.getStatus());
@@ -6455,6 +6535,8 @@ function LauncherShell() {
   const homeApplyTokenRef = useRef(0);
   const homeDetailCacheRef = useRef<Map<string, GameDetail>>(new Map());
   const homeDetailPrefetchRef = useRef<Map<string, Promise<GameDetail>>>(new Map());
+  const homeIntentPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const homeIntentPrefetchRunningRef = useRef(false);
   const prefersReducedMotion = usePrefersReducedMotion();
   const reduceLaunchMotion = Boolean(settings?.reduceMotion || prefersReducedMotion);
   const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
@@ -7150,7 +7232,6 @@ function LauncherShell() {
     }).finally(() => {
       if (!homeFirstLoadedRef.current) {
         homeFirstLoadedRef.current = true;
-        setHomeFirstLoaded(true);
       }
     });
   }
@@ -7231,13 +7312,33 @@ function LauncherShell() {
       scheduleHomeRefresh({ retryIfStale: true, delayMs: HOME_STALE_RETRY_DELAY_MS });
       updateSpan.end("ok");
     });
+    const unsubscribeHomeUpdated = window.hynite.home.onUpdated((nextHome) => {
+      const token = ++homeApplyTokenRef.current;
+      homeDebug("renderer update event received", {
+        token,
+        stale: nextHome.stale,
+        popularNow: nextHome.popularNow.length,
+        trendingRows: nextHome.trendingRows.length,
+        trendingGames: nextHome.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
+      });
+      homeRefreshRetryRef.current = 0;
+      setHome(nextHome);
+      if (!homeFirstLoadedRef.current) {
+        homeFirstLoadedRef.current = true;
+      }
+    });
     return () => {
       if (homeRefreshTimerRef.current) {
         clearTimeout(homeRefreshTimerRef.current);
         homeRefreshTimerRef.current = undefined;
       }
+      if (homeIntentPrefetchTimerRef.current) {
+        clearTimeout(homeIntentPrefetchTimerRef.current);
+        homeIntentPrefetchTimerRef.current = undefined;
+      }
       unsubscribeSync();
       unsubscribeGameUpdated();
+      unsubscribeHomeUpdated();
     };
   }, []);
 
@@ -7448,46 +7549,32 @@ function LauncherShell() {
     return promise;
   }
 
-  useEffect(() => {
-    if (!home || home.stale || home.popularNow.length === 0) {
+  function scheduleHomeDetailPrefetch(game: Game): void {
+    if (homeDetailCacheRef.current.has(game.id) || homeDetailPrefetchRef.current.has(game.id)) {
       return;
     }
-
-    const queue = home.popularNow
-      .filter((game, index, rows) => rows.findIndex((candidate) => candidate.id === game.id) === index)
-      .slice(0, HOME_DETAIL_PREFETCH_LIMIT)
-      .filter((game) => !homeDetailCacheRef.current.has(game.id));
-    if (queue.length === 0) {
-      return;
+    if (homeIntentPrefetchTimerRef.current) {
+      clearTimeout(homeIntentPrefetchTimerRef.current);
     }
-
-    let cancelled = false;
-    let cursor = 0;
-    const worker = async () => {
-      while (!cancelled) {
-        const game = queue[cursor];
-        cursor += 1;
-        if (!game) {
-          return;
-        }
-        try {
-          await hydrateHomeDetail(game);
-        } catch (error) {
-          homeDebug("detail prefetch failed", {
+    homeIntentPrefetchTimerRef.current = setTimeout(() => {
+      homeIntentPrefetchTimerRef.current = undefined;
+      if (homeIntentPrefetchRunningRef.current || homeDetailCacheRef.current.has(game.id) || homeDetailPrefetchRef.current.has(game.id)) {
+        return;
+      }
+      homeIntentPrefetchRunningRef.current = true;
+      void hydrateHomeDetail(game)
+        .catch((error) => {
+          homeDebug("detail intent prefetch failed", {
             id: game.id,
             title: game.title,
             error: error instanceof Error ? error.message : String(error)
           });
-        }
-      }
-    };
-
-    const workers = Array.from({ length: Math.min(HOME_DETAIL_PREFETCH_CONCURRENCY, queue.length) }, () => worker());
-    void Promise.allSettled(workers);
-    return () => {
-      cancelled = true;
-    };
-  }, [home, libraryGameIds]);
+        })
+        .finally(() => {
+          homeIntentPrefetchRunningRef.current = false;
+        });
+    }, HOME_DETAIL_INTENT_PREFETCH_DELAY_MS);
+  }
 
   async function selectGame(game: Game) {
     const span = profileSpan("renderer-render", "renderer:detail-open", { id: game.id, title: game.title });
@@ -7501,18 +7588,30 @@ function LauncherShell() {
       return;
     }
 
-    const warmingHomeDetail = homeDetailPrefetchRef.current.get(game.id);
-    if (warmingHomeDetail) {
-      try {
-        const detail = await warmingHomeDetail;
-        const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "home-detail-prefetch" });
-        setSelected(detail);
-        applySpan.end("ok");
-        span.end("ok", { id: game.id, title: game.title, source: "home-detail-prefetch" });
-        return;
-      } catch {
-        // Fall through to the normal detail path if background warming failed.
-      }
+    if (!libraryGameIds.has(game.id)) {
+      const partialDetail = { ...game, sourceMatches: [] };
+      const applyPartialSpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "discovery-partial" });
+      setSelected(partialDetail);
+      applyPartialSpan.end("ok", { partial: true });
+      span.end("ok", { id: game.id, title: game.title, source: "discovery-partial", hydrationDeferred: true });
+      void hydrateHomeDetail(game)
+        .then((detail) => {
+          const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "discovery" });
+          setSelected((current) => (current?.id === game.id ? detail : current));
+          applySpan.end("ok");
+        })
+        .catch(() => {
+          void window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT })
+            .then((sourceMatches) => {
+              const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "source-search" });
+              setSelected((current) => (current?.id === game.id ? { ...game, sourceMatches } : current));
+              applySpan.end("ok");
+            })
+            .catch((error) => {
+              console.error(error);
+            });
+        });
+      return;
     }
 
     try {
@@ -7533,40 +7632,40 @@ function LauncherShell() {
       span.end("ok", { id: game.id, title: game.title, source: "library" });
     } catch {
       try {
-        const partialDetail = { ...game, sourceMatches: [] };
-        const applyPartialSpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "discovery-partial" });
-        setSelected(partialDetail);
-        applyPartialSpan.end("ok", { partial: true });
-        span.end("ok", { id: game.id, title: game.title, source: "discovery-partial", hydrationDeferred: true });
-        const hydrateSpan = profileSpan("renderer-render", "renderer:detail-open:hydrate-discovery", { id: game.id, title: game.title });
-        const detail = await window.hynite.games.hydrateDiscovery(game);
-        hydrateSpan.end("ok", {
-          id: game.id,
-          title: game.title,
-          screenshots: detail.screenshots.length,
-          hasTrailer: Boolean(detail.trailerUrl),
-          hasAboutText: Boolean(detail.aboutText)
-        });
-        const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "discovery" });
-        homeDetailCacheRef.current.set(game.id, detail);
-        setSelected(detail);
+        const sourceSpan = profileSpan("renderer-render", "renderer:detail-open:source-search", { id: game.id, title: game.title });
+        const sourceMatches = await window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT });
+        sourceSpan.end("ok", { id: game.id, title: game.title, sourceMatches: sourceMatches.length });
+        const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "source-search" });
+        setSelected({ ...game, sourceMatches });
         applySpan.end("ok");
-      } catch {
-        try {
-          const sourceSpan = profileSpan("renderer-render", "renderer:detail-open:source-search", { id: game.id, title: game.title });
-          const sourceMatches = await window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT });
-          sourceSpan.end("ok", { id: game.id, title: game.title, sourceMatches: sourceMatches.length });
-          const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "source-search" });
-          setSelected({ ...game, sourceMatches });
-          applySpan.end("ok");
-          span.end("ok", { id: game.id, title: game.title, source: "source-search" });
-        } catch (error) {
-          span.end("error", { id: game.id, title: game.title, error: error instanceof Error ? error.message : String(error) });
-          throw error;
-        }
+        span.end("ok", { id: game.id, title: game.title, source: "source-search" });
+      } catch (error) {
+        span.end("error", { id: game.id, title: game.title, error: error instanceof Error ? error.message : String(error) });
+        throw error;
       }
     }
   }
+
+  useEffect(() => {
+    const handleAction = (action: { kind: "details" | "launch"; gameId: string } | undefined) => {
+      if (!action) return;
+      if (action.kind === "launch") {
+        void launchGame(action.gameId).catch(console.error);
+        return;
+      }
+      void window.hynite.games.get(action.gameId)
+        .then((game) => selectGame(game))
+        .catch(console.error);
+    };
+
+    void window.hynite.spotlight.consumePendingAction().then(handleAction).catch(console.error);
+    const unsubscribeDetails = window.hynite.games.onOpenDetailsRequested((gameId) => handleAction({ kind: "details", gameId }));
+    const unsubscribeLaunch = window.hynite.games.onLaunchRequested((gameId) => handleAction({ kind: "launch", gameId }));
+    return () => {
+      unsubscribeDetails();
+      unsubscribeLaunch();
+    };
+  }, []);
 
   function selectWishlistItem(item: SteamWishlistItem) {
     const libraryGame = allGamesRef.current.find((game) => game.id === `steam:${item.appid}`) ?? gamesRef.current.find((game) => game.id === `steam:${item.appid}`);
@@ -7604,7 +7703,7 @@ function LauncherShell() {
 
   const routeContent = useMemo(() => {
     if (route === "home") {
-      return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} />;
+      return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} onGameIntent={scheduleHomeDetailPrefetch} />;
     }
     if (route === "trending") {
       return <TrendingScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onGameContextMenu={openGameContextMenu} />;

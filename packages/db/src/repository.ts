@@ -19,6 +19,7 @@ import {
   type ProviderId,
   type SourceExactMatch,
   type SourceMatch,
+  type SpotlightGame,
   type SteamWishlistAccountRef,
   type SteamWishlistItem,
   type WishlistCalendarQuery,
@@ -160,6 +161,10 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 
 function serializeJson<T>(value: T | undefined): string | null {
   return value === undefined ? null : JSON.stringify(value);
+}
+
+function isoTimestampFromMs(value: number): string | undefined {
+  return value > 0 && Number.isFinite(value) ? new Date(value).toISOString() : undefined;
 }
 
 function playerModesFromSteamRaw(rawJson: string): PlayerMode[] {
@@ -535,6 +540,62 @@ export class HyniteRepository {
   listGames(): Game[] {
     const rows = this.db.prepare("SELECT * FROM games ORDER BY sort_title ASC").all() as GameRow[];
     return this.mapGameRows(rows);
+  }
+
+  listSpotlightGames(): SpotlightGame[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, title, sort_title, install_state, executable_path, community_icon_url, library_capsule_url, logo_url,
+                last_played_at, added_at, imported_at
+         FROM games
+         ORDER BY sort_title ASC`
+      )
+      .all() as Array<{
+      id: string;
+      title: string;
+      sort_title: string;
+      install_state: Game["installState"];
+      executable_path: string | null;
+      community_icon_url: string | null;
+      library_capsule_url: string | null;
+      logo_url: string | null;
+      last_played_at: string | null;
+      added_at: string | null;
+      imported_at: string | null;
+    }>;
+    if (rows.length === 0) return [];
+
+    const placeholders = rows.map(() => "?").join(", ");
+    const sourceRows = this.db
+      .prepare(`SELECT game_id, provider FROM game_sources WHERE game_id IN (${placeholders})`)
+      .all(...rows.map((row) => row.id)) as Array<{ game_id: string; provider: ProviderId }>;
+    const providersByGame = new Map<string, Set<ProviderId>>();
+    for (const source of sourceRows) {
+      const providers = providersByGame.get(source.game_id) ?? new Set<ProviderId>();
+      providers.add(source.provider);
+      providersByGame.set(source.game_id, providers);
+    }
+
+    return rows.map((row) => {
+      const providers = [...(providersByGame.get(row.id) ?? new Set<ProviderId>())].sort();
+      const hasSteamSource = providers.includes("steam");
+      const hasLocalSource = providers.includes("local");
+      return {
+        id: row.id,
+        title: row.title,
+        sortTitle: row.sort_title,
+        installState: row.install_state,
+        launchable: hasSteamSource || (hasLocalSource && Boolean(row.executable_path?.trim())),
+        iconUrl: row.community_icon_url ?? row.library_capsule_url ?? undefined,
+        logoUrl: row.logo_url ?? undefined,
+        activityAt: isoTimestampFromMs(Math.max(
+          Date.parse(row.last_played_at ?? "") || 0,
+          Date.parse(row.added_at ?? "") || 0,
+          Date.parse(row.imported_at ?? "") || 0
+        )),
+        sourceLabels: providers
+      };
+    });
   }
 
   queryGames(query: LibraryQuery = {}): Game[] {

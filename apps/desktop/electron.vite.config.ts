@@ -49,7 +49,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           main: fileURLToPath(new URL("index.html", import.meta.url)),
-          splash: fileURLToPath(new URL("splash.html", import.meta.url))
+          splash: fileURLToPath(new URL("splash.html", import.meta.url)),
+          spotlight: fileURLToPath(new URL("spotlight.html", import.meta.url))
         }
       }
     }

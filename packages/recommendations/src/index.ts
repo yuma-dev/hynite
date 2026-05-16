@@ -124,7 +124,7 @@ const HOME_LOCAL_ROW_LIMIT = 72;
 const DISCOVERY_ENRICHMENT_CONCURRENCY = 2;
 const DISCOVERY_ENRICHMENT_BUDGET_MS = 2_500;
 const HOME_HERO_NSFW_PATTERN =
-  /\b(?:nsfw|hentai|porn(?:ographic|ography)?|erotic|sexual(?:\s+(?:content|themes?))?|nudity|nude|adult\s+only|sex)\b/i;
+  /\b(?:18\+|adult(?:\s+only)?|nsfw|xxx|hentai|ecchi|eroge|porn(?:ographic|ography)?|erotic|sexual(?:\s+(?:content|themes?))?|nudity|nude|naked|sex|sexy|lust|fetish|bdsm|strip(?:per|ping)?|brothel|prostitut(?:e|ion)|incest|futanari|futa|milf|boobs?|breasts?)\b/i;
 
 function isLegacyGuessedLibraryCapsuleUrl(value: string | undefined): boolean {
   return Boolean(value && /^https:\/\/(?:cdn\.akamai\.steamstatic\.com\/steam|steamcdn-a\.akamaihd\.net\/steam)\/apps\/\d+\/library_600x900(?:_2x)?\.jpg(?:\?.*)?$/i.test(value));
@@ -231,7 +231,7 @@ function storeUrl(appid: string, item?: FeaturedItem): string {
 }
 
 async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await steamFetch(fetchImpl)("https://store.steampowered.com/api/featuredcategories/?cc=US&l=english");
+  const response = await steamFetch(fetchImpl)("https://store.steampowered.com/api/featuredcategories/?cc=DE&l=english");
   if (!response.ok) {
     throw new Error(`Steam featured categories returned ${response.status}`);
   }
@@ -274,7 +274,7 @@ async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candida
 }
 
 async function fetchStoreFeatured(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await steamFetch(fetchImpl)("https://store.steampowered.com/api/featured/?cc=US&l=english");
+  const response = await steamFetch(fetchImpl)("https://store.steampowered.com/api/featured/?cc=DE&l=english");
   if (!response.ok) {
     throw new Error(`Steam featured returned ${response.status}`);
   }

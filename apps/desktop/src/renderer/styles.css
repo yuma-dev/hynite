@@ -7565,3 +7565,47 @@ dd {
   height: 1px;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.04));
 }
+
+.settings-hotkey-row {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 92px minmax(120px, 220px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hotkey-capture {
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  padding: 0 12px;
+  text-align: left;
+}
+
+.hotkey-capture.active,
+.hotkey-capture:focus-visible {
+  outline: 0;
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.hotkey-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+.hotkey-status.ready {
+  color: #9af0c4;
+}
+
+.hotkey-status.warn {
+  color: #f2c76d;
+}

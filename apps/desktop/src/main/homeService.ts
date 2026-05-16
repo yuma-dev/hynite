@@ -11,7 +11,8 @@ export class HomeService {
 
   constructor(
     private readonly cachePath: string,
-    private readonly diagnosticLog?: DiagnosticLogService
+    private readonly diagnosticLog?: DiagnosticLogService,
+    private readonly onRebuilt?: (model: HomeModel) => void
   ) {}
 
   async get(
@@ -32,48 +33,19 @@ export class HomeService {
     });
     const hasPreviousDiscovery = previous ? this.hasDiscovery(previous) : false;
     if (previous && this.hasUnsafeDiscoveryCache(previous)) {
-      try {
-        this.logDecision("home:get", "Unsafe Home cache found; rebuilding before returning", {
-          games: games.length
-        });
-        return await this.buildAndWrite(games, previous, options);
-      } catch (error) {
-        this.diagnosticLog?.log({
-          level: "error",
-          phase: "home:discovery",
-          message: "Home discovery blocking rebuild failed",
-          details: { error: error instanceof Error ? error.message : String(error) }
-        });
-      }
+      this.logDecision("home:get", "Unsafe Home cache found; scheduling rebuild and returning local model", {
+        games: games.length
+      });
+      this.startBackgroundRebuild(games, previous, options);
+      return this.cachedOrLocalModel(games, undefined, true);
     }
 
     if (!hasPreviousDiscovery) {
-      if (this.rebuild) {
-        this.logDecision("home:get", "Waiting for active Home discovery rebuild because no discovery cache exists", {
-          games: games.length
-        });
-        await this.rebuild.catch(() => undefined);
-        const rebuilt = await this.readCache();
-        if (rebuilt && this.hasDiscovery(rebuilt)) {
-          return this.cachedOrLocalModel(games, rebuilt, false);
-        }
-      }
-
-      try {
-        this.logDecision("home:get", "No Home discovery cache exists; rebuilding before returning", {
-          games: games.length
-        });
-        return await this.buildAndWrite(games, previous, options);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.diagnosticLog?.log({
-          level: "error",
-          phase: "home:discovery",
-          message: "Home discovery first build failed; returning loading model",
-          details: { error: message }
-        });
-        return this.cachedOrLocalModel(games, undefined, true);
-      }
+      this.logDecision("home:get", "No usable Home discovery cache exists; scheduling rebuild and returning local model", {
+        games: games.length
+      });
+      this.startBackgroundRebuild(games, previous, options);
+      return this.cachedOrLocalModel(games, previous, true);
     }
 
     this.startBackgroundRebuild(games, previous, options);
@@ -122,6 +94,7 @@ export class HomeService {
         trendingRows: model.trendingRows.length,
         trendingGames: model.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
       });
+      this.onRebuilt?.(model);
     } catch (error) {
       this.diagnosticLog?.log({
         level: "error",

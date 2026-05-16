@@ -27,7 +27,10 @@ describe("fetchSteamMetadata", () => {
   });
 
   it("extracts rich Steam appdetails metadata", async () => {
-    const fetchMock = async () =>
+    const requestedUrls: string[] = [];
+    const fetchMock = async (url: string) => {
+      requestedUrls.push(url);
+      return (
       new Response(
         JSON.stringify({
           "730": {
@@ -55,7 +58,9 @@ describe("fetchSteamMetadata", () => {
           }
         }),
         { status: 200 }
+      )
       );
+    };
 
     await expect(fetchSteamMetadata("730", fetchMock as typeof fetch)).resolves.toMatchObject({
       title: "Counter-Strike 2",
@@ -74,6 +79,7 @@ describe("fetchSteamMetadata", () => {
       tags: ["Multiplayer"],
       releaseDate: "2012-08-21"
     });
+    expect(requestedUrls[0]).toContain("cc=de");
   });
 
   it("extracts hashed library assets from Steam appinfo", async () => {

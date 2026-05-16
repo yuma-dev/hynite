@@ -280,7 +280,7 @@ export async function fetchSteamMetadata(
 ): Promise<GameMetadataPatch> {
   const requestFetch = steamFetch(fetchImpl);
   try {
-    const response = await requestFetch(`https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appid)}&cc=us&l=english`);
+    const response = await requestFetch(`https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appid)}&cc=de&l=english`);
     if (!response.ok) {
       logger?.({
         level: "warning",

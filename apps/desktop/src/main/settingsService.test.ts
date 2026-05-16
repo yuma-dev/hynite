@@ -130,6 +130,35 @@ describe("SettingsService", () => {
     });
   });
 
+  it("persists and sanitizes Spotlight settings", async () => {
+    const service = createService();
+
+    await expect(service.get()).resolves.toMatchObject({
+      spotlight: {
+        enabled: true,
+        hotkey: "Alt+Space"
+      }
+    });
+
+    await expect(service.update({
+      cacheTtlHours: 6,
+      spotlight: { enabled: false, hotkey: "Ctrl+Alt+Space" }
+    })).resolves.toMatchObject({
+      cacheTtlHours: 6,
+      spotlight: { enabled: false, hotkey: "Ctrl+Alt+Space" }
+    });
+
+    writeFileSync(join(tempDir!, "settings.json"), JSON.stringify({
+      cacheTtlHours: 9,
+      spotlight: { enabled: true, hotkey: "   " }
+    }));
+
+    await expect(service.get()).resolves.toMatchObject({
+      cacheTtlHours: 9,
+      spotlight: { enabled: true, hotkey: "Alt+Space" }
+    });
+  });
+
   it("persists launch auto-hide without dropping other settings", async () => {
     const service = createService();
     await service.update({
