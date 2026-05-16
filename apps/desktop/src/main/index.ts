@@ -42,6 +42,7 @@ let spotlightWindow: Electron.BrowserWindow | undefined;
 let tray: Tray | undefined;
 let startupReadyTimeout: ReturnType<typeof setTimeout> | undefined;
 let revealMainWindowInProgress = false;
+let startupReadyHandled = false;
 let pendingMainWindowFocus = false;
 let pendingMainWindowMaximize = false;
 let repository: HyniteRepository;
@@ -2296,7 +2297,7 @@ function rebuildTrayMenu(settings: AppSettings): void {
   tray.setContextMenu(Menu.buildFromTemplate([
     {
       label: "Open Hynite",
-      click: () => void showMainWindow({ withSplash: false, focus: true })
+      click: () => void showMainWindow({ withSplash: true, focus: true })
     },
     {
       label: "Sync Steam Now",
@@ -2340,8 +2341,8 @@ async function ensureTray(): Promise<void> {
     const icon = nativeImage.createFromPath(windowIconPath);
     tray = new Tray(icon);
     tray.setToolTip("Hynite");
-    tray.on("click", () => void showMainWindow({ withSplash: false, focus: true }));
-    tray.on("double-click", () => void showMainWindow({ withSplash: false, focus: true }));
+    tray.on("click", () => void showMainWindow({ withSplash: true, focus: true }));
+    tray.on("double-click", () => void showMainWindow({ withSplash: true, focus: true }));
     rebuildTrayMenu(await settingsService.get());
   } catch (error) {
     console.warn("Failed to create tray", error);
@@ -2399,6 +2400,7 @@ async function showMainWindow(options: { withSplash: boolean; focus: boolean }):
     settingsService.getWindowState(),
     getOnboardingState()
   ]);
+  startupReadyHandled = false;
   pendingMainWindowFocus = options.focus;
   createWindow(windowState, {
     showWhenReady: false,
@@ -3177,7 +3179,6 @@ async function runLocalScan(options: { skipUnchanged?: boolean; refreshMetadata?
 }
 
 function registerIpc(): void {
-  let startupReadyHandled = false;
   ipcMain.on("startup:ready", (_event, input?: { mode?: "app" | "onboarding" }) => {
     profile("startup:ready", "Renderer signaled startup ready");
     if (!startupReadyHandled) {
@@ -4185,7 +4186,7 @@ app.whenReady().then(async () => {
 app.on("second-instance", (_event, argv) => {
   profile("app:second-instance", "Second instance requested", { background: isBackgroundLaunch(argv) });
   if (!isBackgroundLaunch(argv)) {
-    void showMainWindow({ withSplash: false, focus: true });
+    void showMainWindow({ withSplash: true, focus: true });
   }
 });
 
@@ -4205,7 +4206,7 @@ app.on("window-all-closed", () => {
 app.on("activate", () => {
   profile("app:activate", "Electron app activated");
   if (BrowserWindow.getAllWindows().length === 0) {
-    void showMainWindow({ withSplash: false, focus: true });
+    void showMainWindow({ withSplash: true, focus: true });
   }
 });
 
