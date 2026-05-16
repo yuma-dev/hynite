@@ -13,7 +13,8 @@ function sourceText(result: SpotlightSearchResult): string {
     : result.installState === "not_installed"
       ? "Not installed"
       : "Unknown";
-  return `${state} / ${source}`;
+  const ownership = result.ownership === "family" ? " / Family shared" : "";
+  return `${state}${ownership} / ${source}`;
 }
 
 export function SpotlightApp() {

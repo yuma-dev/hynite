@@ -34,6 +34,9 @@ import type {
   WishlistCalendarQuery,
   WishlistListQuery
 } from "@hynite/core";
+import type { UpdaterStatus } from "../main/updaterService";
+
+export type { UpdaterStatus } from "../main/updaterService";
 
 export type LaunchOutcome =
   | ({ kind: "launched" } & LaunchSession)
@@ -165,6 +168,17 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, status: SyncStatus) => callback(status);
       ipcRenderer.on("sync:statusChanged", listener);
       return () => ipcRenderer.removeListener("sync:statusChanged", listener);
+    }
+  },
+  updater: {
+    status: (): Promise<UpdaterStatus> => ipcRenderer.invoke("updater:status"),
+    check: (): Promise<void> => ipcRenderer.invoke("updater:check"),
+    download: (): Promise<void> => ipcRenderer.invoke("updater:download"),
+    install: (): Promise<void> => ipcRenderer.invoke("updater:install"),
+    onStatusChanged: (callback: (status: UpdaterStatus) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: UpdaterStatus) => callback(status);
+      ipcRenderer.on("updater:status", listener);
+      return () => ipcRenderer.removeListener("updater:status", listener);
     }
   },
   sources: {

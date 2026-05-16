@@ -418,6 +418,65 @@ button {
   flex: 1;
 }
 
+.rail > .rail-update {
+  position: relative;
+  margin-top: 10px;
+  color: var(--accent, #7eb8f7);
+}
+
+.rail > .rail-update:hover,
+.rail > .rail-update:focus-visible {
+  background: color-mix(in srgb, var(--accent, #7eb8f7) 14%, transparent);
+  color: var(--accent, #7eb8f7);
+}
+
+.rail > .rail-update--downloaded {
+  background: color-mix(in srgb, var(--accent, #7eb8f7) 12%, transparent);
+}
+
+.rail > .rail-update--error {
+  color: #ffb1a6;
+}
+
+.rail > .rail-update--error:hover,
+.rail > .rail-update--error:focus-visible {
+  background: rgba(255, 120, 110, 0.12);
+  color: #ffb1a6;
+}
+
+.rail > .rail-update:disabled {
+  cursor: default;
+}
+
+.rail-update-spin {
+  animation: rail-update-spin 0.9s linear infinite;
+}
+
+@keyframes rail-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.rail-update-bar {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.rail-update-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent, #7eb8f7);
+  transition: width 200ms ease;
+}
+
 .rail-lists.has-groups {
   display: flex;
 }

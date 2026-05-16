@@ -567,19 +567,21 @@ export class HyniteRepository {
 
     const placeholders = rows.map(() => "?").join(", ");
     const sourceRows = this.db
-      .prepare(`SELECT game_id, provider FROM game_sources WHERE game_id IN (${placeholders})`)
-      .all(...rows.map((row) => row.id)) as Array<{ game_id: string; provider: ProviderId }>;
-    const providersByGame = new Map<string, Set<ProviderId>>();
+      .prepare(`SELECT game_id, provider, share_type FROM game_sources WHERE game_id IN (${placeholders})`)
+      .all(...rows.map((row) => row.id)) as Array<{ game_id: string; provider: ProviderId; share_type: string | null }>;
+    const sourcesByGame = new Map<string, Array<{ provider: ProviderId; shareType: string | null }>>();
     for (const source of sourceRows) {
-      const providers = providersByGame.get(source.game_id) ?? new Set<ProviderId>();
-      providers.add(source.provider);
-      providersByGame.set(source.game_id, providers);
+      const sources = sourcesByGame.get(source.game_id) ?? [];
+      sources.push({ provider: source.provider, shareType: source.share_type });
+      sourcesByGame.set(source.game_id, sources);
     }
 
     return rows.map((row) => {
-      const providers = [...(providersByGame.get(row.id) ?? new Set<ProviderId>())].sort();
+      const sources = sourcesByGame.get(row.id) ?? [];
+      const providers = [...new Set(sources.map((source) => source.provider))].sort();
       const hasSteamSource = providers.includes("steam");
       const hasLocalSource = providers.includes("local");
+      const ownership = sources.length > 0 && sources.every((source) => source.shareType === "family") ? "family" : "owned";
       return {
         id: row.id,
         title: row.title,
@@ -588,6 +590,7 @@ export class HyniteRepository {
         launchable: hasSteamSource || (hasLocalSource && Boolean(row.executable_path?.trim())),
         iconUrl: row.community_icon_url ?? row.library_capsule_url ?? undefined,
         logoUrl: row.logo_url ?? undefined,
+        ownership,
         activityAt: isoTimestampFromMs(Math.max(
           Date.parse(row.last_played_at ?? "") || 0,
           Date.parse(row.added_at ?? "") || 0,

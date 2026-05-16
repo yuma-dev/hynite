@@ -335,6 +335,31 @@ describe("HyniteRepository", () => {
       title: "Local Without Exe",
       installState: "installed"
     });
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "3",
+      title: "Family Shared",
+      installState: "unknown",
+      shareType: "family",
+      familyOwnerSteamIds: ["owner-b"],
+      ownerSteamid: "owner-a"
+    });
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "4",
+      title: "Owned Plus Family",
+      installState: "unknown",
+      ownerSteamid: "owner-a"
+    });
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "4",
+      title: "Owned Plus Family",
+      installState: "unknown",
+      shareType: "family",
+      familyOwnerSteamIds: ["owner-c"],
+      ownerSteamid: "owner-b"
+    });
     repository.applyMetadata("steam:2", { libraryCapsuleUrl: "capsule-b.jpg" });
     repository.replaceSteamWishlistForAccount("owner-a", [{
       appid: "wishlist-only",
@@ -348,6 +373,12 @@ describe("HyniteRepository", () => {
 
     expect(repository.listSpotlightGames()).toEqual([
       expect.objectContaining({
+        id: "steam:3",
+        title: "Family Shared",
+        ownership: "family",
+        sourceLabels: ["steam"]
+      }),
+      expect.objectContaining({
         id: "local:with-exe",
         title: "Local With Exe",
         launchable: true,
@@ -358,6 +389,12 @@ describe("HyniteRepository", () => {
         title: "Local Without Exe",
         launchable: false,
         sourceLabels: ["local"]
+      }),
+      expect.objectContaining({
+        id: "steam:4",
+        title: "Owned Plus Family",
+        ownership: "owned",
+        sourceLabels: ["steam"]
       }),
       expect.objectContaining({
         id: "steam:1",
@@ -371,6 +408,7 @@ describe("HyniteRepository", () => {
         title: "Steam Not Installed",
         launchable: true,
         iconUrl: "capsule-b.jpg",
+        ownership: "owned",
         sourceLabels: ["steam"]
       })
     ]);

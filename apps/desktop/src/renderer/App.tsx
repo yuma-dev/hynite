@@ -65,6 +65,7 @@ import { OnboardingExperience } from "./onboarding/OnboardingExperience";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
 import { bindingLabel, bindingPressed, controllerBindingOrder, CONTROLLER_ACTION_HELP, CONTROLLER_ACTION_LABELS, firstPressedBinding, normalizeControllerSettings, pressedButtonIndexes, readGamepadState } from "./controllerInput";
+import type { UpdaterStatus } from "../preload";
 import logo64Url from "../../../../assets/icons/logo-64.png?url";
 import logo128Url from "../../../../assets/icons/logo-128.png?url";
 import logo256Url from "../../../../assets/icons/logo-256.png?url";
@@ -6461,6 +6462,60 @@ function GameContextMenu({
   );
 }
 
+function UpdaterPill({ status }: { status: UpdaterStatus | undefined }) {
+  if (!status || !status.supported) {
+    return null;
+  }
+  const { phase } = status;
+  if (phase !== "available" && phase !== "downloading" && phase !== "downloaded" && phase !== "error") {
+    return null;
+  }
+  const busy = phase === "downloading";
+  const handleClick = () => {
+    if (phase === "available") {
+      void window.hynite.updater.download();
+    } else if (phase === "downloaded") {
+      void window.hynite.updater.install();
+    } else if (phase === "error") {
+      void window.hynite.updater.check();
+    }
+  };
+  const label =
+    phase === "available"
+      ? "Update available"
+      : phase === "downloading"
+        ? `Downloading ${status.percent ?? 0}%`
+        : phase === "downloaded"
+          ? "Restart to update"
+          : "Update failed — retry";
+  const title =
+    phase === "available"
+      ? `Version ${status.availableVersion ?? ""} available — click to download`
+      : phase === "downloaded"
+        ? `Version ${status.availableVersion ?? ""} ready — click to restart and update`
+        : phase === "error"
+          ? status.error ?? "Update failed"
+          : `Downloading update${status.availableVersion ? ` ${status.availableVersion}` : ""}`;
+  const Icon = phase === "downloaded" ? RotateCcw : phase === "available" ? Download : RefreshCw;
+  return (
+    <button
+      type="button"
+      className={`rail-update rail-update--${phase}`}
+      onClick={handleClick}
+      disabled={busy}
+      title={title}
+    >
+      <Icon size={16} className={busy ? "rail-update-spin" : undefined} />
+      <span className="rail-label">{label}</span>
+      {phase === "downloading" ? (
+        <span className="rail-update-bar" aria-hidden>
+          <span className="rail-update-bar-fill" style={{ width: `${status.percent ?? 0}%` }} />
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 function LauncherShell() {
   const [route, setRoute] = useState<Route>("home");
   const routeRef = useRef<Route>("home");
@@ -6480,6 +6535,7 @@ function LauncherShell() {
   const [settingsHealthWarning, setSettingsHealthWarning] = useState<SettingsHealthWarning | undefined>();
   const [launchHandoff, setLaunchHandoff] = useState<LaunchHandoffState | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
+  const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | undefined>();
   const [query, setQueryState] = useState("");
   const queryRef = useRef("");
   const setQuery = useCallback((next: string) => {
@@ -7283,6 +7339,8 @@ function LauncherShell() {
           setInitialLoadComplete(true);
         });
     }
+    void window.hynite.updater.status().then(setUpdaterStatus).catch(() => undefined);
+    const unsubscribeUpdater = window.hynite.updater.onStatusChanged(setUpdaterStatus);
     const unsubscribeSync = window.hynite.sync.onStatusChanged((status) => {
       const syncSpan = profileSpan("renderer-render", "renderer:sync-status-update", {
         active: status.active,
@@ -7339,6 +7397,7 @@ function LauncherShell() {
       unsubscribeSync();
       unsubscribeGameUpdated();
       unsubscribeHomeUpdated();
+      unsubscribeUpdater();
     };
   }, []);
 
@@ -7878,6 +7937,7 @@ function LauncherShell() {
               </div>
             </div>
           </div>
+          <UpdaterPill status={updaterStatus} />
         </aside>
         <section className="content" ref={contentRef}>
           <AnimatePresence mode="wait">

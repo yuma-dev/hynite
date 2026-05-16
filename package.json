@@ -1,6 +1,6 @@
 {
   "name": "hynite",
-  "version": "0.1.0",
+  "version": "0.24.0",
   "private": true,
   "main": "out/main/index.js",
   "workspaces": [
@@ -14,6 +14,7 @@
     "profile:latest": "node scripts/read-latest-profile-report.mjs",
     "build": "npm run typecheck && electron-vite build --config apps/desktop/electron.vite.config.ts",
     "installer": "npm run build && npm run native:publish && electron-builder --win nsis",
+    "release": "npm run build && npm run native:publish && electron-builder --win nsis --publish always",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -50,19 +51,26 @@
         "nsis"
       ],
       "icon": "assets/icons/app.ico",
-      "executableName": "Hynite"
+      "executableName": "Hynite",
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "guid": "app.hynite.launcher",
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
       "shortcutName": "Hynite"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "yuma-dev",
+      "repo": "hynite",
+      "releaseType": "release"
     }
   },
   "dependencies": {
     "@types/three": "^0.184.1",
     "@vitejs/plugin-react": "^5.0.4",
+    "electron-updater": "^6.6.2",
     "electron-vite": "^4.0.1",
     "framer-motion": "^12.15.0",
     "hls.js": "^1.6.16",

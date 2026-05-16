@@ -78,4 +78,25 @@ describe("SpotlightService", () => {
     expect(service.search("alpha")[0]?.title).toBe("Alpha");
     repository.close();
   });
+
+  it("preserves family ownership in search results", () => {
+    const repository = createRepository();
+    repository.upsertImportedGame({
+      provider: "steam",
+      externalId: "1",
+      title: "Shared Alpha",
+      installState: "unknown",
+      shareType: "family",
+      familyOwnerSteamIds: ["owner-b"],
+      ownerSteamid: "owner-a"
+    });
+    const service = new SpotlightService(repository);
+    const result = service.search("shared")[0];
+    repository.close();
+
+    expect(result).toMatchObject({
+      title: "Shared Alpha",
+      ownership: "family"
+    });
+  });
 });

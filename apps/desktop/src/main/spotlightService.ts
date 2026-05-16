@@ -92,6 +92,8 @@ export class SpotlightService {
           installState: game.installState,
           launchable: game.launchable,
           iconUrl: game.iconUrl,
+          logoUrl: game.logoUrl,
+          ownership: game.ownership,
           sourceLabels: game.sourceLabels,
           score,
           matchRanges: titleMatchRange(game.title, query)

@@ -24,6 +24,7 @@ import { searchSteamStore } from "./steamSearchService";
 import { SteamWishlistService } from "./steamWishlistService";
 import { StartupProfileService } from "./startupProfileService";
 import { SyncStatusService } from "./syncStatusService";
+import { UpdaterService } from "./updaterService";
 import { AssetCacheService } from "./assetCacheService";
 import { BackgroundService } from "./backgroundService";
 import { LocalPlaytimeMonitor } from "./localPlaytimeMonitor";
@@ -49,6 +50,7 @@ let homeService: HomeService;
 let sourceService: SourceService;
 let nativeBridge: NativeBridge;
 let syncStatusService: SyncStatusService;
+let updaterService: UpdaterService;
 let assetCacheService: AssetCacheService;
 let soundFileService: SoundFileService;
 let diagnosticLogService: DiagnosticLogService;
@@ -3771,6 +3773,10 @@ function registerIpc(): void {
   handleIpc("onboarding:state", () => getOnboardingState());
   handleIpc("onboarding:complete", (_event, input?: { skipped?: boolean }) => completeOnboarding(input));
   handleIpc("sync:status", () => syncStatusService.get());
+  handleIpc("updater:status", () => updaterService.get());
+  handleIpc("updater:check", () => updaterService.check());
+  handleIpc("updater:download", () => updaterService.download());
+  handleIpc("updater:install", () => updaterService.install());
   handleIpc("sources:import", (_event, input: SourceImportInput) => {
     if (onboardingPreview) {
       return {
@@ -4107,6 +4113,9 @@ app.whenReady().then(async () => {
   soundFileService.registerMusicProtocol(protocol);
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, transientUserDataPath(userData, "sync-status.json"));
+  updaterService = new UpdaterService(() => mainWindow, {
+    log: (level, message, details) => diagnosticLogService.log({ level, phase: "updater", message, details })
+  });
   steamWishlistService = new SteamWishlistService({
     repository,
     settingsService,
@@ -4158,6 +4167,9 @@ app.whenReady().then(async () => {
   startResourceSampler();
   registerIpc();
   profile("ipc:registered", "IPC handlers registered");
+  if (!onboardingPreview) {
+    updaterService.start();
+  }
   const settings = await settingsService.get();
   applyLoginItemSettings(settings);
   applySpotlightSettings(settings);
@@ -4218,6 +4230,7 @@ app.on("before-quit", () => {
   if (!onboardingPreview) {
     syncStatusService?.flush();
   }
+  updaterService?.dispose();
   void startupProfileService?.finish();
   repository?.close();
   nativeBridge?.dispose();
