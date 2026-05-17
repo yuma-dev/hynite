@@ -35,6 +35,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Loader2,
   RefreshCw,
   RotateCcw,
   Save,
@@ -6528,56 +6529,63 @@ function GameContextMenu({
   );
 }
 
-function UpdaterPill({ status }: { status: UpdaterStatus | undefined }) {
-  if (!status || !status.supported) {
-    return null;
-  }
+function UpdaterStarSvg() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 784.11 815.53" aria-hidden>
+      <path d="M392.05 0c-20.9,210.08 -184.06,378.41 -392.05,407.78 207.96,29.37 371.12,197.68 392.05,407.74 20.93,-210.06 184.09,-378.37 392.05,-407.74 -207.98,-29.38 -371.16,-197.69 -392.06,-407.78z" />
+    </svg>
+  );
+}
+
+function UpdaterPill({ status, onDownload, onInstall }: {
+  status: UpdaterStatus | undefined;
+  onDownload?: () => void;
+  onInstall?: () => void;
+}) {
+  if (!status || !status.supported) return null;
   const { phase } = status;
-  if (phase !== "available" && phase !== "downloading" && phase !== "downloaded" && phase !== "error") {
-    return null;
-  }
+  if (phase !== "available" && phase !== "downloading" && phase !== "downloaded" && phase !== "error") return null;
+
   const busy = phase === "downloading";
+  const percent = status.percent ?? 0;
+
   const handleClick = () => {
-    if (phase === "available") {
-      void window.hynite.updater.download();
-    } else if (phase === "downloaded") {
-      void window.hynite.updater.install();
-    } else if (phase === "error") {
-      void window.hynite.updater.check();
-    }
+    if (phase === "available") { if (onDownload) onDownload(); else void window.hynite.updater.download(); }
+    else if (phase === "downloaded") { if (onInstall) onInstall(); else void window.hynite.updater.install(); }
+    else if (phase === "error") void window.hynite.updater.check();
   };
+
   const label =
-    phase === "available"
-      ? "Update available"
-      : phase === "downloading"
-        ? `Downloading ${status.percent ?? 0}%`
-        : phase === "downloaded"
-          ? "Restart to update"
-          : "Update failed — retry";
-  const title =
-    phase === "available"
-      ? `Version ${status.availableVersion ?? ""} available — click to download`
-      : phase === "downloaded"
-        ? `Version ${status.availableVersion ?? ""} ready — click to restart and update`
-        : phase === "error"
-          ? status.error ?? "Update failed"
-          : `Downloading update${status.availableVersion ? ` ${status.availableVersion}` : ""}`;
-  const Icon = phase === "downloaded" ? RotateCcw : phase === "available" ? Download : RefreshCw;
+    phase === "available" ? "Update available"
+    : phase === "downloading" ? "Downloading"
+    : phase === "downloaded" ? "Restart to update"
+    : "Update failed";
+
+  const Icon = phase === "downloaded" ? RotateCcw : phase === "downloading" ? Loader2 : phase === "error" ? RefreshCw : Download;
+
   return (
     <button
       type="button"
       className={`rail-update rail-update--${phase}`}
       onClick={handleClick}
       disabled={busy}
-      title={title}
+      style={phase === "downloading" ? ({ "--rail-update-pct": `${percent}%` } as CSSProperties) : undefined}
     >
-      <Icon size={16} className={busy ? "rail-update-spin" : undefined} />
+      <Icon size={15} className={busy ? "rail-update-spin" : undefined} />
       <span className="rail-label">{label}</span>
       {phase === "downloading" ? (
-        <span className="rail-update-bar" aria-hidden>
-          <span className="rail-update-bar-fill" style={{ width: `${status.percent ?? 0}%` }} />
-        </span>
+        <span className="rail-update-pct-label">{percent}%</span>
       ) : null}
+      {phase === "available" && (
+        <>
+          <span className="rail-update-star star-1" aria-hidden><UpdaterStarSvg /></span>
+          <span className="rail-update-star star-2" aria-hidden><UpdaterStarSvg /></span>
+          <span className="rail-update-star star-3" aria-hidden><UpdaterStarSvg /></span>
+          <span className="rail-update-star star-4" aria-hidden><UpdaterStarSvg /></span>
+          <span className="rail-update-star star-5" aria-hidden><UpdaterStarSvg /></span>
+          <span className="rail-update-star star-6" aria-hidden><UpdaterStarSvg /></span>
+        </>
+      )}
     </button>
   );
 }
@@ -6602,6 +6610,8 @@ function LauncherShell() {
   const [launchHandoff, setLaunchHandoff] = useState<LaunchHandoffState | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus | undefined>();
+  const [fakeUpdaterStatus, setFakeUpdaterStatus] = useState<UpdaterStatus | undefined>();
+  const fakeDownloadRef = useRef<(() => void) | undefined>(undefined);
   const [query, setQueryState] = useState("");
   const queryRef = useRef("");
   const setQuery = useCallback((next: string) => {
@@ -7943,6 +7953,37 @@ function LauncherShell() {
     );
   }, [route, home, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy, cardsPerRow, wishlistCount]);
 
+  // Dev helpers — available in the browser console:
+  //   window.__fakeUpdate()       shows "Update available", click the button to simulate download
+  //   window.__clearFakeUpdate()  resets back to real updater state
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__fakeUpdate = () => {
+      const fakeVersion = "99.0.0";
+      const base: UpdaterStatus = { phase: "available", supported: true, currentVersion: "0.0.0", availableVersion: fakeVersion };
+      setFakeUpdaterStatus(base);
+      fakeDownloadRef.current = () => {
+        let pct = 0;
+        const tick = setInterval(() => {
+          pct = Math.min(pct + 2, 100);
+          setFakeUpdaterStatus({ ...base, phase: "downloading", percent: pct });
+          if (pct >= 100) {
+            clearInterval(tick);
+            setFakeUpdaterStatus({ ...base, phase: "downloaded" });
+          }
+        }, 80);
+      };
+    };
+    (window as unknown as Record<string, unknown>).__clearFakeUpdate = () => {
+      setFakeUpdaterStatus(undefined);
+      fakeDownloadRef.current = undefined;
+    };
+    console.log("%c[Hynite dev]%c  __fakeUpdate() · __clearFakeUpdate()", "color:#a78bfa;font-weight:700", "color:#888");
+    return () => {
+      delete (window as unknown as Record<string, unknown>).__fakeUpdate;
+      delete (window as unknown as Record<string, unknown>).__clearFakeUpdate;
+    };
+  }, []);
+
   return (
     <>
     <div className="app-shell">
@@ -7979,6 +8020,11 @@ function LauncherShell() {
               </button>
             );
           })}
+          <UpdaterPill
+            status={fakeUpdaterStatus ?? updaterStatus}
+            onDownload={fakeUpdaterStatus ? () => fakeDownloadRef.current?.() : undefined}
+            onInstall={fakeUpdaterStatus ? () => { setFakeUpdaterStatus(undefined); fakeDownloadRef.current = undefined; } : undefined}
+          />
           <div className={groups.length > 0 ? "rail-lists has-groups" : "rail-lists"}>
             {groups.length > 0 ? (
               <div className="rail-section rail-groups-section">
@@ -8045,7 +8091,6 @@ function LauncherShell() {
               </div>
             </div>
           </div>
-          <UpdaterPill status={updaterStatus} />
         </aside>
         <section className="content" ref={contentRef}>
           <AnimatePresence mode="wait">
