@@ -102,6 +102,7 @@ type LaunchHandoffState = {
 const STEAM_SWITCH_CONFIRM_EVENT = "hynite:steam-switch-confirm";
 const LAUNCH_GAME_EVENT = "hynite:launch-game";
 const TRAILER_AUDIO_STORAGE_KEY = "hynite:trailer-audio:v1";
+const TWITCH_DEVELOPER_APPS_URL = "https://dev.twitch.tv/console/apps";
 const LAUNCH_HANDOFF_PREVIEW_MS = 1800;
 const LAUNCH_HANDOFF_REDUCED_PREVIEW_MS = 450;
 const LAUNCH_HANDOFF_MAX_MS = 40_000;
@@ -3860,6 +3861,8 @@ function SettingsScreen({
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [steamGridDbKey, setSteamGridDbKey] = useState("");
+  const [igdbClientId, setIgdbClientId] = useState("");
+  const [igdbClientSecret, setIgdbClientSecret] = useState("");
   const [steamMessage, setSteamMessage] = useState<string | undefined>();
   const [metadataMessage, setMetadataMessage] = useState<string | undefined>();
   const [devMessage, setDevMessage] = useState<string | undefined>();
@@ -3999,6 +4002,27 @@ function SettingsScreen({
     setSettings(next);
     setSteamGridDbKey("");
     setMetadataMessage("SteamGridDB fallback disabled.");
+  }
+
+  async function saveIgdbCredentials() {
+    setMetadataMessage(undefined);
+    const clientId = igdbClientId.trim();
+    const clientSecret = igdbClientSecret.trim();
+    if (!clientId || !clientSecret) return;
+    const next = await window.hynite.metadata.saveIgdbCredentials(clientId, clientSecret);
+    setSettings(next);
+    setIgdbClientId("");
+    setIgdbClientSecret("");
+    setMetadataMessage("IGDB credentials saved.");
+  }
+
+  async function clearIgdbCredentials() {
+    setMetadataMessage(undefined);
+    const next = await window.hynite.metadata.clearIgdbCredentials();
+    setSettings(next);
+    setIgdbClientId("");
+    setIgdbClientSecret("");
+    setMetadataMessage("IGDB credentials removed.");
   }
 
   async function clearLibrary() {
@@ -4435,6 +4459,47 @@ function SettingsScreen({
                 <button className="primary-action" disabled={!steamGridDbKey.trim()} onClick={() => void saveSteamGridDbKey()}>
                   <KeyRound size={16} />
                   Save key
+                </button>
+              </div>
+              <div className="steam-account-row">
+                <div>
+                  <strong>{settings?.igdb ? "IGDB configured" : "IGDB not configured"}</strong>
+                  <span>
+                    Optional Twitch app credentials for IGDB local game metadata and artwork.{" "}
+                    <a
+                      href={TWITCH_DEVELOPER_APPS_URL}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void window.hynite.native.openExternal(TWITCH_DEVELOPER_APPS_URL);
+                      }}
+                    >
+                      Create an app
+                    </a>
+                  </span>
+                </div>
+                <button className="secondary-action" disabled={!settings?.igdb} onClick={() => void clearIgdbCredentials()}>
+                  <X size={16} />
+                  Clear
+                </button>
+              </div>
+              <div className="api-key-row">
+                <input
+                  className="plain-input"
+                  type="text"
+                  value={igdbClientId}
+                  onChange={(event) => setIgdbClientId(event.target.value)}
+                  placeholder={settings?.igdb ? "Replace IGDB client ID" : "Twitch client ID"}
+                />
+                <input
+                  className="plain-input"
+                  type="password"
+                  value={igdbClientSecret}
+                  onChange={(event) => setIgdbClientSecret(event.target.value)}
+                  placeholder={settings?.igdb ? "Replace IGDB client secret" : "Twitch client secret"}
+                />
+                <button className="primary-action" disabled={!igdbClientId.trim() || !igdbClientSecret.trim()} onClick={() => void saveIgdbCredentials()}>
+                  <KeyRound size={16} />
+                  Save credentials
                 </button>
               </div>
               {metadataMessage ? <p className="result-line">{metadataMessage}</p> : null}

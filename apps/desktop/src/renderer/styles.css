@@ -2556,7 +2556,12 @@ textarea::placeholder {
   font-size: 12px;
 }
 
+.steam-account-row a {
+  color: var(--accent, #7eb8f7);
+}
+
 .api-key-row .plain-input {
+  flex: 1 1 220px;
   max-width: 420px;
 }
 
