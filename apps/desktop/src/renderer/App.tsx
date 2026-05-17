@@ -69,6 +69,7 @@ import type { UpdaterStatus } from "../preload";
 import logo64Url from "../../../../assets/icons/logo-64.png?url";
 import logo128Url from "../../../../assets/icons/logo-128.png?url";
 import logo256Url from "../../../../assets/icons/logo-256.png?url";
+import logo1024Url from "../../../../assets/icons/logo-1024.png?url";
 
 type SteamSwitchPrompt = {
   gameId: string;
@@ -6837,6 +6838,48 @@ function LauncherShell() {
     void window.hynite.settings.health().then(setSettingsHealthWarning).catch((error: unknown) => {
       console.error("Failed to check settings health", error);
     });
+  }, []);
+
+  useEffect(() => {
+    const HYNITE_SELF_ID = "hynite:self";
+    (window as unknown as Record<string, unknown>).__hyniteDev = {
+      addHyniteApp() {
+        const game: Game = {
+          id: HYNITE_SELF_ID,
+          title: "Hynite",
+          sortTitle: "hynite",
+          sourceIds: [],
+          installState: "not_installed",
+          logoUrl: logo1024Url,
+          libraryCapsuleUrl: logo1024Url,
+          coverUrl: logo1024Url,
+          shortDescription: "Hynite is a game launcher built around browsing, not managing. Your full Steam library, local games (added automatically), and Hydra download sources. All in one place, with wishlists, discovery, and a PlayStation-inspired Big Picture mode. Everything you’d lose by leaving the Steam client, kept.",
+          screenshots: [],
+          contentDescriptors: [],
+          genres: [],
+          tags: [],
+          playerModes: [],
+          developers: ["yuma-dev"],
+          publishers: ["yuma-dev"],
+          metadataStatus: "complete"
+        };
+        setGames((current) => [game, ...current.filter((g) => g.id !== HYNITE_SELF_ID)]);
+        setAllGames((current) => [game, ...current.filter((g) => g.id !== HYNITE_SELF_ID)]);
+        console.log("[hynite dev] Added Hynite app to library");
+      },
+      removeHyniteApp() {
+        setGames((current) => current.filter((g) => g.id !== HYNITE_SELF_ID));
+        setAllGames((current) => current.filter((g) => g.id !== HYNITE_SELF_ID));
+        console.log("[hynite dev] Removed Hynite app from library");
+      }
+    };
+    console.log(
+      "%c[hynite dev] Dev commands available:%c\n" +
+      "  window.__hyniteDev.addHyniteApp()      — add Hynite app card to library & BP mode\n" +
+      "  window.__hyniteDev.removeHyniteApp()   — remove it\n" +
+      "  window.__hyniteDev.setBgNoise(0.6)     — set BP background noise amount (0–1+)",
+      "color:#8fbfff;font-weight:bold", "color:inherit"
+    );
   }, []);
 
   useEffect(() => {
