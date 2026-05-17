@@ -1,6 +1,6 @@
 import { memo, Profiler, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type UIEvent } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
-import { Play, X, Download, Info, SlidersHorizontal, Plus, Star } from "lucide-react";
+import { Play, X, Download, Info, SlidersHorizontal, Plus, Star, Github } from "lucide-react";
 import type { AppSettings, ControllerActionId, ControllerSettings, Game, GameGroup } from "@hynite/core";
 import { expandPaletteToSlots, extractPalette, fallbackPalette, getCachedPalette, type CoverPalette, type PaletteDebugInfo } from "./colorExtract";
 import { soundEngine } from "./sound";
@@ -227,6 +227,10 @@ function buildTabs(
     groupTabs.push({ id: `group:${group.id}`, label: group.name, games: list });
   }
 
+  const devGames = games.filter((g) => g.id === "hynite:self");
+  const regularGames = games.filter((g) => g.id !== "hynite:self");
+  const regularRecent = recentGames.filter((g) => g.id !== "hynite:self");
+
   const tabs: BigPictureTab[] = [];
 
   // Favorited group tab goes first if set
@@ -235,15 +239,18 @@ function buildTabs(
     if (favIdx >= 0) tabs.push(...groupTabs.splice(favIdx, 1));
   }
 
-  if (recentGames.length) {
-    tabs.push({ id: "recent", label: "Recent", games: recentGames.slice(0, 30) });
+  if (regularRecent.length) {
+    tabs.push({ id: "recent", label: "Recent", games: regularRecent.slice(0, 30) });
   }
-  const installed = games.filter((g) => g.installState === "installed");
+  const installed = regularGames.filter((g) => g.installState === "installed");
   if (installed.length) {
     tabs.push({ id: "installed", label: "Installed", games: installed });
   }
-  tabs.push({ id: "all", label: "All Games", games });
+  tabs.push({ id: "all", label: "All Games", games: regularGames });
   tabs.push(...groupTabs);
+  if (devGames.length > 0) {
+    tabs.push({ id: "dev", label: "Dev", games: devGames });
+  }
 
   return tabs.filter((t) => t.games.length > 0 || t.id === "all");
 }
@@ -333,6 +340,7 @@ export function BigPictureScreen({
   const [tabIndex, setTabIndex] = useState(0);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("shelf");
+  const [noiseOverride, setNoiseOverride] = useState(0.6);
   const [gridColumns, setGridColumns] = useState(6);
   const [gridRenderCount, setGridRenderCount] = useState(0);
   const [transitionDirection, setTransitionDirection] = useState<TransitionDirection>("none");
@@ -401,6 +409,15 @@ export function BigPictureScreen({
     });
     window.setTimeout(() => span.end("ok"), 140);
   }, [currentTab?.games.length, currentTab?.id, currentTab?.label, focusedIndex, viewMode]);
+
+  useEffect(() => {
+    const dev = ((window as unknown as Record<string, unknown>).__hyniteDev ?? {}) as Record<string, unknown>;
+    dev.setBgNoise = (value: number) => {
+      setNoiseOverride(value);
+      console.log(`[hynite dev] Background noise set to ${value}`);
+    };
+    (window as unknown as Record<string, unknown>).__hyniteDev = dev;
+  }, []);
 
   useEffect(() => {
     updateRuntimeProfileContext({
@@ -1062,7 +1079,7 @@ export function BigPictureScreen({
             warpStrength={1.1}
             mouseInfluence={1.4}
             parallax={0.6}
-            noise={0.6}
+            noise={noiseOverride}
             iterations={3}
             intensity={1.25}
             bandWidth={7}
@@ -1149,7 +1166,12 @@ export function BigPictureScreen({
                       <p className="bp-hero-summary">{focusedGame.shortDescription}</p>
                     ) : null}
                     <div className="bp-hero-actions">
-                      {canLaunch(focusedGame) ? (
+                      {focusedGame.id === "hynite:self" ? (
+                        <button type="button" className="bp-play" onClick={() => void window.hynite.native.openExternal("https://github.com/yuma-dev/hynite/releases")}>
+                          <Github size={20} />
+                          <span>Download from Github</span>
+                        </button>
+                      ) : canLaunch(focusedGame) ? (
                         <button type="button" className="bp-play" onClick={() => onLaunch(focusedGame)}>
                           <Play size={20} fill="currentColor" />
                           <span>Play</span>
@@ -1162,10 +1184,12 @@ export function BigPictureScreen({
                           <kbd>{bindingLabel(binding("play"))}</kbd>
                         </button>
                       )}
-                      <button type="button" className="bp-info" onClick={() => onSelect(focusedGame)} aria-label={canLaunch(focusedGame) ? "Details" : "Download / Install"}>
-                        {canLaunch(focusedGame) ? <Info size={18} /> : <Download size={18} />}
-                        <kbd>{bindingLabel(binding("details"))}</kbd>
-                      </button>
+                      {focusedGame.id !== "hynite:self" && (
+                        <button type="button" className="bp-info" onClick={() => onSelect(focusedGame)} aria-label={canLaunch(focusedGame) ? "Details" : "Download / Install"}>
+                          {canLaunch(focusedGame) ? <Info size={18} /> : <Download size={18} />}
+                          <kbd>{bindingLabel(binding("details"))}</kbd>
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : null}
