@@ -1,8 +1,6 @@
 # Hynite
 
-A Windows game launcher that brings your Steam library, local installs, and family-shared games into one place.
-
-<!-- SCREENSHOT: Full app window — Home feed with hero banner -->
+<img width="834" height="386" alt="Screenshot 2026-05-17 032444" src="https://github.com/user-attachments/assets/f6d5949d-7aa3-4672-988d-a25221afa8da" />
 
 ---
 
