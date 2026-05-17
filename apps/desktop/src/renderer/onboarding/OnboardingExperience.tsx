@@ -26,6 +26,7 @@ import { onboardingMedia, type OnboardingMediaAsset } from "./onboardingMedia";
 type StepId =
   | "steam-web-api"
   | "steamgriddb"
+  | "igdb"
   | "pair-steam"
   | "local-steam-user"
   | "local-games"
@@ -49,6 +50,7 @@ type OnboardingTask = {
 const HYDRA_SOURCES_URL = "https://library.hydra.wiki/sources";
 const STEAM_WEB_API_URL = "https://steamcommunity.com/dev/apikey";
 const STEAMGRIDDB_API_URL = "https://www.steamgriddb.com/profile/preferences/api";
+const TWITCH_DEVELOPER_APPS_URL = "https://dev.twitch.tv/console/apps";
 const MIN_CARDS_PER_ROW = 4;
 const MAX_CARDS_PER_ROW = 12;
 const ONBOARDING_MUSIC_START_DELAY_MS = 10_000;
@@ -61,6 +63,10 @@ const STEPS: StepDefinition[] = [
   {
     id: "steamgriddb",
     title: "SteamGridDB API Key"
+  },
+  {
+    id: "igdb",
+    title: "IGDB Credentials"
   },
   {
     id: "pair-steam",
@@ -264,6 +270,8 @@ export function OnboardingExperience({
   const [settings, setSettings] = useState<AppSettings | undefined>();
   const [steamKeyDraft, setSteamKeyDraft] = useState("");
   const [steamGridDbDraft, setSteamGridDbDraft] = useState("");
+  const [igdbClientIdDraft, setIgdbClientIdDraft] = useState("");
+  const [igdbClientSecretDraft, setIgdbClientSecretDraft] = useState("");
   const [message, setMessage] = useState<string | undefined>();
   const [busy, setBusy] = useState<string | undefined>();
   const [localAccounts, setLocalAccounts] = useState<SteamLocalAccount[]>([]);
@@ -494,6 +502,29 @@ export function OnboardingExperience({
     }
   }
 
+  async function saveIgdbCredentials(): Promise<void> {
+    const clientId = igdbClientIdDraft.trim();
+    const clientSecret = igdbClientSecretDraft.trim();
+    if (!clientId || !clientSecret) return;
+    setBusy("igdb-credentials");
+    setMessage(undefined);
+    try {
+      if (preview) {
+        setLocalSettings({ igdb: { clientId: previewSecret(), clientSecret: previewSecret() } });
+      } else {
+        setSettings(await window.hynite.metadata.saveIgdbCredentials(clientId, clientSecret));
+      }
+      setIgdbClientIdDraft("");
+      setIgdbClientSecretDraft("");
+      setMessage("IGDB credentials saved.");
+      setStepIndex((current) => Math.min(current + 1, STEPS.length - 1));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save IGDB credentials.");
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
   async function pairAccount(): Promise<void> {
     setBusy("pair");
     setMessage(undefined);
@@ -717,6 +748,52 @@ export function OnboardingExperience({
             </button>
           </div>
         </StepMediaLayout>
+      );
+    }
+
+    if (step.id === "igdb") {
+      return (
+        <StepPlainLayout>
+          <div className="onboarding-form-stack">
+            <div className="onboarding-link-row">
+              <button type="button" className="secondary-action" onClick={() => void window.hynite.native.openExternal(TWITCH_DEVELOPER_APPS_URL)}>
+                <ExternalLink size={14} />
+                Open Twitch apps page
+              </button>
+              <span className={settings?.igdb ? "onboarding-pill ready" : "onboarding-pill"}>{settings?.igdb ? "Saved" : "Optional"}</span>
+            </div>
+            <div className="onboarding-empty-row">IGDB uses Twitch app credentials for local game metadata and artwork.</div>
+            <label className="onboarding-field">
+              <span>Client ID</span>
+              <input
+                className="plain-input"
+                type="text"
+                value={igdbClientIdDraft}
+                onChange={(event) => setIgdbClientIdDraft(event.currentTarget.value)}
+                placeholder={settings?.igdb ? "Replace saved client ID" : "Paste Twitch client ID"}
+              />
+            </label>
+            <label className="onboarding-field">
+              <span>Client Secret</span>
+              <input
+                className="plain-input"
+                type="password"
+                value={igdbClientSecretDraft}
+                onChange={(event) => setIgdbClientSecretDraft(event.currentTarget.value)}
+                placeholder={settings?.igdb ? "Replace saved client secret" : "Paste Twitch client secret"}
+              />
+            </label>
+            <button
+              type="button"
+              className="primary-action"
+              disabled={!igdbClientIdDraft.trim() || !igdbClientSecretDraft.trim() || busy === "igdb-credentials"}
+              onClick={() => void saveIgdbCredentials()}
+            >
+              {busy === "igdb-credentials" ? <Loader2 size={15} className="spin" /> : <KeyRound size={15} />}
+              Save credentials
+            </button>
+          </div>
+        </StepPlainLayout>
       );
     }
 
