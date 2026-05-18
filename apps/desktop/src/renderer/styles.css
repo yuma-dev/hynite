@@ -1776,13 +1776,12 @@ button {
 .trend-skeleton-frame,
 .trend-skeleton-row > span,
 .trend-skeleton-row i {
+  --sk-dark: #1c1e26;
+  --sk-light: #2a2e3e;
   display: block;
   border-radius: 8px;
-  background:
-    linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.07) 48%, transparent 96%),
-    rgba(255, 255, 255, 0.08);
-  background-size: 220% 100%, 100% 100%;
-  animation: coverSkeletonShimmer 1500ms ease-in-out infinite;
+  background: #1c1e26;
+  animation: skeletonBreath 1800ms ease-in-out infinite;
 }
 
 .home-skeleton-title {
@@ -2187,11 +2186,8 @@ button {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background:
-    linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.08) 48%, transparent 96%),
-    #15171c;
-  background-size: 220% 100%, 100% 100%;
-  animation: coverSkeletonShimmer 1500ms ease-in-out infinite;
+  background: #15171c;
+  animation: skeletonBreath 1800ms ease-in-out infinite;
 }
 
 .cover-art:has(.cover-img.loaded)::before {
@@ -2199,9 +2195,9 @@ button {
   animation: none;
 }
 
-@keyframes coverSkeletonShimmer {
-  from { background-position: 160% 0, 0 0; }
-  to { background-position: -60% 0, 0 0; }
+@keyframes skeletonBreath {
+  0%, 100% { background-color: var(--sk-dark, #15171c); }
+  50% { background-color: var(--sk-light, #272b38); }
 }
 
 .cover-strip .is-glow-target .cover-art::after,
@@ -7068,6 +7064,7 @@ dd {
 }
 
 .account-stack-card {
+  grid-area: 1 / 1;
   width: min(360px, 100%);
   min-height: 72px;
   display: grid;

@@ -14,3 +14,4 @@ dev.*.log
 docs/
 AGENTS.md
 .claude
+RELEASE_DRAFT.md
