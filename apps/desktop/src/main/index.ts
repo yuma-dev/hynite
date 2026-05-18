@@ -989,14 +989,62 @@ async function pathExists(path: string | undefined): Promise<boolean> {
   }
 }
 
+function summarizeLocalIssuesForDiagnostics(issues: Array<LocalScanIssue | MissingLocalGameIssue>): Record<string, unknown> {
+  const byReason = issues.reduce<Record<string, number>>((counts, issue) => {
+    counts[issue.reason] = (counts[issue.reason] ?? 0) + 1;
+    return counts;
+  }, {});
+  return {
+    total: issues.length,
+    byReason,
+    sample: issues.slice(0, 20).map((issue) => ({
+      candidateId: issue.candidateId,
+      gameId: "gameId" in issue ? issue.gameId : undefined,
+      reason: issue.reason,
+      folderPath: issue.folderPath,
+      folderName: issue.folderName
+    }))
+  };
+}
+
 async function getLocalIssues(settings: AppSettings): Promise<Array<LocalScanIssue | MissingLocalGameIssue>> {
   const scanIssues = await localImportService.getIssues(settings.localIgnoredPaths ?? []);
   const roots = (settings.localRoots ?? []).filter((root) => root.path.trim().length > 0);
-  if (roots.length === 0) return scanIssues;
+  if (roots.length === 0) {
+    diagnosticLogService.log({
+      level: "info",
+      phase: "local:issues",
+      message: "Local issues queried",
+      details: {
+        rootCount: 0,
+        ignoredPathCount: settings.localIgnoredPaths?.length ?? 0,
+        scanIssues: summarizeLocalIssuesForDiagnostics(scanIssues),
+        missingInstallIssues: summarizeLocalIssuesForDiagnostics([]),
+        returned: summarizeLocalIssuesForDiagnostics(scanIssues)
+      }
+    });
+    return scanIssues;
+  }
   const availableRoots = (
     await Promise.all(roots.map(async (root) => ((await pathExists(root.path)) ? root : undefined)))
   ).filter((root): root is { path: string; depth: number } => Boolean(root));
-  if (availableRoots.length === 0) return scanIssues;
+  if (availableRoots.length === 0) {
+    diagnosticLogService.log({
+      level: "info",
+      phase: "local:issues",
+      message: "Local issues queried",
+      details: {
+        rootCount: roots.length,
+        availableRootCount: 0,
+        unavailableRoots: roots.map((root) => root.path),
+        ignoredPathCount: settings.localIgnoredPaths?.length ?? 0,
+        scanIssues: summarizeLocalIssuesForDiagnostics(scanIssues),
+        missingInstallIssues: summarizeLocalIssuesForDiagnostics([]),
+        returned: summarizeLocalIssuesForDiagnostics(scanIssues)
+      }
+    });
+    return scanIssues;
+  }
 
   const missing = await Promise.all(
     repository
@@ -1014,7 +1062,23 @@ async function getLocalIssues(settings: AppSettings): Promise<Array<LocalScanIss
         };
       })
   );
-  return [...scanIssues, ...missing.filter((issue): issue is MissingLocalGameIssue => Boolean(issue))];
+  const missingIssues = missing.filter((issue): issue is MissingLocalGameIssue => Boolean(issue));
+  const returned = [...scanIssues, ...missingIssues];
+  diagnosticLogService.log({
+    level: "info",
+    phase: "local:issues",
+    message: "Local issues queried",
+    details: {
+      rootCount: roots.length,
+      availableRootCount: availableRoots.length,
+      unavailableRoots: roots.filter((root) => !availableRoots.some((available) => available.path === root.path)).map((root) => root.path),
+      ignoredPathCount: settings.localIgnoredPaths?.length ?? 0,
+      scanIssues: summarizeLocalIssuesForDiagnostics(scanIssues),
+      missingInstallIssues: summarizeLocalIssuesForDiagnostics(missingIssues),
+      returned: summarizeLocalIssuesForDiagnostics(returned)
+    }
+  });
+  return returned;
 }
 
 function addAssetCandidate(
@@ -4142,7 +4206,14 @@ app.whenReady().then(async () => {
     }
     emitGameUpdated(event.gameId);
   });
-  localImportService = new LocalImportService(transientUserDataPath(userData, "local-scan-cache.json"), repository, nativeBridge);
+  localImportService = new LocalImportService(
+    transientUserDataPath(userData, "local-scan-cache.json"),
+    repository,
+    nativeBridge,
+    (level, message, details) => {
+      diagnosticLogService.log({ level, phase: "local:issue-cache", message, details });
+    }
+  );
   localPlaytimeMonitor = new LocalPlaytimeMonitor({
     repository,
     nativeBridge,

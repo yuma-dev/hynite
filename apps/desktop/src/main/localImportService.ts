@@ -99,6 +99,23 @@ function cacheEntryMatchesCandidate(entry: LocalScanCacheEntry | undefined, cand
     entry.exeSignature === exeSignature(candidate);
 }
 
+function summarizeIssues(issues: LocalScanIssue[]): Record<string, unknown> {
+  const byReason = issues.reduce<Record<string, number>>((counts, issue) => {
+    counts[issue.reason] = (counts[issue.reason] ?? 0) + 1;
+    return counts;
+  }, {});
+  return {
+    total: issues.length,
+    byReason,
+    sample: issues.slice(0, 20).map((issue) => ({
+      candidateId: issue.candidateId,
+      reason: issue.reason,
+      folderPath: issue.folderPath,
+      folderName: issue.folderName
+    }))
+  };
+}
+
 export type LocalImportRunOptions = {
   roots: Array<{ path: string; depth: number }>;
   excludePatterns: string[];
@@ -136,8 +153,13 @@ export class LocalImportService {
   constructor(
     private readonly cachePath: string,
     private readonly repository: HyniteRepository,
-    private readonly nativeBridge: NativeBridge
+    private readonly nativeBridge: NativeBridge,
+    private readonly logger?: LocalImportLogger
   ) {}
+
+  private log(level: "info" | "warning" | "error", message: string, details?: Record<string, unknown>): void {
+    this.logger?.(level, message, details);
+  }
 
   async loadCache(): Promise<PersistentLocalScanCache> {
     if (this.cache) return this.cache;
@@ -148,8 +170,21 @@ export class LocalImportService {
         entries: parsed.entries && typeof parsed.entries === "object" ? parsed.entries : {},
         issues: parsed.issues && typeof parsed.issues === "object" ? parsed.issues : {}
       };
-    } catch {
+      this.log("info", "Local scan cache loaded", {
+        entryCount: Object.keys(this.cache.entries).length,
+        issues: summarizeIssues(Object.values(this.cache.issues ?? {}))
+      });
+    } catch (error) {
       this.cache = { entries: {}, issues: {} };
+      const code = error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : undefined;
+      this.log(
+        code === "ENOENT" ? "info" : "warning",
+        code === "ENOENT" ? "Local scan cache missing; initialized empty" : "Local scan cache failed to load; initialized empty",
+        {
+          code,
+          error: errorMessage(error)
+        }
+      );
     }
     return this.cache;
   }
@@ -158,6 +193,10 @@ export class LocalImportService {
     if (!this.cache) return;
     await mkdir(dirname(this.cachePath), { recursive: true });
     await writeFile(this.cachePath, JSON.stringify(this.cache, null, 2));
+    this.log("info", "Local scan cache saved", {
+      entryCount: Object.keys(this.cache.entries).length,
+      issues: summarizeIssues(Object.values(this.cache.issues ?? {}))
+    });
   }
 
   /** Last completed scan report (issues, ambiguous candidates, matches). */
@@ -166,11 +205,18 @@ export class LocalImportService {
   async getIssues(ignoredPaths: string[] = []): Promise<LocalScanIssue[]> {
     const issues = Object.values((await this.loadCache()).issues ?? {});
     const ignored = new Set(ignoredPaths.map((path) => normalizePathKey(path)));
-    return issues.filter((issue) => !ignored.has(normalizePathKey(issue.folderPath)));
+    const returned = issues.filter((issue) => !ignored.has(normalizePathKey(issue.folderPath)));
+    this.log("info", "Local scan issues read", {
+      ignoredPathCount: ignoredPaths.length,
+      cached: summarizeIssues(issues),
+      returned: summarizeIssues(returned)
+    });
+    return returned;
   }
 
   async clearIssue(candidateId: string, folderPath?: string): Promise<void> {
     const cache = await this.loadCache();
+    const before = Object.values(cache.issues ?? {});
     delete cache.issues?.[candidateId];
     if (folderPath) {
       const normalizedFolderPath = normalizePathKey(folderPath);
@@ -186,6 +232,18 @@ export class LocalImportService {
         return folderPath ? normalizePathKey(issue.folderPath) !== normalizePathKey(folderPath) : true;
       });
     }
+    const after = Object.values(cache.issues ?? {});
+    const removed = before.filter((issue) => {
+      if (issue.candidateId === candidateId) return true;
+      return folderPath ? normalizePathKey(issue.folderPath) === normalizePathKey(folderPath) : false;
+    });
+    this.log("info", "Local scan issue clear requested", {
+      candidateId,
+      folderPath,
+      beforeCount: before.length,
+      removed: summarizeIssues(removed),
+      afterCount: after.length
+    });
     await this.saveCache();
   }
 
@@ -268,7 +326,11 @@ export class LocalImportService {
 
     options.log?.("info", "Local scan starting", {
       rootCount: options.roots.length,
-      hasIgdb: Boolean(igdbClient)
+      roots: options.roots.map((root) => root.path),
+      ignoredPathCount: options.ignoredPaths?.length ?? 0,
+      hasIgdb: Boolean(igdbClient),
+      skipUnchanged: Boolean(options.skipUnchanged),
+      refreshMetadata: options.refreshMetadata !== false
     });
 
     const imported = await provider.scan();
@@ -331,8 +393,30 @@ export class LocalImportService {
     const issues = provider.lastReport?.issues ?? [];
     const availableRoots = await existingRootPaths(options.roots);
     const previousIssues = Object.values(cache.issues ?? {});
-    const retainedIssues = previousIssues.filter((issue) => !availableRoots.some((root) => isPathUnderFolder(issue.folderPath, root)));
+    const retainedOutsideAvailableRoots = previousIssues.filter((issue) => !availableRoots.some((root) => isPathUnderFolder(issue.folderPath, root)));
+    const skippedCandidates = provider.lastReport?.skippedCandidates ?? new Map<string, LocalGameCandidate>();
+    const retainedSkippedIssues = options.skipUnchanged
+      ? previousIssues.filter((issue) => skippedCandidates.has(issue.candidateId))
+      : [];
+    const retainedIssueKeys = new Set<string>();
+    const retainedIssues = [...retainedOutsideAvailableRoots, ...retainedSkippedIssues].filter((issue) => {
+      const key = `${issue.candidateId}\u0000${issue.reason}\u0000${normalizePathKey(issue.folderPath)}`;
+      if (retainedIssueKeys.has(key)) return false;
+      retainedIssueKeys.add(key);
+      return true;
+    });
     cache.issues = Object.fromEntries([...retainedIssues, ...issues].map((issue) => [issue.candidateId, issue]));
+    options.log?.("info", "Local scan issue cache updated", {
+      requestedRootCount: options.roots.length,
+      availableRootCount: availableRoots.length,
+      availableRoots,
+      previous: summarizeIssues(previousIssues),
+      retainedOutsideAvailableRoots: summarizeIssues(retainedOutsideAvailableRoots),
+      retainedSkipped: summarizeIssues(retainedSkippedIssues),
+      retained: summarizeIssues(retainedIssues),
+      scanIssues: summarizeIssues(issues),
+      persisted: summarizeIssues(Object.values(cache.issues ?? {}))
+    });
     await this.saveCache();
     const skipped = provider.lastReport?.skipped ?? 0;
     const ambiguous = issues.filter((issue) => issue.reason === "ambiguous_match" || issue.reason === "ambiguous_exe").length;
