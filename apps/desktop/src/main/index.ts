@@ -678,7 +678,7 @@ async function resolveFamilyAccessTokenForAccount(account: SteamAccountSettings)
   }
 
   try {
-    const refreshed = await refreshSteamAccessToken();
+    const refreshed = await refreshSteamAccessToken(account.steamId);
     if (refreshed && refreshed.steamId === account.steamId) {
       const encrypted = await nativeBridge.encryptSecret({ value: refreshed.accessToken, scope: "current-user" });
       await settingsService.patchSteamAccount(account.steamId, {
@@ -3950,7 +3950,7 @@ function registerIpc(): void {
         pairedAt: new Date().toISOString()
       };
     }
-    const paired = await pairSteamAccount(mainWindow);
+    const { pairing: paired, familyResult } = await pairSteamAccount(mainWindow);
     const current = await settingsService.get();
     const existing = current.steamAccounts.find((account) => account.steamId === paired.steamId);
 
@@ -3969,12 +3969,28 @@ function registerIpc(): void {
       console.warn("Could not auto-detect local Steam user", error);
     }
 
+    let autoFamilySession = existing?.familySession;
+    if (familyResult) {
+      try {
+        const encrypted = await nativeBridge.encryptSecret({ value: familyResult.accessToken, scope: "current-user" });
+        autoFamilySession = {
+          accessToken: encrypted,
+          steamId: familyResult.steamId,
+          expiresAt: familyResult.expiresAt,
+          connectedAt: new Date().toISOString()
+        };
+      } catch (error) {
+        console.warn("[steam:pair] could not encrypt auto-captured family token:", error);
+      }
+    }
+
     await settingsService.upsertSteamAccount({
       ...(existing ?? {}),
       steamId: paired.steamId,
       pairedAt: paired.pairedAt,
       personaName: existing?.personaName ?? autoPersonaName,
-      localUsername: existing?.localUsername ?? autoLocalUsername
+      localUsername: existing?.localUsername ?? autoLocalUsername,
+      ...(autoFamilySession ? { familySession: autoFamilySession } : {})
     });
     return paired;
   });
@@ -4007,7 +4023,7 @@ function registerIpc(): void {
     if (!current.steamAccounts.some((account) => account.steamId === steamId)) {
       throw new Error("Pair the Steam account before connecting the family library.");
     }
-    const result = await authenticateSteamSession(mainWindow);
+    const result = await authenticateSteamSession(mainWindow, steamId);
     if (result.steamId !== steamId) {
       throw new Error(
         `The Steam session you logged in as (${result.steamId}) doesn't match the paired account (${steamId}).`
@@ -4032,7 +4048,7 @@ function registerIpc(): void {
     if (!target?.familySession) {
       throw new Error("Family library is not connected for this account.");
     }
-    const refreshed = await refreshSteamAccessToken();
+    const refreshed = await refreshSteamAccessToken(steamId);
     if (!refreshed) {
       throw new Error("Steam family session expired; reconnect to continue.");
     }
@@ -4050,7 +4066,7 @@ function registerIpc(): void {
     if (onboardingPreview) {
       return settingsService.get();
     }
-    await disconnectSteamFamilySession();
+    await disconnectSteamFamilySession(steamId);
     return settingsService.patchSteamAccount(steamId, { familySession: undefined });
   });
   handleIpc("steam:search", async (_event, query: string): Promise<SteamSearchResult[]> => {
