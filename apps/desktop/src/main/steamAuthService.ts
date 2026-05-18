@@ -4,7 +4,9 @@ import type { SteamFamilyAuthResult, SteamPairingResult } from "@hynite/core";
 const steamOpenIdEndpoint = "https://steamcommunity.com/openid/login";
 const returnTo = "https://hynite.local/steam-auth";
 const realm = "https://hynite.local/";
-const familySessionPartition = "persist:steam-family";
+function familySessionPartition(steamId: string): string {
+  return `persist:steam-family-${steamId}`;
+}
 const familyTokenEndpoint = "https://store.steampowered.com/pointssummary/ajaxgetasyncconfig";
 const familyLoginEntry = "https://store.steampowered.com/login/";
 const familyLoginRevealDelayMs = 15_000;
@@ -44,8 +46,17 @@ async function verifySteamOpenId(url: string): Promise<boolean> {
   return (await response.text()).includes("is_valid:true");
 }
 
-export function pairSteamAccount(parent?: BrowserWindow): Promise<SteamPairingResult> {
-  return new Promise((resolve, reject) => {
+export type PairSteamAccountResult = {
+  pairing: SteamPairingResult;
+  familyResult?: SteamFamilyAuthResult;
+};
+
+export async function pairSteamAccount(parent?: BrowserWindow): Promise<PairSteamAccountResult> {
+  // Each pairing uses its own in-memory partition so no previous account's
+  // Steam cookies bleed in and force an unwanted auto-login.
+  const tempPartition = `temp:steam-pair-${Date.now()}`;
+
+  const pairing = await new Promise<SteamPairingResult>((resolve, reject) => {
     const authWindow = new BrowserWindow({
       width: 960,
       height: 720,
@@ -56,6 +67,7 @@ export function pairSteamAccount(parent?: BrowserWindow): Promise<SteamPairingRe
       title: "Pair Steam account",
       autoHideMenuBar: true,
       webPreferences: {
+        partition: tempPartition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true
@@ -97,6 +109,31 @@ export function pairSteamAccount(parent?: BrowserWindow): Promise<SteamPairingRe
 
     void authWindow.loadURL(buildSteamLoginUrl());
   });
+
+  // Copy the login session from the temp partition into the per-account family
+  // partition so family share is automatically set up without a second login.
+  let familyResult: SteamFamilyAuthResult | undefined;
+  try {
+    const tempSess = session.fromPartition(tempPartition);
+    const familySess = session.fromPartition(familySessionPartition(pairing.steamId));
+    const cookies = await tempSess.cookies.get({});
+    await Promise.all(
+      cookies.map(async (cookie) => {
+        const domain = (cookie.domain ?? "").replace(/^\./, "");
+        const url = `https://${domain}${cookie.path ?? "/"}`;
+        try {
+          await familySess.cookies.set({ url, ...cookie });
+        } catch {
+          // individual cookie may be rejected (e.g. secure flag mismatch); skip it
+        }
+      })
+    );
+    familyResult = asyncConfigToResult(await fetchAsyncConfigFromPartition(pairing.steamId)) ?? undefined;
+  } catch (error) {
+    console.warn("[steam:pair] could not capture family session from pairing login:", error);
+  }
+
+  return { pairing, familyResult };
 }
 
 type AsyncConfigResponse = {
@@ -121,8 +158,8 @@ function decodeJwtPayload(token: string): { exp?: number; sub?: string } | undef
   }
 }
 
-async function fetchAsyncConfigFromPartition(): Promise<AsyncConfigResponse | undefined> {
-  const partition = session.fromPartition(familySessionPartition);
+async function fetchAsyncConfigFromPartition(steamId: string): Promise<AsyncConfigResponse | undefined> {
+  const partition = session.fromPartition(familySessionPartition(steamId));
   try {
     const response = await partition.fetch(familyTokenEndpoint, { credentials: "include", redirect: "manual" });
     if (response.status >= 300 && response.status < 400) {
@@ -179,8 +216,8 @@ async function readAsyncConfigFromBrowser(window: BrowserWindow): Promise<AsyncC
   }
 }
 
-async function isSteamSessionLoggedIn(): Promise<boolean> {
-  const partition = session.fromPartition(familySessionPartition);
+async function isSteamSessionLoggedIn(steamId: string): Promise<boolean> {
+  const partition = session.fromPartition(familySessionPartition(steamId));
   const named = await partition.cookies.get({ name: "steamLoginSecure" });
   if (named.length > 0) {
     return true;
@@ -208,8 +245,9 @@ function asyncConfigToResult(response: AsyncConfigResponse | undefined): SteamFa
   return { accessToken: token, steamId, expiresAt };
 }
 
-export function authenticateSteamSession(parent?: BrowserWindow): Promise<SteamFamilyAuthResult> {
+export function authenticateSteamSession(parent: BrowserWindow | undefined, steamId: string): Promise<SteamFamilyAuthResult> {
   return new Promise((resolve, reject) => {
+    const partition = familySessionPartition(steamId);
     const authWindow = new BrowserWindow({
       width: 960,
       height: 720,
@@ -221,7 +259,7 @@ export function authenticateSteamSession(parent?: BrowserWindow): Promise<SteamF
       title: "Connect Steam family library",
       autoHideMenuBar: true,
       webPreferences: {
-        partition: familySessionPartition,
+        partition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true
@@ -269,10 +307,10 @@ export function authenticateSteamSession(parent?: BrowserWindow): Promise<SteamF
         if (!url.includes("steampowered.com") && !url.includes("steamcommunity.com")) {
           return;
         }
-        const loggedIn = await isSteamSessionLoggedIn();
+        const loggedIn = await isSteamSessionLoggedIn(steamId);
         if (!loggedIn) {
-          const partition = session.fromPartition(familySessionPartition);
-          const all = await partition.cookies.get({});
+          const sess = session.fromPartition(familySessionPartition(steamId));
+          const all = await sess.cookies.get({});
           console.info(
             "[steam:family] not logged in yet. cookie names:",
             all.map((cookie) => `${cookie.name}@${cookie.domain}`).slice(0, 20)
@@ -312,12 +350,12 @@ export function authenticateSteamSession(parent?: BrowserWindow): Promise<SteamF
   });
 }
 
-export async function refreshSteamAccessToken(): Promise<SteamFamilyAuthResult | undefined> {
-  const config = await fetchAsyncConfigFromPartition();
+export async function refreshSteamAccessToken(steamId: string): Promise<SteamFamilyAuthResult | undefined> {
+  const config = await fetchAsyncConfigFromPartition(steamId);
   return asyncConfigToResult(config);
 }
 
-export async function disconnectSteamFamilySession(): Promise<void> {
-  const partition = session.fromPartition(familySessionPartition);
+export async function disconnectSteamFamilySession(steamId: string): Promise<void> {
+  const partition = session.fromPartition(familySessionPartition(steamId));
   await partition.clearStorageData();
 }
