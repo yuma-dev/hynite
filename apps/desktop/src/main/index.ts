@@ -2105,6 +2105,7 @@ function showSpotlightWindow(): void {
 
 function hideSpotlightWindow(): void {
   if (spotlightWindow && !spotlightWindow.isDestroyed()) {
+    spotlightWindow.webContents.send("spotlight:hide-notify");
     spotlightWindow.hide();
   }
 }

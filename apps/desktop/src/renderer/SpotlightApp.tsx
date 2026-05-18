@@ -30,6 +30,7 @@ export function SpotlightApp() {
   const [hasMore, setHasMore] = useState(false);
   const [launchHandoff, setLaunchHandoff] = useState<SpotlightSearchResult | undefined>();
   const [showKey, setShowKey] = useState(0);
+  const [panelReady, setPanelReady] = useState(true);
   const selected = results[selectedIndex];
 
   useEffect(() => {
@@ -67,16 +68,27 @@ export function SpotlightApp() {
       soundEngine.applySettings(settings);
     }).catch(() => undefined);
     runSearch("");
-    return window.hynite.spotlight.onShow(() => {
+
+    const stopOnHide = window.hynite.spotlight.onHide(() => {
+      setPanelReady(false);
+    });
+
+    const stopOnShow = window.hynite.spotlight.onShow(() => {
       setMessage(undefined);
       setLaunchHandoff(undefined);
       void window.hynite.spotlight.setLaunchHandoffActive(false).catch(() => undefined);
       setQuery("");
       setSelectedIndex(0);
       setShowKey((k) => k + 1);
+      setPanelReady(true);
       runSearch("");
       requestAnimationFrame(() => inputRef.current?.focus());
     });
+
+    return () => {
+      stopOnHide();
+      stopOnShow();
+    };
   }, [runSearch]);
 
   useEffect(() => {
@@ -171,7 +183,7 @@ export function SpotlightApp() {
             </span>
           </div>
         </section>
-      ) : (
+      ) : panelReady ? (
         <section key={showKey} className="spotlight-panel">
           <label className="spotlight-search">
             <Search size={18} />
@@ -231,7 +243,7 @@ export function SpotlightApp() {
             <span>{message ?? (loading ? "Working..." : "Enter to launch, Esc to close")}</span>
           </footer>
         </section>
-      )}
+      ) : null}
     </main>
   );
 }

@@ -220,6 +220,11 @@ const api = {
       ipcRenderer.on("spotlight:show", listener);
       return () => ipcRenderer.removeListener("spotlight:show", listener);
     },
+    onHide: (callback: () => void): (() => void) => {
+      const listener = () => callback();
+      ipcRenderer.on("spotlight:hide-notify", listener);
+      return () => ipcRenderer.removeListener("spotlight:hide-notify", listener);
+    },
     onLaunchHandoffBlur: (callback: () => void): (() => void) => {
       const listener = () => callback();
       ipcRenderer.on("spotlight:launch-handoff-blur", listener);
