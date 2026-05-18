@@ -29,6 +29,7 @@ export function SpotlightApp() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [launchHandoff, setLaunchHandoff] = useState<SpotlightSearchResult | undefined>();
+  const [showKey, setShowKey] = useState(0);
   const selected = results[selectedIndex];
 
   useEffect(() => {
@@ -72,6 +73,7 @@ export function SpotlightApp() {
       void window.hynite.spotlight.setLaunchHandoffActive(false).catch(() => undefined);
       setQuery("");
       setSelectedIndex(0);
+      setShowKey((k) => k + 1);
       runSearch("");
       requestAnimationFrame(() => inputRef.current?.focus());
     });
@@ -170,7 +172,7 @@ export function SpotlightApp() {
           </div>
         </section>
       ) : (
-        <section className="spotlight-panel">
+        <section key={showKey} className="spotlight-panel">
           <label className="spotlight-search">
             <Search size={18} />
             <input
