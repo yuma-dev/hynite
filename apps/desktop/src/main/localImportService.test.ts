@@ -98,6 +98,16 @@ describe("LocalImportService", () => {
     ]);
 
     await restarted.run({
+      roots: [{ path: gamesRoot, depth: 1 }],
+      excludePatterns: [],
+      searchSteamStore: async () => [],
+      skipUnchanged: true
+    });
+    expect(await restarted.getIssues()).toEqual([
+      expect.objectContaining({ candidateId: result.issues[0]?.candidateId, reason: "unmatched" })
+    ]);
+
+    await restarted.run({
       roots: [{ path: join(tempRoot, "missing-root"), depth: 1 }],
       excludePatterns: []
     });

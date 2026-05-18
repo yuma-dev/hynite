@@ -24,6 +24,7 @@ export type LocalScanReport = {
   matches: Map<string, { provider: "steam" | "igdb"; externalId: string; confidence: number; reason: string }>;
   issues: LocalScanIssue[];
   skipped: number;
+  skippedCandidates: Map<string, LocalGameCandidate>;
 };
 
 export type LocalProviderOptions = {
@@ -52,12 +53,14 @@ export class LocalImporterProvider implements ImporterProvider {
       enrichment: new Map(),
       matches: new Map(),
       issues: [],
-      skipped: 0
+      skipped: 0,
+      skippedCandidates: new Map()
     };
 
     for (const candidate of candidates) {
       if (this.options.shouldSkipCandidate?.(candidate)) {
         report.skipped += 1;
+        report.skippedCandidates.set(candidate.id, candidate);
         continue;
       }
       report.candidates.set(candidate.id, candidate);
