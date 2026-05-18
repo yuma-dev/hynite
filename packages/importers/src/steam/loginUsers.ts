@@ -10,6 +10,11 @@ export type LoginUsersFile = {
   root: VdfObject;
 };
 
+export type SteamConfigFile = {
+  path: string;
+  root: VdfObject;
+};
+
 export function parseLoginUsers(input: string): SteamLocalAccount[] {
   const parsed = parseVdf(input);
   const users = objectValue(parsed.users);
@@ -79,6 +84,7 @@ export function computeUpdatedLoginUsers(root: VdfObject, targetSteamId: string,
       entry.MostRecent = "1";
       entry.Timestamp = String(now);
       entry.RememberPassword = "1";
+      entry.AllowAutoLogin = "1";
     } else if (entry.MostRecent === "1") {
       entry.MostRecent = "0";
     }
@@ -87,8 +93,49 @@ export function computeUpdatedLoginUsers(root: VdfObject, targetSteamId: string,
   return cloned;
 }
 
+function ensureObject(parent: VdfObject, key: string): VdfObject {
+  const existing = objectValue(parent[key]);
+  if (existing) {
+    return existing;
+  }
+  const created: VdfObject = {};
+  parent[key] = created;
+  return created;
+}
+
+export function steamConfigPath(steamRoot: string): string {
+  return join(steamRoot, "config", "config.vdf");
+}
+
+export function computeUpdatedSteamUserChooserConfig(root: VdfObject, alwaysShowUserChooser = false): VdfObject {
+  const cloned = JSON.parse(JSON.stringify(root)) as VdfObject;
+  const installConfig = ensureObject(cloned, "InstallConfigStore");
+  const software = ensureObject(installConfig, "Software");
+  const valve = ensureObject(software, "Valve");
+  const steam = ensureObject(valve, "Steam");
+  steam.AlwaysShowUserChooser = alwaysShowUserChooser ? "1" : "0";
+  return cloned;
+}
+
 export async function writeLoginUsers(path: string, root: VdfObject): Promise<void> {
   // Steam's loginusers.vdf has root key "users" — preserve it.
+  await writeFile(path, stringifyVdf(root), "utf8");
+}
+
+export async function readSteamConfigFile(steamRoot?: string): Promise<SteamConfigFile | undefined> {
+  const root = steamRoot ?? findSteamRoot();
+  if (!root) {
+    return undefined;
+  }
+  const path = steamConfigPath(root);
+  if (!existsSync(path)) {
+    return { path, root: { InstallConfigStore: {} } };
+  }
+  const text = await readFile(path, "utf8");
+  return { path, root: parseVdf(text) };
+}
+
+export async function writeSteamConfig(path: string, root: VdfObject): Promise<void> {
   await writeFile(path, stringifyVdf(root), "utf8");
 }
 
