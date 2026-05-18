@@ -27,6 +27,7 @@ type IdentifyCandidateLite = {
   title: string;
   coverUrl?: string;
   releaseDate?: string;
+  developer?: string;
 };
 
 type IdentificationResult =
@@ -96,7 +97,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [excludeOpen, setExcludeOpen] = useState(false);
   const [igdbOpen, setIgdbOpen] = useState(false);
-  const [addModal, setAddModal] = useState<{ initialFolderPath?: string; initialExePath?: string } | undefined>();
+  const [addModal, setAddModal] = useState<{ initialFolderPath?: string; initialExePath?: string; issue?: LocalScanIssue } | undefined>();
   const [contextMenu, setContextMenu] = useState<{ game: Game; x: number; y: number } | undefined>();
   const [removeRootPrompt, setRemoveRootPrompt] = useState<{ root: LocalRoot; gameCount: number } | undefined>();
 
@@ -368,13 +369,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
               <IssueRow
                 key={issue.candidateId}
                 issue={issue}
-                onResolveMatch={(candidates) => {
-                  // Open Add modal in "manual search" mode using the issue's folder + first candidate from issue if any
-                  setAddModal({ initialFolderPath: issue.folderPath });
-                  void candidates;
-                }}
-                onPickExe={() => setAddModal({ initialFolderPath: issue.folderPath })}
-                onSearchManually={() => setAddModal({ initialFolderPath: issue.folderPath })}
+                onReview={() => setAddModal({ initialFolderPath: issue.folderPath, issue })}
                 onMoved={() => void updateMissingGameLocation(issue)}
                 onDeleted={() => void deleteMissingGame(issue)}
                 onDismiss={() => void dismissIssue(issue.folderPath)}
@@ -468,6 +463,7 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
           <AddGameModal
             initialFolderPath={addModal.initialFolderPath}
             initialExePath={addModal.initialExePath}
+            initialIssue={addModal.issue}
             hasIgdb={hasIgdb}
             onClose={() => setAddModal(undefined)}
             onAdded={(title) => {
@@ -549,26 +545,21 @@ export function LocalGamesScreen({ settings, setSettings, localGames, onGameSele
 
 function IssueRow({
   issue,
-  onResolveMatch,
-  onPickExe,
-  onSearchManually,
+  onReview,
   onMoved,
   onDeleted,
   onDismiss
 }: {
   issue: LocalScanIssue;
-  onResolveMatch: (candidates: IdentifyCandidateLite[]) => void;
-  onPickExe: () => void;
-  onSearchManually: () => void;
+  onReview: () => void;
   onMoved: () => void;
   onDeleted: () => void;
   onDismiss: () => void;
 }) {
-  const candidates = (issue.detail as IdentifyCandidateLite[] | undefined) ?? [];
   const labels: Record<LocalScanIssue["reason"], string> = {
     no_exes: "No executables found",
-    ambiguous_exe: "Multiple executables — pick the launcher",
-    ambiguous_match: "Multiple metadata matches — pick the right game",
+    ambiguous_exe: "Multiple executables found",
+    ambiguous_match: "Multiple metadata matches",
     unmatched: "No metadata match found",
     missing_install: "Install folder is missing"
   };
@@ -589,31 +580,21 @@ function IssueRow({
               <Trash2 size={13} /> Deleted
             </button>
           </>
-        ) : null}
-        {issue.reason === "ambiguous_match" ? (
-          <button className="secondary-action small" onClick={() => onResolveMatch(candidates)}>
-            <Wand2 size={13} /> Pick a match
-          </button>
-        ) : null}
-        {issue.reason === "ambiguous_exe" ? (
-          <button className="secondary-action small" onClick={onPickExe}>
-            <FolderIcon size={13} /> Pick exe
-          </button>
-        ) : null}
-        {issue.reason === "unmatched" ? (
-          <button className="secondary-action small" onClick={onSearchManually}>
-            <Search size={13} /> Search manually
-          </button>
-        ) : null}
-        {issue.reason !== "missing_install" ? (
-          <button className="row-icon-btn" onClick={onDismiss} title="Ignore this folder">
-            <EyeOff size={13} />
-          </button>
-        ) : null}
+        ) : (
+          <>
+            <button className="secondary-action small" onClick={onReview}>
+              <Wand2 size={13} /> Review
+            </button>
+            <button className="row-icon-btn" onClick={onDismiss} title="Ignore this folder">
+              <EyeOff size={13} />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
 }
+
 
 // -----------------------------------------------------------------------
 // Settings editors
@@ -700,114 +681,173 @@ function IgdbCredentialsEditor({
 }
 
 // -----------------------------------------------------------------------
-// Multi-step Add Game modal
+// Add Game modal
 // -----------------------------------------------------------------------
-
-type ModalStep = "pick" | "review" | "search";
 
 function AddGameModal({
   initialFolderPath,
   initialExePath,
-  hasIgdb,
+  initialIssue,
   onClose,
   onAdded,
   onError
 }: {
   initialFolderPath?: string;
   initialExePath?: string;
+  initialIssue?: LocalScanIssue;
   hasIgdb: boolean;
   onClose: () => void;
   onAdded: (title: string) => void;
   onError: (message: string) => void;
 }) {
-  const [step, setStep] = useState<ModalStep>(initialFolderPath || initialExePath ? "review" : "pick");
+  const [phase, setPhase] = useState<"pick" | "review">(
+    initialFolderPath || initialExePath ? "review" : "pick"
+  );
   const [folderPath, setFolderPath] = useState<string | undefined>(initialFolderPath);
   const [exePath, setExePath] = useState<string | undefined>(initialExePath);
-  const [titleOverride, setTitleOverride] = useState("");
   const [probe, setProbe] = useState<ProbeResult | undefined>();
   const [probing, setProbing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [searchProvider, setSearchProvider] = useState<"steam" | "igdb">("steam");
+  const [shownCandidates, setShownCandidates] = useState<IdentifyCandidateLite[]>(() => {
+    if (initialIssue?.reason === "ambiguous_match" && Array.isArray(initialIssue.detail))
+      return initialIssue.detail as IdentifyCandidateLite[];
+    return [];
+  });
+  const [selectedMatch, setSelectedMatch] = useState<IdentifyCandidateLite | null>(() => {
+    if (initialIssue?.reason === "ambiguous_match" && Array.isArray(initialIssue.detail)) {
+      const cands = initialIssue.detail as IdentifyCandidateLite[];
+      return cands[0] ?? null;
+    }
+    return null;
+  });
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<{ steam: IdentifyCandidateLite[]; igdb: IdentifyCandidateLite[] }>({ steam: [], igdb: [] });
   const [searching, setSearching] = useState(false);
+  const [titleOverride, setTitleOverride] = useState("");
+  const [chosenExe, setChosenExe] = useState<string | undefined>(initialExePath);
+  const [submitting, setSubmitting] = useState(false);
 
   const probeRunRef = useRef(0);
-  const lastProbeKeyRef = useRef<string>("");
+  const hasInitialCandidatesRef = useRef(
+    initialIssue?.reason === "ambiguous_match" &&
+    Array.isArray(initialIssue.detail) &&
+    (initialIssue.detail as unknown[]).length > 0
+  );
+  const autoSearchedRef = useRef(false);
   const onErrorRef = useRef(onError);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
   useEffect(() => {
-    if (step !== "review") return;
+    if (phase !== "review") return;
     if (!folderPath && !exePath) return;
-    const key = `${folderPath ?? ""} ${exePath ?? ""}`;
-    if (key === lastProbeKeyRef.current) return;
-    lastProbeKeyRef.current = key;
     const run = ++probeRunRef.current;
     setProbing(true);
     setProbe(undefined);
     void window.hynite.local
       .probe({ folderPath, executablePath: exePath })
       .then((result) => {
-        if (probeRunRef.current === run) setProbe(result);
-      })
-      .catch((error) => {
-        if (probeRunRef.current === run) {
-          onErrorRef.current(error instanceof Error ? error.message : "Probe failed.");
+        if (probeRunRef.current !== run) return;
+        setProbe(result);
+        setChosenExe(result.chosenExe || exePath);
+        if (!searchQuery) setSearchQuery(result.folderName);
+        if (!hasInitialCandidatesRef.current) {
+          if (result.identification.kind === "match") {
+            const m = result.identification.match;
+            const c: IdentifyCandidateLite = { provider: m.provider, externalId: m.externalId, title: m.title };
+            setShownCandidates([c]);
+            setSelectedMatch(c);
+            // Fetch cover art for the matched game in background
+            void window.hynite.local.searchMetadata(m.title)
+              .then((r: { steam: IdentifyCandidateLite[]; igdb: IdentifyCandidateLite[] }) => {
+                const hit = [...r.steam, ...r.igdb].find(
+                  (x) => x.provider === m.provider && x.externalId === m.externalId
+                );
+                if (hit?.coverUrl) {
+                  setShownCandidates([hit]);
+                  setSelectedMatch((prev) => (prev?.externalId === hit.externalId ? hit : prev));
+                }
+              })
+              .catch(() => {});
+          } else if (result.identification.kind === "ambiguous") {
+            setShownCandidates(result.identification.candidates);
+            setSelectedMatch(result.identification.candidates[0] ?? null);
+          }
         }
+      })
+      .catch((err) => {
+        if (probeRunRef.current === run) onErrorRef.current(err instanceof Error ? err.message : "Probe failed.");
       })
       .finally(() => {
         if (probeRunRef.current === run) setProbing(false);
       });
-  }, [step, folderPath, exePath]);
+  }, [phase, folderPath, exePath]);
 
-  // Pre-fill search query when entering search step.
+  // Auto-search once for unmatched games
   useEffect(() => {
-    if (step !== "search") return;
-    if (searchQuery) return;
-    const initial = probe?.folderName ?? titleOverride;
-    if (initial) setSearchQuery(initial);
-  }, [step, probe?.folderName, titleOverride, searchQuery]);
-
-  // Run search on query change (debounced).
-  useEffect(() => {
-    if (step !== "search") return;
-    const trimmed = searchQuery.trim();
-    if (trimmed.length < 2) {
-      setSearchResults({ steam: [], igdb: [] });
-      return;
-    }
+    if (!probe || autoSearchedRef.current) return;
+    if (probe.identification.kind !== "unmatched") return;
+    autoSearchedRef.current = true;
+    const q = probe.folderName;
+    if (q.length < 2) return;
+    setSearchQuery(q);
     setSearching(true);
-    const handle = setTimeout(() => {
-      void window.hynite.local
-        .searchMetadata(trimmed)
-        .then((results) => setSearchResults(results))
-        .catch(() => setSearchResults({ steam: [], igdb: [] }))
-        .finally(() => setSearching(false));
-    }, 300);
-    return () => clearTimeout(handle);
-  }, [step, searchQuery]);
+    void window.hynite.local
+      .searchMetadata(q)
+      .then((results: { steam: IdentifyCandidateLite[]; igdb: IdentifyCandidateLite[] }) => {
+        const merged = [...results.steam, ...results.igdb];
+        setShownCandidates(merged);
+        if (merged.length > 0) setSelectedMatch(merged[0] ?? null);
+      })
+      .catch(() => {})
+      .finally(() => setSearching(false));
+  }, [probe]);
+
+  function runSearch() {
+    const q = searchQuery.trim();
+    if (q.length < 2) return;
+    setSearching(true);
+    void window.hynite.local
+      .searchMetadata(q)
+      .then((results: { steam: IdentifyCandidateLite[]; igdb: IdentifyCandidateLite[] }) => {
+        setShownCandidates([...results.steam, ...results.igdb]);
+      })
+      .catch(() => setShownCandidates([]))
+      .finally(() => setSearching(false));
+  }
 
   async function pickFolder() {
     const path = await window.hynite.dialog.pickFolder({ title: "Pick the game's install folder" });
-    if (path) {
-      setFolderPath(path);
-      setExePath(undefined);
-      setStep("review");
-    }
+    if (!path) return;
+    setFolderPath(path);
+    setExePath(undefined);
+    setChosenExe(undefined);
+    setShownCandidates([]);
+    setSelectedMatch(null);
+    setSearchQuery("");
+    autoSearchedRef.current = false;
+    hasInitialCandidatesRef.current = false;
+    setPhase("review");
   }
+
   async function pickExe() {
-    const path = await window.hynite.dialog.pickFile({ title: "Pick the game executable", filters: [
+    const path = await window.hynite.dialog.pickFile({
+      title: "Pick the game executable",
+      filters: [
         { name: "Game launchers", extensions: ["exe", "bat", "cmd", "lnk", "url", "com"] },
         { name: "All files", extensions: ["*"] }
-      ] });
-    if (path) {
-      setExePath(path);
-      setFolderPath(undefined);
-      setStep("review");
-    }
+      ]
+    });
+    if (!path) return;
+    setExePath(path);
+    setFolderPath(undefined);
+    setChosenExe(path);
+    setShownCandidates([]);
+    setSelectedMatch(null);
+    setSearchQuery("");
+    autoSearchedRef.current = false;
+    hasInitialCandidatesRef.current = false;
+    setPhase("review");
   }
-  async function chooseDifferentExe() {
+
+  async function browseExe() {
     const path = await window.hynite.dialog.pickFile({
       title: "Pick the launch executable",
       defaultPath: probe?.folderPath,
@@ -816,18 +856,19 @@ function AddGameModal({
         { name: "All files", extensions: ["*"] }
       ]
     });
-    if (path) setExePath(path);
+    if (path) setChosenExe(path);
   }
 
-  async function commit(match?: { provider: "steam" | "igdb"; externalId: string; title: string }) {
-    if (!folderPath && !exePath) return;
+  async function commit() {
     setSubmitting(true);
     try {
       const result = await window.hynite.local.addSingle({
         folderPath,
-        executablePath: exePath,
+        executablePath: chosenExe,
         titleOverride: titleOverride.trim() || undefined,
-        match
+        match: selectedMatch
+          ? { provider: selectedMatch.provider, externalId: selectedMatch.externalId, title: selectedMatch.title }
+          : undefined
       });
       onAdded(result.title);
     } catch (error) {
@@ -837,18 +878,12 @@ function AddGameModal({
     }
   }
 
-  const autoMatch = probe?.identification.kind === "match" ? probe.identification.match : undefined;
-  const ambiguousCandidates =
-    probe?.identification.kind === "ambiguous"
-      ? probe.identification.candidates
-      : autoMatch
-        ? [{ provider: autoMatch.provider, externalId: autoMatch.externalId, title: autoMatch.title } as IdentifyCandidateLite]
-        : [];
-  const showSearchSuggestion = probe?.identification.kind === "unmatched" || probe?.identification.kind === "ambiguous";
+  const canAdd = Boolean(probe && chosenExe);
+  const displayInitials = (titleOverride || selectedMatch?.title || (probe?.folderName ?? "")).slice(0, 2);
 
   return (
-    <ModalShell onClose={onClose} title={step === "search" ? "Search for the game" : step === "review" ? "Review and confirm" : "Add a single game"}>
-      {step === "pick" ? (
+    <ModalShell title="Review game" onClose={onClose}>
+      {phase === "pick" ? (
         <div className="add-step-pick">
           <p className="muted-text">Pick a folder to auto-detect the launch exe, or pick a specific .exe directly. Hynite will identify the game and pull cover art and metadata.</p>
           <div className="add-pick-grid">
@@ -864,174 +899,125 @@ function AddGameModal({
             </button>
           </div>
         </div>
-      ) : step === "review" ? (
-        <div className="add-step-review">
-          {probing ? (
-            <div className="add-probe-loading">
-              <Loader2 size={18} className="spin" /> Inspecting folder…
-            </div>
-          ) : !probe ? null : (
-            <>
-              <div className="add-review-row">
-                <div className="add-review-label">Folder</div>
-                <div className="add-review-value">
-                  <code title={probe.folderPath}>{truncatePath(probe.folderPath)}</code>
-                </div>
-              </div>
-              <div className="add-review-row">
-                <div className="add-review-label">Launch exe</div>
-                <div className="add-review-value">
-                  <code title={probe.chosenExe}>{truncatePath(probe.chosenExe.replace(probe.folderPath, ""))}</code>
-                  <button className="row-link" onClick={() => void chooseDifferentExe()}>Change</button>
-                </div>
-              </div>
-              {probe.exeOptions.length > 1 ? (
-                <details className="add-exe-options">
-                  <summary>Other detected executables ({probe.exeOptions.length})</summary>
-                  <ul>
-                    {probe.exeOptions.slice(0, 8).map((option) => (
-                      <li key={option.path} className={option.chosen ? "chosen" : ""}>
-                        <button onClick={() => setExePath(option.path)}>
-                          <code>{truncatePath(option.path.replace(probe.folderPath, ""))}</code>
-                          {option.productName ? <em>· {option.productName}</em> : null}
-                          {option.chosen ? <span className="add-exe-chosen-badge">chosen</span> : null}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              ) : null}
-
-              <div className="add-review-divider" />
-
-              <div className="add-review-match">
-                <h3>Identified game</h3>
-                {autoMatch ? (
-                  <div className="add-review-match-card">
-                    <CheckCircle2 size={18} className="add-match-ok" />
-                    <div>
-                      <strong>{autoMatch.title}</strong>
-                      <span className="muted-text">{autoMatch.provider.toUpperCase()} · {autoMatch.externalId} · confidence {(autoMatch.confidence * 100).toFixed(0)}%</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="add-review-match-card warning">
-                    <AlertCircle size={18} />
-                    <div>
-                      <strong>{probe.identification.kind === "ambiguous" ? "Multiple matches" : "No automatic match"}</strong>
-                      <span className="muted-text">Pick from suggestions below or search manually.</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {ambiguousCandidates.length > 0 && probe.identification.kind === "ambiguous" ? (
-                <>
-                  <h4 className="add-suggestion-heading">Top suggestions</h4>
-                  <div className="add-candidate-grid">
-                    {ambiguousCandidates.slice(0, 6).map((candidate) => (
-                      <CandidateCard
-                        key={`${candidate.provider}:${candidate.externalId}`}
-                        candidate={candidate}
-                        onPick={() => void commit({ provider: candidate.provider, externalId: candidate.externalId, title: candidate.title })}
-                      />
-                    ))}
-                  </div>
-                </>
-              ) : null}
-
-              {showSearchSuggestion ? (
-                <button className="add-search-link" onClick={() => setStep("search")}>
-                  <Search size={14} /> Search manually instead
-                </button>
-              ) : null}
-
-              <label className="add-field title-field">
-                <span>Title override <em className="muted-text">(optional)</em></span>
-                <input type="text" value={titleOverride} onChange={(event) => setTitleOverride(event.target.value)} placeholder={autoMatch?.title ?? probe.folderName} />
-              </label>
-            </>
-          )}
-
-          <div className="modal-actions">
-            <button className="secondary-action" onClick={() => setStep("pick")}>
-              <ArrowLeft size={13} /> Back
-            </button>
-            <div className="modal-actions-right">
-              <button className="secondary-action" onClick={() => setStep("search")}>
-                <Search size={13} /> Search manually
-              </button>
-              <button
-                className="primary-action"
-                disabled={!probe || submitting}
-                onClick={() =>
-                  void commit(autoMatch ? { provider: autoMatch.provider, externalId: autoMatch.externalId, title: autoMatch.title } : undefined)
-                }
-              >
-                {submitting ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
-                {submitting ? "Adding…" : autoMatch ? "Confirm & add" : "Add without metadata"}
-              </button>
-            </div>
-          </div>
-        </div>
       ) : (
-        <div className="add-step-search">
-          <div className="add-search-header">
-            <div className="add-search-providers">
-              <button className={searchProvider === "steam" ? "active" : ""} onClick={() => setSearchProvider("steam")}>Steam</button>
-              <button
-                className={searchProvider === "igdb" ? "active" : ""}
-                onClick={() => setSearchProvider("igdb")}
-                disabled={!hasIgdb}
-                title={hasIgdb ? "" : "Add IGDB credentials in the page settings to search IGDB"}
-              >
-                IGDB {!hasIgdb ? "(not connected)" : ""}
-              </button>
-            </div>
+        <div className="add-step-review">
+          <div className="add-review-search-row">
             <div className="add-search-input-wrap">
               <Search size={14} />
               <input
                 type="text"
                 value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search for a game…"
-                autoFocus
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+                placeholder="Search for this game…"
               />
-              {searching ? <Loader2 size={14} className="spin" /> : null}
+              {searching && <Loader2 size={14} className="spin" />}
             </div>
+            <button
+              className="secondary-action"
+              onClick={runSearch}
+              disabled={searching || searchQuery.trim().length < 2}
+            >
+              Search
+            </button>
           </div>
 
-          <div className="add-candidate-grid">
-            {(searchProvider === "steam" ? searchResults.steam : searchResults.igdb).map((candidate) => (
-              <CandidateCard
-                key={`${candidate.provider}:${candidate.externalId}`}
-                candidate={candidate}
-                onPick={() => void commit({ provider: candidate.provider, externalId: candidate.externalId, title: candidate.title })}
-                onOpenInfo={() => {
-                  const url =
-                    candidate.provider === "steam"
-                      ? `https://store.steampowered.com/app/${candidate.externalId}/`
-                      : `https://www.igdb.com/games/${candidate.externalId}`;
-                  void window.hynite.native.openExternal(url);
-                }}
-              />
-            ))}
-            {!searching && (searchProvider === "steam" ? searchResults.steam : searchResults.igdb).length === 0 && searchQuery.length >= 2 ? (
-              <div className="add-search-empty">No results.</div>
-            ) : null}
-          </div>
+          {shownCandidates.length > 0 ? (
+            <div className="add-candidate-grid">
+              {shownCandidates.map((c) => {
+                const isSelected = selectedMatch?.provider === c.provider && selectedMatch?.externalId === c.externalId;
+                return (
+                  <CandidateCard
+                    key={`${c.provider}:${c.externalId}`}
+                    candidate={c}
+                    selected={isSelected}
+                    onPick={() => setSelectedMatch(isSelected ? null : c)}
+                    onOpenInfo={() => {
+                      const url = c.provider === "steam"
+                        ? `https://store.steampowered.com/app/${c.externalId}/`
+                        : `https://www.igdb.com/games/${c.externalId}`;
+                      void window.hynite.native.openExternal(url);
+                    }}
+                  />
+                );
+              })}
+            </div>
+          ) : !searching && searchQuery.trim().length >= 2 && probe ? (
+            <div className="add-search-empty">No results for "{searchQuery}".</div>
+          ) : null}
+
+          <div className="add-review-divider" />
+
+          {probing ? (
+            <div className="add-probe-loading">
+              <Loader2 size={18} className="spin" /> Inspecting folder…
+            </div>
+          ) : probe ? (
+            <div className="add-review-details">
+              <div className="add-review-cover">
+                {selectedMatch?.coverUrl
+                  ? <img src={selectedMatch.coverUrl} alt="" />
+                  : <span>{displayInitials}</span>
+                }
+              </div>
+              <div className="add-review-fields">
+                <div className="add-review-field">
+                  <span className="add-review-label">Title</span>
+                  <input
+                    className="add-review-field-input"
+                    type="text"
+                    value={titleOverride}
+                    onChange={(e) => setTitleOverride(e.target.value)}
+                    placeholder={selectedMatch?.title ?? probe.folderName}
+                  />
+                </div>
+                <div className="add-review-field">
+                  <span className="add-review-label">Launch exe</span>
+                  <div className="add-review-exe-row">
+                    {probe.exeOptions.length > 1 ? (
+                      <select
+                        className="add-review-field-select"
+                        value={chosenExe ?? probe.chosenExe}
+                        onChange={(e) => setChosenExe(e.target.value)}
+                      >
+                        {probe.exeOptions.map((opt) => (
+                          <option key={opt.path} value={opt.path}>
+                            {opt.path.replace(probe.folderPath, "").replace(/^[/\\]+/, "")}
+                            {opt.productName ? ` — ${opt.productName}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    ) : chosenExe ? (
+                      <code className="add-review-field-code" title={chosenExe}>
+                        {truncatePath(chosenExe.replace(probe.folderPath, "").replace(/^[/\\]+/, "") || chosenExe)}
+                      </code>
+                    ) : (
+                      <span className="add-review-no-exe">No executable found</span>
+                    )}
+                    <button className="row-link" onClick={() => void browseExe()}>Browse…</button>
+                  </div>
+                </div>
+                <div className="add-review-field">
+                  <span className="add-review-label">Folder</span>
+                  <code className="add-review-field-code" title={probe.folderPath}>
+                    {truncatePath(probe.folderPath)}
+                  </code>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="modal-actions">
-            <button className="secondary-action" onClick={() => setStep("review")}>
-              <ArrowLeft size={13} /> Back to review
+            <button className="secondary-action" onClick={() => setPhase("pick")}>
+              <ArrowLeft size={13} /> Back
             </button>
             <button
               className="primary-action"
-              disabled={submitting}
+              disabled={!canAdd || submitting}
               onClick={() => void commit()}
             >
               {submitting ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
-              Add without match
+              {submitting ? "Adding…" : selectedMatch ? "Add to Library" : "Add without match"}
             </button>
           </div>
         </div>
@@ -1042,23 +1028,31 @@ function AddGameModal({
 
 function CandidateCard({
   candidate,
+  selected,
   onPick,
   onOpenInfo
 }: {
   candidate: IdentifyCandidateLite;
+  selected?: boolean;
   onPick: () => void;
   onOpenInfo?: () => void;
 }) {
   return (
-    <div className="add-candidate-card" title={candidate.title}>
+    <div className={`add-candidate-card${selected ? " selected" : ""}`} title={candidate.title}>
       <button className="add-candidate-pick" onClick={onPick}>
         <div className="add-candidate-cover">
-          {candidate.coverUrl ? <img src={candidate.coverUrl} alt="" /> : <span>{candidate.title.slice(0, 2)}</span>}
+          {candidate.coverUrl ? <img src={candidate.coverUrl} alt="" /> : <span className="add-candidate-fallback">{candidate.title.slice(0, 2)}</span>}
+          {selected && (
+            <div className="add-candidate-selected-check">
+              <CheckCircle2 size={16} />
+            </div>
+          )}
         </div>
         <div className="add-candidate-text">
           <strong>{candidate.title}</strong>
           <span className="muted-text">
-            {candidate.provider.toUpperCase()}{candidate.releaseDate ? ` · ${candidate.releaseDate.slice(0, 4)}` : ""}
+            {candidate.developer ?? candidate.provider.toUpperCase()}
+            {candidate.releaseDate ? ` · ${candidate.releaseDate.slice(0, 4)}` : ""}
           </span>
         </div>
       </button>

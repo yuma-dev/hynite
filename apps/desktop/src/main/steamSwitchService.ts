@@ -4,9 +4,12 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { SteamActiveUser } from "@hynite/core";
 import {
+  computeUpdatedSteamUserChooserConfig,
   computeUpdatedLoginUsers,
   findSteamRoot,
+  readSteamConfigFile,
   readLoginUsersFile,
+  writeSteamConfig,
   writeLoginUsers
 } from "@hynite/importers";
 
@@ -138,6 +141,12 @@ export async function switchSteamAccount(input: SwitchSteamAccountInput): Promis
 
   const updated = computeUpdatedLoginUsers(file.root, input.steamId);
   await writeLoginUsers(file.path, updated);
+
+  const steamConfig = await readSteamConfigFile(root);
+  if (steamConfig) {
+    await writeSteamConfig(steamConfig.path, computeUpdatedSteamUserChooserConfig(steamConfig.root, false));
+  }
+
   await regWriteString("AutoLoginUser", input.accountName);
   await regWriteDword("RememberPassword", 1);
 

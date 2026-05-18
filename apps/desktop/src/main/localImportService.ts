@@ -589,9 +589,12 @@ export class LocalImportService {
       throw new Error("addSingle requires either folderPath or executablePath.");
     }
 
-    const candidate = args.executablePath
-      ? await buildSingleCandidateForFile(args.executablePath)
-      : await buildSingleCandidate(folderPath);
+    // Use folder-based candidate when folderPath is available so the candidateId
+    // matches what the scanner stored (hashFolderPath(folder)), keeping issue clearing correct.
+    // When only an executablePath was provided (user picked a bare .exe), fall back to file-based.
+    const candidate = args.folderPath
+      ? await buildSingleCandidate(args.folderPath)
+      : await buildSingleCandidateForFile(args.executablePath!);
     if (!candidate) {
       throw new Error(`No executables found under ${folderPath}.`);
     }
