@@ -14,6 +14,7 @@ function settings(patch: Partial<AppSettings> = {}): AppSettings {
     backgroundUpdatesEnabled: true,
     backgroundWorkload: "balanced",
     backgroundPlaytimeTracking: true,
+    crashReportingEnabled: true,
     cardsPerRow: 6,
     launchAccountPreferences: {},
     gameGroups: [],

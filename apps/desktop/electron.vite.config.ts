@@ -16,6 +16,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: { alias },
     build: {
+      sourcemap: true,
       lib: {
         entry: fileURLToPath(new URL("src/main/index.ts", import.meta.url))
       },
@@ -30,6 +31,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: { alias },
     build: {
+      sourcemap: true,
       lib: {
         entry: fileURLToPath(new URL("src/preload/index.ts", import.meta.url))
       },
@@ -46,6 +48,7 @@ export default defineConfig({
     publicDir: fileURLToPath(new URL("../../assets/icons", import.meta.url)),
     resolve: { alias },
     build: {
+      sourcemap: true,
       rollupOptions: {
         input: {
           main: fileURLToPath(new URL("index.html", import.meta.url)),

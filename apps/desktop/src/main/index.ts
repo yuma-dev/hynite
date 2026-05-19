@@ -35,6 +35,10 @@ import {
   pairSteamAccount,
   refreshSteamAccessToken
 } from "./steamAuthService";
+import { initMainObservability, setObservabilityEnabled } from "./observability";
+
+// Initialize crash reporting before any app logic so early failures are captured.
+initMainObservability();
 
 let mainWindow: Electron.BrowserWindow | undefined;
 let splashWindow: Electron.BrowserWindow | undefined;
@@ -2415,6 +2419,7 @@ async function ensureTray(): Promise<void> {
 }
 
 async function onSettingsChanged(settings: AppSettings): Promise<AppSettings> {
+  setObservabilityEnabled(settings.crashReportingEnabled !== false);
   applyLoginItemSettings(settings);
   applySpotlightSettings(settings);
   rebuildTrayMenu(settings);
@@ -4178,6 +4183,12 @@ app.whenReady().then(async () => {
     : join(__dirname, "../../assets/audio");
   settingsService = new SettingsService(join(userData, "settings.json"), audioAssetsRoot);
   startSettingsBackupTimer();
+  // Sentry inits enabled at process start (to catch early crashes); honor the
+  // user's opt-out as soon as settings load. Brief startup window may still report.
+  void settingsService
+    .get()
+    .then((settings) => setObservabilityEnabled(settings.crashReportingEnabled !== false))
+    .catch(() => undefined);
   diagnosticLogService = new DiagnosticLogService(transientUserDataPath(userData, "metadata-diagnostics.ndjson"));
   homeService = new HomeService(transientUserDataPath(userData, "home-cache.json"), diagnosticLogService, (model) => {
     if (!mainWindow || mainWindow.isDestroyed()) {

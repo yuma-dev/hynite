@@ -726,6 +726,8 @@ export type AppSettings = {
   backgroundWorkload: BackgroundWorkload;
   /** Tracks known local game executables while Hynite is in the background. */
   backgroundPlaytimeTracking: boolean;
+  /** Sends scrubbed crash/error reports to the self-hosted diagnostics server. */
+  crashReportingEnabled: boolean;
   /** Target number of game cards shown across Home rows and Library grid at desktop widths. */
   cardsPerRow?: number;
   libraryView?: LibraryView;

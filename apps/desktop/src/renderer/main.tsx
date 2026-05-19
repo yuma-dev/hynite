@@ -1,9 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import { ErrorBoundary, initRendererObservability } from "./observability";
 import { profileStartup, startRendererHeartbeat } from "./startupProfile";
 import "./styles.css";
 
+initRendererObservability();
 startRendererHeartbeat();
 profileStartup("renderer:module", "Renderer entry evaluated");
 window.addEventListener("error", (event) => {
@@ -22,7 +24,9 @@ window.addEventListener("unhandledrejection", (event) => {
 profileStartup("react:render:start", "Mounting React root");
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 );
 profileStartup("react:render:queued", "React root render queued");

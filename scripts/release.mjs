@@ -3,12 +3,21 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { resolve, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
 import { generateChangelog } from './changelog.mjs'
 
 if (!process.env.GH_TOKEN) {
   console.error('Error: GH_TOKEN is not set.')
   console.error('Create a GitHub PAT with Contents: Read+Write and run:')
   console.error('  [System.Environment]::SetEnvironmentVariable("GH_TOKEN", "your_token", "User")')
+  process.exit(1)
+}
+
+if (!process.env.SENTRY_AUTH_TOKEN) {
+  console.error('Error: SENTRY_AUTH_TOKEN is not set.')
+  console.error('Every release must upload source maps to GlitchTip. Set it and')
+  console.error('open a fresh terminal:')
+  console.error('  [System.Environment]::SetEnvironmentVariable("SENTRY_AUTH_TOKEN", "your_token", "User")')
   process.exit(1)
 }
 
@@ -38,6 +47,35 @@ execSync('dotnet publish native/Hynite.NativeBridge/Hynite.NativeBridge.csproj -
   stdio: 'inherit',
   cwd: root,
 })
+
+// Upload source maps to the self-hosted GlitchTip for server-side
+// symbolication. They also ship in the installer — harmless for an
+// open-source app, and makes DevTools stack traces readable too.
+// Fatal on failure: every release must have usable stack traces.
+console.log('\nUploading source maps to GlitchTip...')
+const sentryRelease = `hynite@${version}`
+try {
+  const SentryCli = createRequire(import.meta.url)('@sentry/cli')
+  const cli = new SentryCli(null, {
+    url: 'https://glitchtip.yuma-homeserver.online/',
+    authToken: process.env.SENTRY_AUTH_TOKEN,
+    org: 'yuma',
+    project: 'electron-app',
+  })
+  await cli.releases.new(sentryRelease)
+  await cli.releases.uploadSourceMaps(sentryRelease, {
+    include: [join(root, 'out')],
+    urlPrefix: '~/',
+    rewrite: true,
+    validate: true,
+  })
+  await cli.releases.finalize(sentryRelease)
+  console.log(`Source maps uploaded for ${sentryRelease}.`)
+} catch (error) {
+  console.error(`Error: source map upload failed — ${error?.message ?? error}`)
+  console.error('Release aborted. Check that GlitchTip is reachable, then retry.')
+  process.exit(1)
+}
 
 // Build installer and push to GitHub Releases
 console.log('\nBuilding installer and publishing...')

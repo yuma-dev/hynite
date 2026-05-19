@@ -5,6 +5,8 @@ declare global {
   interface Window {
     hynite: HyniteApi;
     hyniteDebugSplash?: (durationMs?: number) => void;
+    /** TEMPORARY GlitchTip pipeline test — remove before next release. */
+    __hyniteTestCrash?: (mode?: "captured" | "throw") => string | void;
     __hyniteSettings?: {
       list(): Promise<SettingsBackupInfo[]>;
       restore(id: string): Promise<AppSettings>;

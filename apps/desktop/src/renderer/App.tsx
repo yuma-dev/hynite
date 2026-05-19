@@ -4057,7 +4057,7 @@ function SettingsScreen({
     setSettings(next);
   }
 
-  async function updateBackgroundSetting(patch: Partial<Pick<AppSettings, "startWithWindows" | "closeToTray" | "backgroundUpdatesEnabled" | "backgroundWorkload" | "backgroundPlaytimeTracking">>) {
+  async function updateBackgroundSetting(patch: Partial<Pick<AppSettings, "startWithWindows" | "closeToTray" | "backgroundUpdatesEnabled" | "backgroundWorkload" | "backgroundPlaytimeTracking" | "crashReportingEnabled">>) {
     const next = await window.hynite.settings.update(patch);
     setSettings(next);
   }
@@ -5020,6 +5020,18 @@ function SettingsScreen({
                   <span>
                     <strong>Track local game playtime in tray</strong>
                     <em>Watches exact known local executable paths without loading the window.</em>
+                  </span>
+                </label>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings?.crashReportingEnabled !== false}
+                    onChange={(event) => void updateBackgroundSetting({ crashReportingEnabled: event.currentTarget.checked })}
+                  />
+                  <span className="settings-toggle-control" aria-hidden="true" />
+                  <span>
+                    <strong>Send crash reports</strong>
+                    <em>Sends scrubbed error reports (no usernames, tokens, or file owners) to Hynite&apos;s private diagnostics server to help fix bugs.</em>
                   </span>
                 </label>
                 <label className="music-number-row">

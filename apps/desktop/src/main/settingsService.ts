@@ -101,6 +101,7 @@ const defaultSettings: AppSettings = {
   backgroundUpdatesEnabled: true,
   backgroundWorkload: "balanced",
   backgroundPlaytimeTracking: true,
+  crashReportingEnabled: true,
   cardsPerRow: 6,
   libraryView: defaultLibraryView,
   wishlistView: defaultWishlistView,
@@ -476,6 +477,7 @@ function migrate(raw: LegacySettings, bundledAudio: BundledAudioDefaults): AppSe
     backgroundUpdatesEnabled: raw.backgroundUpdatesEnabled !== false,
     backgroundWorkload: sanitizeBackgroundWorkload(raw.backgroundWorkload),
     backgroundPlaytimeTracking: raw.backgroundPlaytimeTracking !== false,
+    crashReportingEnabled: raw.crashReportingEnabled !== false,
     cardsPerRow: sanitizeCardsPerRow(raw.cardsPerRow),
     wishlistView: sanitizeWishlistView(raw.wishlistView),
     gameGroups: sanitizeGameGroups(raw.gameGroups),
@@ -783,6 +785,7 @@ export class SettingsService {
     next.backgroundUpdatesEnabled = next.backgroundUpdatesEnabled !== false;
     next.backgroundWorkload = sanitizeBackgroundWorkload(next.backgroundWorkload);
     next.backgroundPlaytimeTracking = next.backgroundPlaytimeTracking !== false;
+    next.crashReportingEnabled = next.crashReportingEnabled !== false;
     next.cardsPerRow = sanitizeCardsPerRow(next.cardsPerRow);
     next.wishlistView = sanitizeWishlistView(next.wishlistView);
     next.gameGroups = sanitizeGameGroups(next.gameGroups);
