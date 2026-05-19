@@ -36,6 +36,7 @@ import {
   refreshSteamAccessToken
 } from "./steamAuthService";
 import { initMainObservability, setObservabilityEnabled } from "./observability";
+import { acceleratorFromHotkeyInput } from "../shared/hotkey";
 
 // Initialize crash reporting before any app logic so early failures are captured.
 initMainObservability();
@@ -85,6 +86,8 @@ let spotlightState: SpotlightState = { enabled: true, hotkey: "Alt+Space", regis
 let registeredSpotlightHotkey: string | undefined;
 let pendingSpotlightAction: SpotlightPendingAction | undefined;
 let spotlightLaunchHandoffActive = false;
+let spotlightHotkeyCaptureSenderId: number | undefined;
+let spotlightHotkeyCaptureCompleted = false;
 
 function resolveWindowIconPath(): string {
   const devIconPath = join(__dirname, "../../assets/icons/app.ico");
@@ -1924,6 +1927,58 @@ function startBackgroundControllerPolling(): void {
   (intervalId as NodeJS.Timeout).unref?.();
 }
 
+function startSpotlightHotkeyCapture(sender: Electron.WebContents): boolean {
+  if (!mainWindow || mainWindow.isDestroyed() || sender.id !== mainWindow.webContents.id) {
+    return false;
+  }
+  spotlightHotkeyCaptureSenderId = sender.id;
+  spotlightHotkeyCaptureCompleted = false;
+  return true;
+}
+
+function stopSpotlightHotkeyCapture(sender?: Electron.WebContents): void {
+  if (sender && spotlightHotkeyCaptureSenderId !== sender.id) {
+    return;
+  }
+  spotlightHotkeyCaptureSenderId = undefined;
+  spotlightHotkeyCaptureCompleted = false;
+}
+
+function handleSpotlightHotkeyCaptureInput(sender: Electron.WebContents, event: Electron.Event, input: Electron.Input): void {
+  if (spotlightHotkeyCaptureSenderId !== sender.id) {
+    return;
+  }
+  event.preventDefault();
+
+  if (input.type === "keyUp") {
+    if (spotlightHotkeyCaptureCompleted && !input.control && !input.alt && !input.shift && !input.meta) {
+      stopSpotlightHotkeyCapture(sender);
+    }
+    return;
+  }
+  if (input.type !== "keyDown" || input.isAutoRepeat || spotlightHotkeyCaptureCompleted) {
+    return;
+  }
+  if (input.key === "Escape") {
+    spotlightHotkeyCaptureCompleted = true;
+    sender.send("spotlight:hotkey-capture-result", undefined);
+    return;
+  }
+  const accelerator = acceleratorFromHotkeyInput({
+    key: input.key,
+    code: input.code,
+    control: input.control,
+    alt: input.alt,
+    shift: input.shift,
+    meta: input.meta
+  });
+  if (!accelerator) {
+    return;
+  }
+  spotlightHotkeyCaptureCompleted = true;
+  sender.send("spotlight:hotkey-capture-result", accelerator);
+}
+
 function createWindow(windowState: WindowState | undefined, options: { showWhenReady?: boolean; focusWhenReady?: boolean; onboarding?: boolean } = {}): void {
   const sizing = options.onboarding ? ONBOARDING_WINDOW_SIZING : MAIN_WINDOW_SIZING;
   const restoredBounds = resolveWindowBounds(windowState, sizing, !options.onboarding);
@@ -1969,6 +2024,11 @@ function createWindow(windowState: WindowState | undefined, options: { showWhenR
 
   mainWindow.webContents.on("dom-ready", () => {
     profile("renderer:dom-ready", "Renderer DOM ready");
+  });
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      handleSpotlightHotkeyCaptureInput(mainWindow.webContents, event, input);
+    }
   });
   mainWindow.webContents.on("did-finish-load", () => {
     profile("renderer:did-finish-load", "Renderer finished loading");
@@ -2042,6 +2102,7 @@ function createWindow(windowState: WindowState | undefined, options: { showWhenR
   });
   mainWindow.on("closed", () => {
     profile("window:closed", "BrowserWindow closed");
+    stopSpotlightHotkeyCapture();
     mainWindow = undefined;
   });
 
@@ -3942,6 +4003,10 @@ function registerIpc(): void {
   handleIpc("spotlight:hide", () => hideSpotlightWindow());
   handleIpc("spotlight:set-launch-handoff-active", (_event, active: boolean) => {
     spotlightLaunchHandoffActive = active === true;
+  });
+  handleIpc("spotlight:hotkey-capture-start", (event) => startSpotlightHotkeyCapture(event.sender));
+  handleIpc("spotlight:hotkey-capture-stop", (event) => {
+    stopSpotlightHotkeyCapture(event.sender);
   });
   handleIpc("spotlight:consume-pending-action", () => {
     const action = pendingSpotlightAction;

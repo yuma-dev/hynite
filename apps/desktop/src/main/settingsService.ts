@@ -4,6 +4,7 @@ import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promis
 import { basename, dirname, extname, join } from "node:path";
 import { controllerActionIds, defaultLibraryView, defaultWishlistView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SpotlightSettings, type SteamAccountSettings, type WindowBounds, type WindowState, type WishlistView } from "@hynite/core";
 import { readAudioMetadata } from "./audioMetadata";
+import { normalizeAcceleratorText } from "../shared/hotkey";
 
 export const DEFAULT_LOCAL_EXCLUDE_PATTERNS = [
   "^_redist$",
@@ -414,11 +415,10 @@ function sanitizeControllerSettings(value: unknown): ControllerSettings {
 
 function sanitizeSpotlightSettings(value: unknown): SpotlightSettings {
   const candidate = value && typeof value === "object" ? value as Partial<SpotlightSettings> : {};
-  const hotkey = typeof candidate.hotkey === "string" ? candidate.hotkey.trim().replace(/\s+/g, "") : "";
-  const validHotkey = /^[A-Za-z0-9+]+$/.test(hotkey) && hotkey.includes("+");
+  const hotkey = normalizeAcceleratorText(candidate.hotkey);
   return {
     enabled: candidate.enabled !== false,
-    hotkey: validHotkey ? hotkey : DEFAULT_SPOTLIGHT_SETTINGS.hotkey
+    hotkey: hotkey ?? DEFAULT_SPOTLIGHT_SETTINGS.hotkey
   };
 }
 

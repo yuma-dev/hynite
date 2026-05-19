@@ -7763,7 +7763,7 @@ dd {
 .settings-hotkey-row {
   min-height: 42px;
   display: grid;
-  grid-template-columns: 92px minmax(120px, 220px) minmax(0, 1fr);
+  grid-template-columns: 92px minmax(120px, 220px) 34px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   color: var(--text-2);
@@ -7786,6 +7786,30 @@ dd {
   outline: 0;
   border-color: rgba(255, 255, 255, 0.32);
   background: rgba(255, 255, 255, 0.1);
+}
+
+.hotkey-reset {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+}
+
+.hotkey-reset:hover:not(:disabled),
+.hotkey-reset:focus-visible {
+  outline: 0;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.hotkey-reset:disabled {
+  cursor: default;
+  opacity: 0.42;
 }
 
 .hotkey-status {

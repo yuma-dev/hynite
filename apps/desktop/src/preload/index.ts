@@ -216,6 +216,13 @@ const api = {
     hide: (): Promise<void> => ipcRenderer.invoke("spotlight:hide"),
     setLaunchHandoffActive: (active: boolean): Promise<void> => ipcRenderer.invoke("spotlight:set-launch-handoff-active", active),
     consumePendingAction: (): Promise<SpotlightPendingAction | undefined> => ipcRenderer.invoke("spotlight:consume-pending-action"),
+    startHotkeyCapture: (): Promise<boolean> => ipcRenderer.invoke("spotlight:hotkey-capture-start"),
+    stopHotkeyCapture: (): Promise<void> => ipcRenderer.invoke("spotlight:hotkey-capture-stop"),
+    onHotkeyCaptureResult: (callback: (accelerator: string | undefined) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, accelerator: string | undefined) => callback(accelerator);
+      ipcRenderer.on("spotlight:hotkey-capture-result", listener);
+      return () => ipcRenderer.removeListener("spotlight:hotkey-capture-result", listener);
+    },
     onShow: (callback: () => void): (() => void) => {
       const listener = () => callback();
       ipcRenderer.on("spotlight:show", listener);

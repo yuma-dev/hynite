@@ -148,6 +148,18 @@ describe("SettingsService", () => {
       spotlight: { enabled: false, hotkey: "Ctrl+Alt+Space" }
     });
 
+    await expect(service.update({
+      spotlight: { enabled: true, hotkey: "Windows + Space" }
+    })).resolves.toMatchObject({
+      spotlight: { enabled: true, hotkey: "Super+Space" }
+    });
+
+    await expect(service.update({
+      spotlight: { enabled: true, hotkey: "Ctrl + Shift + ?" }
+    })).resolves.toMatchObject({
+      spotlight: { enabled: true, hotkey: "Ctrl+Shift+?" }
+    });
+
     writeFileSync(join(tempDir!, "settings.json"), JSON.stringify({
       cacheTtlHours: 9,
       spotlight: { enabled: true, hotkey: "   " }

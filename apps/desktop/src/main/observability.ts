@@ -41,18 +41,15 @@ export function initMainObservability(): void {
 
   const scrub = createScrubber(homeDir, username);
 
+  // Crash/error reporting only. Performance tracing is deliberately off — the
+  // built-in profiler (npm run dev:profile) is the optimization tool; a generic
+  // pageload transaction adds runtime cost without actionable signal.
   Sentry.init({
     dsn: SENTRY_DSN,
     release: sentryRelease(app.getVersion()),
     environment: sentryEnvironment(app.isPackaged),
     sendDefaultPii: false,
-    // Performance tracing on. Small self-hosted user base + no event quota, so
-    // sample everything; the dominant signal is the once-per-launch startup
-    // transaction. Lower this if runtime overhead ever shows up.
-    tracesSampleRate: 1,
-    beforeSend: scrub,
-    // Same scrubbing for performance transactions (paths/keys can appear in spans).
-    beforeSendTransaction: scrub
+    beforeSend: scrub
   });
 }
 

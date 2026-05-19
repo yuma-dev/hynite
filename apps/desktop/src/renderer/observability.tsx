@@ -3,7 +3,9 @@ import * as Sentry from "@sentry/electron/renderer";
 
 // Renderer events are forwarded to the main process, which owns the DSN,
 // release, environment and scrubbing. So renderer init is intentionally
-// minimal — no DSN/secrets live in renderer code.
+// minimal — no DSN/secrets live in renderer code. Performance tracing is
+// deliberately not enabled; the built-in profiler (npm run dev:profile) is
+// the optimization tool.
 let initialized = false;
 
 export function initRendererObservability(): void {

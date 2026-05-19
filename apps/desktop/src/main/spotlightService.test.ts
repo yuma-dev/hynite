@@ -99,4 +99,5 @@ describe("SpotlightService", () => {
       ownership: "family"
     });
   });
+
 });

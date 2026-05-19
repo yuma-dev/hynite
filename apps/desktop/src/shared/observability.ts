@@ -2,8 +2,6 @@
 // bundles can import it. DSNs are write-only ingestion keys (not secrets), so
 // embedding the self-hosted GlitchTip DSN in the client is standard and safe.
 
-import type { ErrorEvent, EventHint } from "@sentry/electron/main";
-
 export const SENTRY_DSN =
   "https://8c1c1dcc7edf43f7919ba20ca3d136e9@glitchtip.yuma-homeserver.online/1";
 
@@ -37,14 +35,15 @@ function isSensitiveKey(key: string): boolean {
 /**
  * Returns a Sentry `beforeSend` that strips the OS user's home directory and
  * username out of every string in the event, and redacts values under
- * sensitive-looking keys. Pure string ops — `homeDir`/`username` are supplied
- * by the main process (the renderer routes its events through main, so this
- * one hook scrubs both processes' events).
+ * sensitive-looking keys. Generic over the event shape (no @sentry type import
+ * needed in this Node-free shared module). Pure string ops — `homeDir`/
+ * `username` are supplied by the main process (the renderer routes its events
+ * through main, so this one hook scrubs both processes' events).
  */
 export function createScrubber(
   homeDir: string,
   username: string
-): (event: ErrorEvent, hint: EventHint) => ErrorEvent {
+): <E>(event: E) => E {
   const replacements: Array<[RegExp, string]> = [];
   if (homeDir) {
     replacements.push([escapeRegExp(homeDir), "<HOME>"]);
@@ -76,7 +75,7 @@ export function createScrubber(
     return value;
   };
 
-  return (event) => scrub(event, 0) as ErrorEvent;
+  return <E>(event: E): E => scrub(event, 0) as E;
 }
 
 function escapeRegExp(literal: string): RegExp {

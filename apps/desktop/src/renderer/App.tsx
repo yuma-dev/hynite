@@ -52,7 +52,7 @@ import {
   X
 } from "lucide-react";
 import { memo, Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
@@ -66,6 +66,7 @@ import { OnboardingExperience } from "./onboarding/OnboardingExperience";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
 import { bindingLabel, bindingPressed, controllerBindingOrder, CONTROLLER_ACTION_HELP, CONTROLLER_ACTION_LABELS, firstPressedBinding, normalizeControllerSettings, pressedButtonIndexes, readGamepadState } from "./controllerInput";
+import { acceleratorFromHotkeyInput } from "../shared/hotkey";
 import type { UpdaterStatus } from "../preload";
 import logo64Url from "../../../../assets/icons/logo-64.png?url";
 import logo128Url from "../../../../assets/icons/logo-128.png?url";
@@ -3903,6 +3904,21 @@ function SettingsScreen({
   }, [settings?.spotlight?.enabled, settings?.spotlight?.hotkey]);
 
   useEffect(() => {
+    if (!spotlightCapture) return;
+    const stopResultListener = window.hynite.spotlight.onHotkeyCaptureResult((accelerator) => {
+      setSpotlightCapture(false);
+      if (accelerator) {
+        void updateSpotlightSetting({ hotkey: accelerator });
+      }
+    });
+    void window.hynite.spotlight.startHotkeyCapture();
+    return () => {
+      stopResultListener();
+      void window.hynite.spotlight.stopHotkeyCapture();
+    };
+  }, [spotlightCapture]);
+
+  useEffect(() => {
     if (!controllerCapture) return;
     let raf = 0;
     const poll = () => {
@@ -4060,18 +4076,6 @@ function SettingsScreen({
   async function updateBackgroundSetting(patch: Partial<Pick<AppSettings, "startWithWindows" | "closeToTray" | "backgroundUpdatesEnabled" | "backgroundWorkload" | "backgroundPlaytimeTracking" | "crashReportingEnabled">>) {
     const next = await window.hynite.settings.update(patch);
     setSettings(next);
-  }
-
-  function acceleratorFromKeyboardEvent(event: ReactKeyboardEvent<HTMLButtonElement>): string | undefined {
-    const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
-    if (["Control", "Shift", "Alt", "Meta"].includes(key)) return undefined;
-    const parts: string[] = [];
-    if (event.ctrlKey) parts.push("Ctrl");
-    if (event.altKey) parts.push("Alt");
-    if (event.shiftKey) parts.push("Shift");
-    if (event.metaKey) parts.push("Super");
-    parts.push(key);
-    return parts.length > 1 ? parts.join("+") : undefined;
   }
 
   async function updateSpotlightSetting(patch: Partial<NonNullable<AppSettings["spotlight"]>>) {
@@ -5072,17 +5076,43 @@ function SettingsScreen({
                     onKeyDown={(event) => {
                       if (!spotlightCapture) return;
                       event.preventDefault();
+                      event.stopPropagation();
                       if (event.key === "Escape") {
                         setSpotlightCapture(false);
                         return;
                       }
-                      const accelerator = acceleratorFromKeyboardEvent(event);
+                      const accelerator = acceleratorFromHotkeyInput({
+                        key: event.key,
+                        code: event.code,
+                        ctrlKey: event.ctrlKey,
+                        altKey: event.altKey,
+                        shiftKey: event.shiftKey,
+                        metaKey: event.metaKey
+                      });
                       if (!accelerator) return;
                       setSpotlightCapture(false);
                       void updateSpotlightSetting({ hotkey: accelerator });
                     }}
+                    onKeyUp={(event) => {
+                      if (!spotlightCapture) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
                   >
                     {spotlightCapture ? "Press shortcut" : settings?.spotlight?.hotkey ?? "Alt+Space"}
+                  </button>
+                  <button
+                    type="button"
+                    className="hotkey-reset"
+                    title="Reset to default"
+                    aria-label="Reset Spotlight hotkey to default"
+                    disabled={(settings?.spotlight?.hotkey ?? "Alt+Space") === "Alt+Space"}
+                    onClick={() => {
+                      setSpotlightCapture(false);
+                      void updateSpotlightSetting({ hotkey: "Alt+Space" });
+                    }}
+                  >
+                    <RotateCcw size={14} />
                   </button>
                   <strong className={spotlightState?.registered ? "hotkey-status ready" : settings?.spotlight?.enabled === false ? "hotkey-status" : "hotkey-status warn"}>
                     {settings?.spotlight?.enabled === false
