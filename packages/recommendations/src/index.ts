@@ -11,18 +11,6 @@ import {
   type MetadataProvider
 } from "@hynite/metadata";
 
-type SteamChartItem = {
-  appid: number;
-  rank?: number;
-  peak_in_game?: number;
-};
-
-type SteamChartsResponse = {
-  response?: {
-    ranks?: SteamChartItem[];
-  };
-};
-
 type FeaturedItem = {
   id?: number;
   type?: number;
@@ -54,27 +42,12 @@ type FeaturedResponse = {
   status?: number;
 };
 
-type SteamSpyItem = {
-  appid?: number;
-  name?: string;
-  developer?: string;
-  publisher?: string;
-  positive?: number;
-  negative?: number;
-  owners?: string;
-  ccu?: number;
-};
-
 type Candidate = {
   appid: string;
   title?: string;
   headerUrl?: string;
   sources: Set<string>;
-  trendRank?: number;
   featuredWeight: number;
-  chartRank?: number;
-  chartCcu?: number;
-  steamSpyCcu?: number;
   owners?: string;
   positive?: number;
   negative?: number;
@@ -90,9 +63,6 @@ type Candidate = {
 type DiscoverySources = {
   storeFeatured: Candidate[];
   featuredCategories: Candidate[];
-  steamCharts: Candidate[];
-  steamSpyTop: Candidate[];
-  steamSpyTrending: Candidate[];
 };
 
 export type RecommendationLog = {
@@ -247,10 +217,13 @@ function officialSteamHeaderUrl(appid: string): string {
 function gameFromCandidate(candidate: Candidate, discovery: GameDiscovery): Game {
   const title = candidate.title?.trim() || `Steam App ${candidate.appid}`;
   const headerUrl = candidate.headerUrl ?? officialSteamHeaderUrl(candidate.appid);
+  const portraitUrl = `https://cdn.akamai.steamstatic.com/steam/apps/${encodeURIComponent(candidate.appid)}/library_600x900.jpg`;
   return {
     ...emptyGame(candidate.appid, title),
     headerUrl,
     backgroundUrl: headerUrl,
+    libraryCapsuleUrl: portraitUrl,
+    coverUrl: portraitUrl,
     discovery,
     metadataStatus: "partial"
   };
@@ -334,7 +307,7 @@ async function fetchFeaturedCategories(fetchImpl: typeof fetch, timeoutMs: numbe
   const json = (await response.json()) as FeaturedCategoriesResponse;
   const candidates = new Map<string, Candidate>();
   for (const [key, category] of Object.entries(json)) {
-    if (!("items" in category) || !Array.isArray(category.items)) {
+    if (typeof category !== "object" || category === null || !("items" in category) || !Array.isArray(category.items)) {
       continue;
     }
 
@@ -345,6 +318,9 @@ async function fetchFeaturedCategories(fetchImpl: typeof fetch, timeoutMs: numbe
     const storeCategory = category.name ?? categorySignal.replace(/_/g, " ");
     category.items.forEach((item, index) => {
       if (item.type !== 0 || !item.id || !item.name) {
+        return;
+      }
+      if (/\b(soundtrack|season\s+pass|art\s*book)\b|\bost\s*$/i.test(item.name)) {
         return;
       }
 
@@ -388,6 +364,9 @@ async function fetchStoreFeatured(fetchImpl: typeof fetch, timeoutMs: number): P
       if (item.type !== 0 || !item.id || !item.name) {
         return;
       }
+      if (/\b(soundtrack|season\s+pass|art\s*book)\b|\bost\s*$/i.test(item.name)) {
+        return;
+      }
 
       const appid = String(item.id);
       mergeCandidate(candidates, String(item.id), {
@@ -419,88 +398,12 @@ function decodeHtml(value: string): string {
     .trim();
 }
 
-async function fetchSteamSpyTrending(fetchImpl: typeof fetch, timeoutMs: number): Promise<Candidate[]> {
-  const response = await fetchWithTimeout(fetchImpl, "https://steamspy.com/", timeoutMs);
-  if (!response.ok) {
-    throw new Error(`SteamSpy homepage returned ${response.status}`);
-  }
-
-  const html = await response.text();
-  const table = /<table[^>]+id="trendinggames"[\s\S]*?<tbody>(?<body>[\s\S]*?)<\/tbody>/i.exec(html)?.groups?.body;
-  if (!table) {
-    throw new Error("SteamSpy homepage did not include trending table");
-  }
-
-  const rows = [...table.matchAll(/<tr>[\s\S]*?<a href=\/app\/(?<appid>\d+)>[\s\S]*?<img[^>]+src="(?<image>[^"]+)"[^>]*>\s*(?<name>[\s\S]*?)<\/a>[\s\S]*?<td[^>]+data-order="(?<releaseDate>[^"]*)"[\s\S]*?<td[^>]+data-order="(?<price>[^"]*)"[\s\S]*?<td[^>]+data-order="(?<owners>[^"]*)"/gi)];
-  return rows.map((row, index) => ({
-    appid: row.groups?.appid ?? "",
-    title: decodeHtml(row.groups?.name ?? ""),
-    headerUrl: row.groups?.image,
-    sources: new Set([`steamspy-trending:${index + 1}`]),
-    trendRank: index + 1,
-    featuredWeight: 0,
-    newnessWeight: 0.8,
-    owners: row.groups?.owners && row.groups.owners !== "0" ? `${row.groups.owners}+` : undefined,
-    finalPrice: row.groups?.price ? Number(row.groups.price) : undefined,
-    currency: "USD",
-    storeCategory: "Trending"
-  })).filter((candidate) => candidate.appid && candidate.title);
-}
-
-async function fetchSteamSpyTop(fetchImpl: typeof fetch, timeoutMs: number): Promise<Candidate[]> {
-  const response = await fetchWithTimeout(fetchImpl, "https://steamspy.com/api.php?request=top100in2weeks", timeoutMs);
-  if (!response.ok) {
-    throw new Error(`SteamSpy returned ${response.status}`);
-  }
-
-  const json = (await response.json()) as Record<string, SteamSpyItem>;
-  return Object.values(json)
-    .filter((item): item is Required<Pick<SteamSpyItem, "appid" | "name">> & SteamSpyItem => Boolean(item.appid && item.name))
-    .slice(0, 100)
-    .map((item, index) => ({
-      appid: String(item.appid),
-      title: item.name,
-      sources: new Set([`steamspy-top:${index + 1}`]),
-      featuredWeight: 0,
-      newnessWeight: 0,
-      steamSpyCcu: item.ccu,
-      owners: item.owners,
-      positive: item.positive,
-      negative: item.negative
-    }));
-}
-
-async function fetchSteamCharts(fetchImpl: typeof fetch, timeoutMs: number): Promise<Candidate[]> {
-  const response = await fetchWithTimeout(steamFetch(fetchImpl), "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?format=json", timeoutMs);
-  if (!response.ok) {
-    throw new Error(`Steam charts returned ${response.status}`);
-  }
-
-  const json = (await response.json()) as SteamChartsResponse;
-  const ranks = json.response?.ranks?.slice(0, 100) ?? [];
-  if (ranks.length === 0) {
-    throw new Error("Steam charts returned no ranks");
-  }
-
-  return ranks.map((item, index) => ({
-    appid: String(item.appid),
-    sources: new Set([`charts:${item.rank ?? index + 1}`]),
-    featuredWeight: 0,
-    newnessWeight: 0,
-    chartRank: item.rank ?? index + 1,
-    chartCcu: item.peak_in_game
-  }));
-}
-
 async function fetchDiscoverySources(fetchImpl: typeof fetch, logger?: RecommendationLogger, timeoutMs = DISCOVERY_SOURCE_FETCH_TIMEOUT_MS): Promise<DiscoverySources> {
-  const [storeFeatured, featuredCategories, steamCharts, steamSpyTop, steamSpyTrending] = await Promise.allSettled([
+  const [storeFeatured, featuredCategories] = await Promise.allSettled([
     fetchStoreFeatured(fetchImpl, timeoutMs),
-    fetchFeaturedCategories(fetchImpl, timeoutMs),
-    fetchSteamCharts(fetchImpl, timeoutMs),
-    fetchSteamSpyTop(fetchImpl, timeoutMs),
-    fetchSteamSpyTrending(fetchImpl, timeoutMs)
+    fetchFeaturedCategories(fetchImpl, timeoutMs)
   ]);
-  const rateLimited = [storeFeatured, featuredCategories, steamCharts].find((result) => result.status === "rejected" && isSteamRateLimitError(result.reason));
+  const rateLimited = [storeFeatured, featuredCategories].find((result) => result.status === "rejected" && isSteamRateLimitError(result.reason));
   if (rateLimited?.status === "rejected") {
     logger?.({
       level: "warning",
@@ -513,10 +416,7 @@ async function fetchDiscoverySources(fetchImpl: typeof fetch, logger?: Recommend
 
   return {
     storeFeatured: storeFeatured.status === "fulfilled" ? storeFeatured.value : [],
-    featuredCategories: featuredCategories.status === "fulfilled" ? featuredCategories.value : [],
-    steamCharts: steamCharts.status === "fulfilled" ? steamCharts.value : [],
-    steamSpyTop: steamSpyTop.status === "fulfilled" ? steamSpyTop.value : [],
-    steamSpyTrending: steamSpyTrending.status === "fulfilled" ? steamSpyTrending.value : []
+    featuredCategories: featuredCategories.status === "fulfilled" ? featuredCategories.value : []
   };
 }
 
@@ -605,23 +505,10 @@ function normalizedReviewScore(candidate: Candidate): number {
   return ratio * volume;
 }
 
-function normalizeCcu(value: number | undefined): number {
-  if (!value) {
-    return 0;
-  }
-
-  return Math.min(1, Math.log10(value + 1) / 6);
-}
-
-function scoreCandidate(candidate: Candidate, previousRanks: Map<string, number>): GameDiscovery {
-  const ccu = candidate.chartCcu ?? candidate.steamSpyCcu;
-  const rankStrength = candidate.chartRank ? Math.max(0, 1 - (candidate.chartRank - 1) / 100) : 0;
-  const populationScore = Math.max(normalizeCcu(ccu), rankStrength);
+function scoreCandidate(candidate: Candidate, _previousRanks: Map<string, number>): GameDiscovery {
   const reviewScore = normalizedReviewScore(candidate);
   const discountScore = Math.min(1, (candidate.discountPercent ?? 0) / 80);
-  const score = populationScore * 35 + reviewScore * 25 + candidate.featuredWeight * 20 + candidate.newnessWeight * 15 + discountScore * 5;
-  const previousRank = previousRanks.get(makeGameId("steam", candidate.appid));
-  const rankDelta = previousRank && candidate.chartRank ? previousRank - candidate.chartRank : undefined;
+  const score = reviewScore * 25 + candidate.featuredWeight * 20 + candidate.newnessWeight * 15 + discountScore * 5;
   const signal =
     (candidate.sources.has("featured:new_releases") || candidate.sources.has("featured:newreleases"))
       ? "New release"
@@ -631,19 +518,15 @@ function scoreCandidate(candidate: Candidate, previousRanks: Map<string, number>
           ? "Top seller"
           : (candidate.discountPercent ?? 0) > 0
             ? "Special"
-            : rankDelta && rankDelta > 5
-        ? "Rising"
-        : candidate.featuredWeight > 0.8
-          ? "Top seller"
-          : "Featured";
+            : candidate.featuredWeight > 0.8
+              ? "Top seller"
+              : "Featured";
 
   return {
     score,
-    signal: candidate.trendRank ? "Trending" : signal,
-    ccu,
+    signal,
     owners: candidate.owners,
     reviewScore,
-    rankDelta,
     priceText: formatPrice(candidate.finalPrice, candidate.currency),
     originalPriceText: formatPrice(candidate.originalPrice, candidate.currency),
     discountPercent: candidate.discountPercent,
@@ -875,8 +758,16 @@ function discoveryHasSource(game: Game, prefix: string): boolean {
 }
 
 function candidatePriority(candidate: Candidate, discovery: GameDiscovery): number {
-  if (hasSource(candidate, "store-featured:large_capsules")) {
+  if (hasSource(candidate, "featured:new_releases") || hasSource(candidate, "featured:newreleases")) {
+    return 4500 + discovery.score;
+  }
+
+  if (hasSource(candidate, "featured:coming_soon") || hasSource(candidate, "featured:comingsoon")) {
     return 4000 + discovery.score;
+  }
+
+  if (hasSource(candidate, "store-featured:large_capsules")) {
+    return 3800 + discovery.score;
   }
 
   if (hasSource(candidate, "store-featured:featured_win")) {
@@ -885,10 +776,6 @@ function candidatePriority(candidate: Candidate, discovery: GameDiscovery): numb
 
   if (hasSource(candidate, "featured:top_sellers") || hasSource(candidate, "featured:topsellers")) {
     return 3000 + discovery.score;
-  }
-
-  if (hasSource(candidate, "featured:new_releases") || hasSource(candidate, "featured:newreleases") || hasSource(candidate, "featured:coming_soon") || hasSource(candidate, "featured:comingsoon")) {
-    return 2000 + discovery.score;
   }
 
   if (hasSource(candidate, "store-featured:")) {
@@ -901,9 +788,6 @@ function candidatePriority(candidate: Candidate, discovery: GameDiscovery): numb
 function previousChartRanks(previous?: HomeModel): Map<string, number> {
   const ranks = new Map<string, number>();
   previous?.popularNow.forEach((game, index) => ranks.set(game.id, index + 1));
-  (previous?.trendingRows ?? [])
-    .find((row) => row.id === "most-played-now")
-    ?.games.forEach((game, index) => ranks.set(game.id, index + 1));
   return ranks;
 }
 
@@ -911,23 +795,12 @@ function candidateGameId(candidate: Candidate): string {
   return makeGameId("steam", candidate.appid);
 }
 
-function sortByChartRank(a: Candidate, b: Candidate): number {
-  return (a.chartRank ?? Number.MAX_SAFE_INTEGER) - (b.chartRank ?? Number.MAX_SAFE_INTEGER);
-}
-
-function sortByCcu(a: Candidate, b: Candidate): number {
-  return (b.steamSpyCcu ?? b.chartCcu ?? 0) - (a.steamSpyCcu ?? a.chartCcu ?? 0);
-}
-
 function trendingCandidatePool(sources: DiscoverySources): Candidate[] {
   return [
-    ...sources.steamCharts.slice().sort(sortByChartRank),
-    ...sources.steamSpyTop.slice().sort(sortByCcu),
-    ...sources.steamSpyTrending,
     ...sources.storeFeatured,
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")),
     ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:newreleases") || hasSource(candidate, "featured:new_releases")),
     ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:comingsoon") || hasSource(candidate, "featured:coming_soon")),
+    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")),
     ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:specials") || hasSource(candidate, "featured:dailydeal"))
   ];
 }
@@ -943,34 +816,6 @@ function gamesForCandidates(candidates: Candidate[], enrichedById: Map<string, G
 
 function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Game>, ownedIds: Set<string>): HomeTrendRow[] {
   const rows: HomeTrendRow[] = [
-    {
-      id: "most-played-now",
-      title: "Most played now",
-      description: "Steam chart leaders, ordered by current rank and peak player count.",
-      games: gamesForCandidates(sources.steamCharts.slice().sort(sortByChartRank), enrichedById, ownedIds)
-    },
-    {
-      id: "top-two-weeks",
-      title: "Popular this week",
-      description: "SteamSpy two-week demand with owner, player, and review signals.",
-      games: gamesForCandidates(sources.steamSpyTop.slice().sort(sortByCcu), enrichedById, ownedIds)
-    },
-    {
-      id: "rising-recently",
-      title: "Rising recently",
-      description: "Fresh SteamSpy movement, useful for catching smaller games early.",
-      games: gamesForCandidates(sources.steamSpyTrending, enrichedById, ownedIds)
-    },
-    {
-      id: "top-sellers",
-      title: "Top sellers",
-      description: "Store category leaders with price and discount metadata.",
-      games: gamesForCandidates(
-        sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")),
-        enrichedById,
-        ownedIds
-      )
-    },
     {
       id: "new-releases",
       title: "New releases",
@@ -992,6 +837,22 @@ function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Gam
       )
     },
     {
+      id: "featured",
+      title: "Featured",
+      description: "Platform front-page picks from the Steam Store featured feed.",
+      games: gamesForCandidates(sources.storeFeatured, enrichedById, ownedIds)
+    },
+    {
+      id: "top-sellers",
+      title: "Top sellers",
+      description: "Store category leaders with price and discount metadata.",
+      games: gamesForCandidates(
+        sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")),
+        enrichedById,
+        ownedIds
+      )
+    },
+    {
       id: "specials",
       title: "Specials",
       description: "Discounted games and daily deals from the Store front page.",
@@ -1000,12 +861,6 @@ function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Gam
         enrichedById,
         ownedIds
       )
-    },
-    {
-      id: "featured",
-      title: "Featured",
-      description: "Platform front-page picks from the Steam Store featured feed.",
-      games: gamesForCandidates(sources.storeFeatured, enrichedById, ownedIds)
     }
   ];
 

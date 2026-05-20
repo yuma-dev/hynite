@@ -1108,7 +1108,8 @@ const GameCover = memo(function GameCover({
   allowDisplayFallback?: boolean;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
-  const cover = primaryCover(game, { allowDisplayFallback });
+  const [coverFailed, setCoverFailed] = useState(false);
+  const cover = coverFailed ? heroStill(game) : primaryCover(game, { allowDisplayFallback });
   const coverProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
   const logoProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
   const profileDetailsRef = useRef<Record<string, unknown> | undefined>(profileDetails);
@@ -1123,6 +1124,11 @@ const GameCover = memo(function GameCover({
   useEffect(() => {
     profileDetailsRef.current = profileDetails;
   }, [profileDetails]);
+
+  useEffect(() => {
+    setImgLoaded(false);
+    setCoverFailed(false);
+  }, [game.id]);
 
   useEffect(() => {
     if (!cover) return undefined;
@@ -1206,6 +1212,7 @@ const GameCover = memo(function GameCover({
               profileImageError(cover, details);
               coverProfileRef.current?.end("error", details);
               coverProfileRef.current = undefined;
+              if (!coverFailed) setCoverFailed(true);
             }}
           />
         ) : null}
@@ -1279,6 +1286,48 @@ const GameCover = memo(function GameCover({
         </span>
       ) : null}
       {badges ? <span className="cover-extra-badges">{badges}</span> : null}
+    </div>
+  );
+});
+
+const NotableCard = memo(function NotableCard({
+  game,
+  onSelect,
+  onContextMenu
+}: {
+  game: Game;
+  onSelect: (game: Game) => void;
+  onContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
+}) {
+  const img = heroStill(game);
+  return (
+    <div
+      className="notable-card"
+      style={!img ? fallbackArt(game) : undefined}
+      role="button"
+      tabIndex={0}
+      aria-label={game.title}
+      onClick={() => onSelect(game)}
+      onContextMenu={(e) => onContextMenu?.(e, game)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(game);
+        }
+      }}
+    >
+      {img ? <img className="notable-img" src={img} alt="" loading="lazy" decoding="async" /> : null}
+      <div className="notable-overlay">
+        {game.discovery?.signal ? (
+          <span className="notable-signal" data-signal={game.discovery.signal}>{game.discovery.signal}</span>
+        ) : null}
+        <span className="notable-title">{game.title}</span>
+        {game.releaseDate ? (
+          <span className="notable-meta">{formatDate(game.releaseDate)}</span>
+        ) : game.discovery?.priceText ? (
+          <span className="notable-meta">{game.discovery.priceText}</span>
+        ) : null}
+      </div>
     </div>
   );
 });
@@ -1828,8 +1877,50 @@ function trendStats(game: Game): string[] {
   ].filter(Boolean) as string[];
 }
 
-function scrollToTrendRow(row: HomeTrendRow) {
-  document.getElementById(`trend-row-${row.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+function DiscoveryBody({
+  rows,
+  onSelect,
+  onGameContextMenu,
+  libraryGameIds,
+  settings
+}: {
+  rows: HomeTrendRow[];
+  onSelect: (game: Game) => void;
+  onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
+  libraryGameIds: Set<string>;
+  settings?: AppSettings;
+}) {
+  const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
+  const byId = (id: string) => rows.find((r) => r.id === id && r.games.length > 0);
+
+  // Notable grid: prefer new-releases, fall back to coming-soon, then featured
+  const notableRow = byId("new-releases") ?? byId("coming-soon") ?? byId("featured");
+  // Remaining rows shown as horizontal strips, skipping whichever row became the grid
+  const stripIds = ["coming-soon", "featured", "top-sellers", "specials"].filter((id) => id !== notableRow?.id);
+  const stripRows = stripIds.map((id) => byId(id)).filter(Boolean) as HomeTrendRow[];
+
+  return (
+    <div className="discovery-body">
+      {notableRow ? (
+        <section className="discovery-notable">
+          <div className="section-head">
+            <div>
+              <h2>{notableRow.title}</h2>
+              {notableRow.description ? <p>{notableRow.description}</p> : null}
+            </div>
+          </div>
+          <div className="notable-grid">
+            {notableRow.games.map((game) => (
+              <NotableCard key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {stripRows.map((row) => (
+        <GameRow key={row.id} title={row.title} description={row.description} games={row.games} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} libraryGameIds={libraryGameIds} />
+      ))}
+    </div>
+  );
 }
 
 function TrendingScreen({
@@ -1848,7 +1939,13 @@ function TrendingScreen({
   discoveryLoading: boolean;
 }) {
   const rows = home?.trendingRows ?? [];
-  const spotlight = rows.find((row) => row.games.length > 0)?.games[0] ?? home?.popularNow[0];
+  const HERO_ROW_PRIORITY = ["new-releases", "coming-soon", "featured", "top-sellers", "specials"];
+  const spotlight =
+    HERO_ROW_PRIORITY
+      .map((id) => rows.find((r) => r.id === id)?.games[0])
+      .find(Boolean) ??
+    rows.find((row) => row.games.length > 0)?.games[0] ??
+    home?.popularNow[0];
   const spotlightImage = spotlight ? heroStill(spotlight) : undefined;
   const reduceMotion = Boolean(settings?.reduceMotion);
   const loadingDiscovery = discoveryLoading && rows.length === 0;
@@ -1866,7 +1963,7 @@ function TrendingScreen({
         <div className="empty-state">
           <TrendingUp size={34} />
           <h2>No trend data yet</h2>
-          <p>Discovery will appear when the Steam and SteamSpy endpoints respond.</p>
+          <p>Discovery will appear when Steam endpoints respond.</p>
         </div>
       </main>
     );
@@ -1921,21 +2018,7 @@ function TrendingScreen({
           </div>
         </motion.div>
       </section>
-      <nav className="trend-tabs" aria-label="Trending categories">
-        {rows.map((row) => (
-          <button key={row.id} type="button" onClick={() => scrollToTrendRow(row)}>
-            <span>{row.title}</span>
-            <em>{row.games.length}</em>
-          </button>
-        ))}
-      </nav>
-      <div className="trend-rows">
-        {rows.map((row) => (
-          <div key={row.id} id={`trend-row-${row.id}`} className="trend-row-anchor">
-            <GameRow title={row.title} description={row.description} games={row.games} cardsPerRow={normalizeCardsPerRow(settings?.cardsPerRow)} onSelect={onSelect} onGameContextMenu={onGameContextMenu} libraryGameIds={libraryGameIds} />
-          </div>
-        ))}
-      </div>
+      <DiscoveryBody rows={rows} onSelect={onSelect} onGameContextMenu={onGameContextMenu} libraryGameIds={libraryGameIds} settings={settings} />
     </main>
   );
 }
@@ -1953,7 +2036,13 @@ function TrendingSkeleton() {
         </div>
       </section>
       <div className="trend-skeleton-rows">
-        {Array.from({ length: 3 }, (_, row) => (
+        <div className="trend-skeleton-row">
+          <span />
+          <div className="trend-skeleton-notable">
+            {Array.from({ length: 4 }, (_, item) => <i key={item} />)}
+          </div>
+        </div>
+        {Array.from({ length: 2 }, (_, row) => (
           <div key={row} className="trend-skeleton-row">
             <span />
             <div>
