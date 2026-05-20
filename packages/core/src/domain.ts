@@ -25,10 +25,6 @@ export type GamePlatforms = z.infer<typeof gamePlatformsSchema>;
 export const gameDiscoverySchema = z.object({
   score: z.number(),
   signal: z.string().min(1),
-  ccu: z.number().int().nonnegative().optional(),
-  owners: z.string().optional(),
-  reviewScore: z.number().optional(),
-  rankDelta: z.number().optional(),
   priceText: z.string().optional(),
   originalPriceText: z.string().optional(),
   discountPercent: z.number().int().nonnegative().optional(),
@@ -432,13 +428,6 @@ export type GameDetail = Game & {
   sourceMatches: SourceMatch[];
 };
 
-export type HomeTrendRow = {
-  id: string;
-  title: string;
-  description: string;
-  games: Game[];
-};
-
 export type HomeModel = {
   recentActivity: Game[];
   continuePlaying: Game[];
@@ -446,7 +435,6 @@ export type HomeModel = {
   popularNow: Game[];
   recommended: Game[];
   newAndNotable: Game[];
-  trendingRows: HomeTrendRow[];
   generatedAt: string;
   stale: boolean;
 };
@@ -549,6 +537,24 @@ export type SteamFamilyAuthResult = {
   steamId: string;
   expiresAt: string;
 };
+
+export type SteamStoreEmbedInfo =
+  | {
+      available: false;
+      url: string;
+      reason: "no-account";
+    }
+  | {
+      available: true;
+      url: string;
+      partition: string;
+      loggedIn: boolean;
+      account: {
+        steamId: string;
+        personaName?: string;
+        hasFamilySession: boolean;
+      };
+    };
 
 export type LocalRoot = {
   path: string;

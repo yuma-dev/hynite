@@ -15,7 +15,6 @@ import {
   Download,
   ExternalLink,
   Film,
-  Flame,
   Folder,
   FolderOpen,
   Globe2,
@@ -43,7 +42,6 @@ import {
   Settings,
   SlidersHorizontal,
   Trash2,
-  TrendingUp,
   Trophy,
   Tv,
   Users,
@@ -52,12 +50,12 @@ import {
   X
 } from "lucide-react";
 import { memo, Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
+import type { ComponentType, CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type HomeTrendRow, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
+import { defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
 import { isProfileEnabled, profileImageError, profileImageStart, profilePoint, profileSpan, profileStartup } from "./startupProfile";
 import { profileReactRender, startRuntimeFrameProfiler, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
@@ -147,7 +145,7 @@ function homeDebug(message: string, details?: Record<string, unknown>): void {
 }
 
 function homeHasDiscoveryContent(home: HomeModel | undefined): boolean {
-  return Boolean(home && (home.popularNow.length > 0 || home.trendingRows.some((row) => row.games.length > 0)));
+  return Boolean(home && home.popularNow.length > 0);
 }
 
 function requestSteamSwitchConfirmation(prompt: Omit<SteamSwitchPrompt, "resolve">): Promise<boolean> {
@@ -221,11 +219,30 @@ async function launchGame(input: LaunchGameInput, preferredSteamId?: string): Pr
   return handledPromise;
 }
 
-type Route = "home" | "trending" | "library" | "wishlist" | "search" | "local" | "settings";
+type Route = "home" | "steam" | "library" | "wishlist" | "search" | "local" | "settings";
 
-const routes: Array<{ id: Route; label: string; icon: typeof Home }> = [
+type RailIcon = ComponentType<{ size?: string | number; className?: string }>;
+
+function BootstrapSteamIcon({ size = 17, className }: { size?: string | number; className?: string }) {
+  return (
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      fill="currentColor"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M.329 10.333A8.01 8.01 0 0 0 7.99 16C12.414 16 16 12.418 16 8s-3.586-8-8.01-8A8.006 8.006 0 0 0 0 7.468l4.412 1.823A2.198 2.198 0 0 1 5.7 8.95l1.993-2.89v-.04a3.046 3.046 0 0 1 3.042-3.043 3.046 3.046 0 0 1 3.042 3.043 3.047 3.047 0 0 1-3.111 3.043l-2.85 2.034a2.2 2.2 0 0 1-4.285.62L.329 10.333Z" />
+      <path d="M4.868 12.683a1.715 1.715 0 0 0 1.318-3.165 1.705 1.705 0 0 0-1.263-.02l1.023.424a1.261 1.261 0 1 1-.97 2.33l-1.015-.42a1.705 1.705 0 0 0 1.907.85Zm7.705-6.664a1.837 1.837 0 0 0-1.835-1.834 1.837 1.837 0 0 0-1.835 1.834 1.837 1.837 0 0 0 1.835 1.835 1.837 1.837 0 0 0 1.835-1.835Zm-3.21 0a1.377 1.377 0 1 1 2.754 0 1.377 1.377 0 0 1-2.754 0Z" />
+    </svg>
+  );
+}
+
+const routes: Array<{ id: Route; label: string; icon: RailIcon }> = [
   { id: "home", label: "Home", icon: Home },
-  { id: "trending", label: "Trending", icon: Flame },
+  { id: "steam", label: "Steam", icon: BootstrapSteamIcon },
   { id: "library", label: "Library", icon: Library },
   { id: "wishlist", label: "Wishlist", icon: CalendarDays },
   { id: "search", label: "Search", icon: Search },
@@ -610,14 +627,6 @@ function formatNumber(value?: number): string {
   return value === undefined ? "Unknown" : value.toLocaleString();
 }
 
-function formatCompactNumber(value?: number): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
-}
-
 function formatDate(value?: string): string | undefined {
   if (!value) {
     return undefined;
@@ -696,6 +705,126 @@ function openExternalUrl(url?: string): void {
     }
   } catch {
     // Ignore malformed provider links.
+  }
+}
+
+type SteamWebviewElement = HTMLElement & {
+  reload(): void;
+  loadURL(url: string): void;
+  insertCSS(css: string): Promise<string>;
+  executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
+};
+
+const STEAM_STORE_THEME_CSS = `
+  html,
+  body,
+  body.v6,
+  .responsive_page_frame,
+  .responsive_page_content,
+  .responsive_page_template_content {
+    background: #050608 !important;
+  }
+
+  body,
+  input,
+  textarea,
+  select,
+  button {
+    font-family: Inter, "Segoe UI", Arial, sans-serif !important;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px !important;
+    height: 8px !important;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.22) !important;
+    border-radius: 999px !important;
+  }
+
+  #global_header,
+  .banner_open_in_steam {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  #store_header,
+  .responsive_header {
+    background: rgba(5, 6, 8, 0.96) !important;
+    box-shadow: none !important;
+  }
+
+  .home_page_gutter,
+  .home_ctn,
+  .page_content_ctn,
+  .search_results,
+  .tab_content_ctn {
+    background-color: #050608 !important;
+  }
+
+  .home_cluster_ctn,
+  .home_ctn.tab_container {
+    background: none !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .btnv6_blue_hoverfade,
+  .btn_green_steamui,
+  .btn_blue_steamui,
+  .btn_medium {
+    border-radius: 8px !important;
+  }
+`;
+
+const STEAM_STORE_PREPARE_JS = `
+(() => {
+  const selectors = "#global_header, .banner_open_in_steam";
+  const removeSteamChrome = () => {
+    document.querySelectorAll(selectors).forEach((node) => node.remove());
+  };
+  removeSteamChrome();
+  if (!window.__hyniteSteamChromeObserverInstalled && document.documentElement) {
+    window.__hyniteSteamChromeObserverInstalled = true;
+    new MutationObserver(removeSteamChrome).observe(document.documentElement, { childList: true, subtree: true });
+  }
+})();
+`;
+
+async function prepareSteamStoreWebview(webview: SteamWebviewElement): Promise<void> {
+  await webview.insertCSS(STEAM_STORE_THEME_CSS);
+  await webview.executeJavaScript(STEAM_STORE_PREPARE_JS, false).catch(() => undefined);
+}
+
+function isSteamEmbedNavigationAllowed(url?: string): boolean {
+  if (!url || url === "about:blank") {
+    return true;
+  }
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "steampowered.com" ||
+      host.endsWith(".steampowered.com") ||
+      host === "steamcommunity.com" ||
+      host.endsWith(".steamcommunity.com")
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -1290,48 +1419,6 @@ const GameCover = memo(function GameCover({
   );
 });
 
-const NotableCard = memo(function NotableCard({
-  game,
-  onSelect,
-  onContextMenu
-}: {
-  game: Game;
-  onSelect: (game: Game) => void;
-  onContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
-}) {
-  const img = heroStill(game);
-  return (
-    <div
-      className="notable-card"
-      style={!img ? fallbackArt(game) : undefined}
-      role="button"
-      tabIndex={0}
-      aria-label={game.title}
-      onClick={() => onSelect(game)}
-      onContextMenu={(e) => onContextMenu?.(e, game)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect(game);
-        }
-      }}
-    >
-      {img ? <img className="notable-img" src={img} alt="" loading="lazy" decoding="async" /> : null}
-      <div className="notable-overlay">
-        {game.discovery?.signal ? (
-          <span className="notable-signal" data-signal={game.discovery.signal}>{game.discovery.signal}</span>
-        ) : null}
-        <span className="notable-title">{game.title}</span>
-        {game.releaseDate ? (
-          <span className="notable-meta">{formatDate(game.releaseDate)}</span>
-        ) : game.discovery?.priceText ? (
-          <span className="notable-meta">{game.discovery.priceText}</span>
-        ) : null}
-      </div>
-    </div>
-  );
-});
-
 function GameRow({
   title,
   description,
@@ -1807,7 +1894,7 @@ function Hero({
           <h1 className="hero-logo-title">
             <BrandLogo className="hero-logo" sizes="clamp(72px, 8vw, 104px)" />
           </h1>
-          <p>{settings?.steamAccounts.length || settings?.steamWebApiKey ? "Discovery is loading. Trending updates when Home finishes refreshing." : "Pair Steam in Settings to start the first library view."}</p>
+          <p>{settings?.steamAccounts.length || settings?.steamWebApiKey ? "Discovery is loading. Home updates when refresh finishes." : "Pair Steam in Settings to start the first library view."}</p>
           <button className="primary-action" onClick={onOpenSettings}>
             <Settings size={16} />
             Open settings
@@ -1861,197 +1948,258 @@ function HomeScreen({
   );
 }
 
-function trendSummary(game: Game): string {
-  return game.shortDescription || [game.genres[0], game.developers[0], game.releaseDate ? `Released ${formatDate(game.releaseDate)}` : undefined].filter(Boolean).join(" · ") || "Steam trend signal";
-}
-
-function trendStats(game: Game): string[] {
-  const reviewPercent = game.discovery?.reviewScore ? `${Math.round(game.discovery.reviewScore * 100)}% review signal` : undefined;
-  return [
-    game.discovery?.ccu ? `${formatCompactNumber(game.discovery.ccu)} peak players` : undefined,
-    game.discovery?.owners ? `${game.discovery.owners} owners` : undefined,
-    reviewPercent,
-    game.discovery?.discountPercent ? `-${game.discovery.discountPercent}%` : undefined,
-    game.discovery?.priceText,
-    game.discovery?.storeCategory
-  ].filter(Boolean) as string[];
-}
-
-function DiscoveryBody({
-  rows,
-  onSelect,
-  onGameContextMenu,
-  libraryGameIds,
-  settings
-}: {
-  rows: HomeTrendRow[];
-  onSelect: (game: Game) => void;
-  onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
-  libraryGameIds: Set<string>;
-  settings?: AppSettings;
-}) {
-  const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
-  const byId = (id: string) => rows.find((r) => r.id === id && r.games.length > 0);
-
-  // Notable grid: prefer new-releases, fall back to coming-soon, then featured
-  const notableRow = byId("new-releases") ?? byId("coming-soon") ?? byId("featured");
-  // Remaining rows shown as horizontal strips, skipping whichever row became the grid
-  const stripIds = ["coming-soon", "featured", "top-sellers", "specials"].filter((id) => id !== notableRow?.id);
-  const stripRows = stripIds.map((id) => byId(id)).filter(Boolean) as HomeTrendRow[];
-
-  return (
-    <div className="discovery-body">
-      {notableRow ? (
-        <section className="discovery-notable">
-          <div className="section-head">
-            <div>
-              <h2>{notableRow.title}</h2>
-              {notableRow.description ? <p>{notableRow.description}</p> : null}
-            </div>
-          </div>
-          <div className="notable-grid">
-            {notableRow.games.map((game) => (
-              <NotableCard key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} />
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {stripRows.map((row) => (
-        <GameRow key={row.id} title={row.title} description={row.description} games={row.games} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} libraryGameIds={libraryGameIds} />
-      ))}
-    </div>
-  );
-}
-
-function TrendingScreen({
-  home,
+function SteamStoreScreen({
   settings,
-  libraryGameIds,
-  onSelect,
-  onGameContextMenu,
-  discoveryLoading
+  onSettingsChanged,
+  onOpenSettings
 }: {
-  home?: HomeModel;
   settings?: AppSettings;
-  libraryGameIds: Set<string>;
-  onSelect: (game: Game) => void;
-  onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
-  discoveryLoading: boolean;
+  onSettingsChanged: (settings: AppSettings) => void;
+  onOpenSettings: () => void;
 }) {
-  const rows = home?.trendingRows ?? [];
-  const HERO_ROW_PRIORITY = ["new-releases", "coming-soon", "featured", "top-sellers", "specials"];
-  const spotlight =
-    HERO_ROW_PRIORITY
-      .map((id) => rows.find((r) => r.id === id)?.games[0])
-      .find(Boolean) ??
-    rows.find((row) => row.games.length > 0)?.games[0] ??
-    home?.popularNow[0];
-  const spotlightImage = spotlight ? heroStill(spotlight) : undefined;
-  const reduceMotion = Boolean(settings?.reduceMotion);
-  const loadingDiscovery = discoveryLoading && rows.length === 0;
+  const webviewRef = useRef<SteamWebviewElement | null>(null);
+  const [info, setInfo] = useState<SteamStoreEmbedInfo | undefined>();
+  const [infoError, setInfoError] = useState<string | undefined>();
+  const [loadError, setLoadError] = useState<string | undefined>();
+  const [loading, setLoading] = useState(false);
+  const [pageReady, setPageReady] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [infoRefreshKey, setInfoRefreshKey] = useState(0);
+  const sessionCaptureInFlightRef = useRef(false);
+  const navigationTokenRef = useRef(0);
+  const hasPreparedOnceRef = useRef(false);
+  const accountSessionKey = useMemo(
+    () => (settings?.steamAccounts ?? [])
+      .map((account) => `${account.steamId}:${account.pairedAt}:${account.familySession?.connectedAt ?? "none"}`)
+      .join("|"),
+    [settings?.steamAccounts]
+  );
 
-  if (!spotlight || rows.length === 0) {
-    if (loadingDiscovery) {
-      return (
-        <main className="page trending-page">
-          <TrendingSkeleton />
-        </main>
-      );
+  useEffect(() => {
+    let active = true;
+    setInfo(undefined);
+    setInfoError(undefined);
+    hasPreparedOnceRef.current = false;
+    setPageReady(false);
+    void window.hynite.steam.storeEmbed()
+      .then((next) => {
+        if (!active) return;
+        setInfo(next);
+        setLoading(next.available);
+        setLoadError(undefined);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setInfoError(error instanceof Error ? error.message : String(error));
+        setLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [accountSessionKey, infoRefreshKey]);
+
+  const captureSession = useCallback(() => {
+    if (!info?.available) {
+      return;
     }
+    if (sessionCaptureInFlightRef.current) {
+      return;
+    }
+    sessionCaptureInFlightRef.current = true;
+    void window.hynite.steam.captureStoreSession()
+      .then((nextSettings) => {
+        if (nextSettings) {
+          onSettingsChanged(nextSettings);
+          setInfo((current) => current?.available
+            ? {
+                ...current,
+                loggedIn: true,
+                account: {
+                  ...current.account,
+                  hasFamilySession: true
+                }
+              }
+            : current);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        sessionCaptureInFlightRef.current = false;
+      });
+  }, [info, onSettingsChanged]);
+
+  useEffect(() => {
+    if (!info?.available) {
+      return;
+    }
+    const webview = webviewRef.current;
+    if (!webview) {
+      return;
+    }
+
+    const handleStart = () => {
+      navigationTokenRef.current += 1;
+      if (!hasPreparedOnceRef.current) {
+        setPageReady(false);
+      }
+      setLoading(true);
+      setLoadError(undefined);
+    };
+    const handleDomReady = () => {
+      void prepareSteamStoreWebview(webview).catch(() => undefined);
+    };
+    const handleStop = () => {
+      const token = navigationTokenRef.current;
+      void prepareSteamStoreWebview(webview)
+        .then(() => {
+          if (navigationTokenRef.current !== token) {
+            return;
+          }
+          hasPreparedOnceRef.current = true;
+          setPageReady(true);
+          setLoadError(undefined);
+          captureSession();
+        })
+        .catch((error: unknown) => {
+          if (navigationTokenRef.current !== token) {
+            return;
+          }
+          console.error("[steam-store] failed to prepare embedded Store page", error);
+          setPageReady(hasPreparedOnceRef.current);
+          setLoadError("Steam Store theme failed to apply.");
+        })
+        .finally(() => {
+          if (navigationTokenRef.current === token) {
+            setLoading(false);
+          }
+        });
+    };
+    const handleFail = (event: Event) => {
+      const details = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean };
+      if (details.isMainFrame === false || details.errorCode === -3) {
+        return;
+      }
+      setPageReady(hasPreparedOnceRef.current);
+      setLoadError(details.errorDescription || "Steam Store failed to load.");
+      setLoading(false);
+    };
+    const handleNavigation = (event: Event) => {
+      const details = event as Event & { url?: string };
+      if (!isSteamEmbedNavigationAllowed(details.url)) {
+        event.preventDefault();
+        openExternalUrl(details.url);
+      }
+    };
+    const handleNewWindow = (event: Event) => {
+      const details = event as Event & { url?: string };
+      event.preventDefault();
+      if (isSteamEmbedNavigationAllowed(details.url) && details.url) {
+        navigationTokenRef.current += 1;
+        if (!hasPreparedOnceRef.current) {
+          setPageReady(false);
+        }
+        setLoading(true);
+        setLoadError(undefined);
+        webview.loadURL(details.url);
+      } else {
+        openExternalUrl(details.url);
+      }
+    };
+
+    webview.addEventListener("did-start-loading", handleStart);
+    webview.addEventListener("dom-ready", handleDomReady);
+    webview.addEventListener("did-stop-loading", handleStop);
+    webview.addEventListener("did-fail-load", handleFail);
+    webview.addEventListener("will-navigate", handleNavigation);
+    webview.addEventListener("new-window", handleNewWindow);
+    return () => {
+      webview.removeEventListener("did-start-loading", handleStart);
+      webview.removeEventListener("dom-ready", handleDomReady);
+      webview.removeEventListener("did-stop-loading", handleStop);
+      webview.removeEventListener("did-fail-load", handleFail);
+      webview.removeEventListener("will-navigate", handleNavigation);
+      webview.removeEventListener("new-window", handleNewWindow);
+    };
+  }, [captureSession, info?.available, info?.available ? info.partition : undefined, refreshKey]);
+
+  const reload = useCallback(() => {
+    setLoadError(undefined);
+    if (!hasPreparedOnceRef.current) {
+      setPageReady(false);
+    }
+    setLoading(true);
+    if (webviewRef.current) {
+      webviewRef.current.reload();
+    } else {
+      setRefreshKey((current) => current + 1);
+    }
+  }, []);
+
+  if (!info) {
     return (
-      <main className="page">
+      <main className="steam-store-page">
+        <div className="steam-store-webview-frame steam-store-empty">
+          {infoError ? <p>{infoError}</p> : <Loader2 className="spin" size={22} />}
+          {infoError ? (
+            <button className="secondary-action" type="button" onClick={() => setInfoRefreshKey((current) => current + 1)}>
+              <RefreshCw size={16} />
+              Retry
+            </button>
+          ) : null}
+        </div>
+      </main>
+    );
+  }
+
+  if (!info.available) {
+    return (
+      <main className="steam-store-page">
         <div className="empty-state">
-          <TrendingUp size={34} />
-          <h2>No trend data yet</h2>
-          <p>Discovery will appear when Steam endpoints respond.</p>
+          <Globe2 size={34} />
+          <h2>Steam needs an account</h2>
+          <p>Pair the primary Steam account first.</p>
+          <button className="secondary-action" type="button" onClick={onOpenSettings}>
+            <Settings size={16} />
+            Settings
+          </button>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="page trending-page">
-      <section className="trend-hero">
-        <div className="hero-media">
-          <motion.span
-            style={spotlightImage ? { backgroundImage: `url(${spotlightImage})` } : undefined}
-            initial={reduceMotion ? false : { opacity: 0, scale: 1.03 }}
-            animate={{ opacity: 0.74, scale: 1.08 }}
-            transition={{ duration: reduceMotion ? 0 : 0.36, ease: "easeOut" }}
-          />
-        </div>
-        <div className="hero-shade" />
-        <motion.button
-          className="trend-hero-frame"
-          style={fallbackArt(spotlight)}
-          onClick={() => onSelect(spotlight)}
-          initial={reduceMotion ? false : { opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: reduceMotion ? 0 : 0.24, ease: "easeOut" }}
-        >
-          <span style={spotlightImage ? { backgroundImage: `url(${spotlightImage})` } : undefined} />
-        </motion.button>
-        <motion.div className="trend-copy" initial={reduceMotion ? false : { opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: reduceMotion ? 0 : 0.24, ease: "easeOut" }}>
-          <span className="trend-kicker">
-            <TrendingUp size={15} />
-            {spotlight.discovery?.signal ?? "Trending"}
-          </span>
-          <h1>{spotlight.title}</h1>
-          <p>{trendSummary(spotlight)}</p>
-          <SourceAvailabilityTag game={spotlight} libraryGameIds={libraryGameIds} />
-          <div className="trend-stat-list">
-            {trendStats(spotlight).slice(0, 5).map((item) => (
-              <span key={item}>{item}</span>
-            ))}
+    <main className="steam-store-page" aria-label="Steam Store">
+      <div className="steam-store-webview-frame steam-store-webview-full">
+        <webview
+          key={`${info.partition}:${refreshKey}`}
+          ref={(node) => {
+            webviewRef.current = node as unknown as SteamWebviewElement | null;
+          }}
+          className={pageReady && !loadError ? "steam-store-webview ready" : "steam-store-webview"}
+          src={info.url}
+          partition={info.partition}
+          webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes,nativeWindowOpen=no"
+        />
+        {!pageReady && !loadError ? (
+          <div className="steam-store-overlay preparing">
+            <Loader2 className="spin" size={24} />
           </div>
-          <div className="hero-actions">
-            <button className="secondary-action" onClick={() => onSelect(spotlight)}>
-              <BookOpen size={16} />
-              Info
+        ) : null}
+        {loadError ? (
+          <div className="steam-store-overlay failed">
+            <p>{loadError}</p>
+            <button className="secondary-action" type="button" onClick={reload}>
+              <RefreshCw size={16} />
+              Reload
             </button>
-            {spotlight.discovery?.storeUrl ? (
-              <button className="secondary-action" onClick={() => openExternalUrl(spotlight.discovery?.storeUrl)}>
-                <ExternalLink size={16} />
-                {spotlight.discovery?.priceText ?? "Store"}
-              </button>
-            ) : null}
+            <button className="secondary-action" type="button" onClick={() => openExternalUrl(info.url)}>
+              <ExternalLink size={16} />
+              Open
+            </button>
           </div>
-        </motion.div>
-      </section>
-      <DiscoveryBody rows={rows} onSelect={onSelect} onGameContextMenu={onGameContextMenu} libraryGameIds={libraryGameIds} settings={settings} />
-    </main>
-  );
-}
-
-function TrendingSkeleton() {
-  return (
-    <>
-      <section className="trend-hero trend-hero-skeleton" aria-label="Loading trending">
-        <div className="trend-skeleton-frame" />
-        <div className="trend-skeleton-copy">
-          <span className="home-skeleton-line short" />
-          <span className="home-skeleton-title" />
-          <span className="home-skeleton-line long" />
-          <span className="home-skeleton-line" />
-        </div>
-      </section>
-      <div className="trend-skeleton-rows">
-        <div className="trend-skeleton-row">
-          <span />
-          <div className="trend-skeleton-notable">
-            {Array.from({ length: 4 }, (_, item) => <i key={item} />)}
-          </div>
-        </div>
-        {Array.from({ length: 2 }, (_, row) => (
-          <div key={row} className="trend-skeleton-row">
-            <span />
-            <div>
-              {Array.from({ length: 6 }, (_, item) => <i key={item} />)}
-            </div>
-          </div>
-        ))}
+        ) : null}
       </div>
-    </>
+    </main>
   );
 }
 
@@ -7459,9 +7607,7 @@ function LauncherShell() {
         generatedAt: nextHome.generatedAt,
         stale: nextHome.stale,
         popularNow: nextHome.popularNow.length,
-        heroTitles: nextHome.popularNow.slice(0, 5).map((game) => game.title),
-        trendingRows: nextHome.trendingRows.length,
-        trendingGames: nextHome.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
+        heroTitles: nextHome.popularNow.slice(0, 5).map((game) => game.title)
       });
       return nextHome;
     }).catch((error: unknown) => {
@@ -7537,8 +7683,7 @@ function LauncherShell() {
           if (nextHome.stale && options.retryIfStale) {
             console.warn("[home] renderer stale retries exhausted", {
               attempts: homeRefreshRetryRef.current,
-              popularNow: nextHome.popularNow.length,
-              trendingRows: nextHome.trendingRows.length
+              popularNow: nextHome.popularNow.length
             });
           }
           homeRefreshRetryRef.current = 0;
@@ -7626,15 +7771,14 @@ function LauncherShell() {
       profileStartup("home:end", "Renderer home model loaded", {
         durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
         stale: nextHome.stale,
-        popularNow: nextHome.popularNow.length,
-        trendingRows: nextHome.trendingRows.length
+        popularNow: nextHome.popularNow.length
       });
       setHome(nextHome);
       trackHomeDiscoveryLoading(nextHome);
       if (nextHome.stale) {
         scheduleHomeRefresh({ retryIfStale: true });
       }
-      homeSpan.end("ok", { stale: nextHome.stale, popularNow: nextHome.popularNow.length, trendingRows: nextHome.trendingRows.length });
+      homeSpan.end("ok", { stale: nextHome.stale, popularNow: nextHome.popularNow.length });
     }).catch((error: unknown) => {
       profileStartup("home:error", "Renderer home model failed", { error: error instanceof Error ? error.message : String(error) });
       console.error(error);
@@ -7730,9 +7874,7 @@ function LauncherShell() {
         generatedAt: nextHome.generatedAt,
         stale: nextHome.stale,
         popularNow: nextHome.popularNow.length,
-        heroTitles: nextHome.popularNow.slice(0, 5).map((game) => game.title),
-        trendingRows: nextHome.trendingRows.length,
-        trendingGames: nextHome.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
+        heroTitles: nextHome.popularNow.slice(0, 5).map((game) => game.title)
       });
       homeRefreshRetryRef.current = 0;
       setHome(nextHome);
@@ -8121,8 +8263,8 @@ function LauncherShell() {
     if (route === "home") {
       return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} onGameIntent={scheduleHomeDetailPrefetch} discoveryLoading={homeDiscoveryLoading} />;
     }
-    if (route === "trending") {
-      return <TrendingScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onGameContextMenu={openGameContextMenu} discoveryLoading={homeDiscoveryLoading} />;
+    if (route === "steam") {
+      return <SteamStoreScreen settings={settings} onSettingsChanged={setSettings} onOpenSettings={() => setRoute("settings")} />;
     }
     if (route === "library") {
       return (

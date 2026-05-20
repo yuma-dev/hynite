@@ -1,4 +1,4 @@
-import { type Game, type GameDiscovery, type GameMetadataPatch, type HomeModel, type HomeTrendRow, type ImportedGame, gameActivityTime, makeGameId, makeSortTitle } from "@hynite/core";
+import { type Game, type GameDiscovery, type GameMetadataPatch, type HomeModel, type ImportedGame, gameActivityTime, makeGameId, makeSortTitle } from "@hynite/core";
 import {
   createSteamGridDbArtworkProvider,
   fetchSteamAppInfoMetadataWithNativeFallback,
@@ -48,9 +48,6 @@ type Candidate = {
   headerUrl?: string;
   sources: Set<string>;
   featuredWeight: number;
-  owners?: string;
-  positive?: number;
-  negative?: number;
   discountPercent?: number;
   originalPrice?: number;
   finalPrice?: number;
@@ -446,7 +443,7 @@ async function enrichWithinBudget(
       options.logger?.({
         level: "warning",
         phase: "home:discovery",
-        message: "Home discovery enrichment exceeded budget; using completed metadata plus feed data for banner/trending rows",
+        message: "Home discovery enrichment exceeded budget; using completed metadata plus feed data for the Home banner",
         details: {
           budgetMs: DISCOVERY_ENRICHMENT_BUDGET_MS,
           candidates: candidates.length,
@@ -494,21 +491,9 @@ async function enrichWithinBudget(
   return results.filter((game): game is Game => Boolean(game));
 }
 
-function normalizedReviewScore(candidate: Candidate): number {
-  const total = (candidate.positive ?? 0) + (candidate.negative ?? 0);
-  if (total === 0) {
-    return 0;
-  }
-
-  const ratio = (candidate.positive ?? 0) / total;
-  const volume = Math.min(1, Math.log10(total) / 7);
-  return ratio * volume;
-}
-
 function scoreCandidate(candidate: Candidate, _previousRanks: Map<string, number>): GameDiscovery {
-  const reviewScore = normalizedReviewScore(candidate);
   const discountScore = Math.min(1, (candidate.discountPercent ?? 0) / 80);
-  const score = reviewScore * 25 + candidate.featuredWeight * 20 + candidate.newnessWeight * 15 + discountScore * 5;
+  const score = candidate.featuredWeight * 20 + candidate.newnessWeight * 15 + discountScore * 5;
   const signal =
     (candidate.sources.has("featured:new_releases") || candidate.sources.has("featured:newreleases"))
       ? "New release"
@@ -525,8 +510,6 @@ function scoreCandidate(candidate: Candidate, _previousRanks: Map<string, number
   return {
     score,
     signal,
-    owners: candidate.owners,
-    reviewScore,
     priceText: formatPrice(candidate.finalPrice, candidate.currency),
     originalPriceText: formatPrice(candidate.originalPrice, candidate.currency),
     discountPercent: candidate.discountPercent,
@@ -538,8 +521,7 @@ function scoreCandidate(candidate: Candidate, _previousRanks: Map<string, number
 
 function previousDiscoveryGames(previous?: HomeModel): Map<string, Game> {
   const games = new Map<string, Game>();
-  const previousRows = (previous?.trendingRows ?? []).flatMap((row) => row.games);
-  for (const game of [...(previous?.popularNow ?? []), ...(previous?.recommended ?? []), ...(previous?.newAndNotable ?? []), ...previousRows]) {
+  for (const game of [...(previous?.popularNow ?? []), ...(previous?.recommended ?? []), ...(previous?.newAndNotable ?? [])]) {
     if (game.metadataStatus !== "none" && !/^Steam App \d+$/i.test(game.title)) {
       games.set(game.id, game);
     }
@@ -736,7 +718,7 @@ function rankRecommended(localGames: Game[], candidates: Game[]): Game[] {
       ...item.candidate,
       discovery: {
         ...(item.candidate.discovery ?? { score: item.score, signal: "Popular with your library", sources: [] }),
-        signal: tasteWeights.size > 0 ? "Popular with your library" : (item.candidate.discovery?.signal ?? "Trending")
+        signal: tasteWeights.size > 0 ? "Popular with your library" : (item.candidate.discovery?.signal ?? "Featured")
       }
     }));
 }
@@ -795,78 +777,6 @@ function candidateGameId(candidate: Candidate): string {
   return makeGameId("steam", candidate.appid);
 }
 
-function trendingCandidatePool(sources: DiscoverySources): Candidate[] {
-  return [
-    ...sources.storeFeatured,
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:newreleases") || hasSource(candidate, "featured:new_releases")),
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:comingsoon") || hasSource(candidate, "featured:coming_soon")),
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")),
-    ...sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:specials") || hasSource(candidate, "featured:dailydeal"))
-  ];
-}
-
-function gamesForCandidates(candidates: Candidate[], enrichedById: Map<string, Game>, ownedIds: Set<string>): Game[] {
-  return uniqueGames(
-    candidates
-      .map((candidate) => enrichedById.get(candidateGameId(candidate)))
-      .filter((game): game is Game => Boolean(game))
-      .filter((game) => !ownedIds.has(game.id))
-  );
-}
-
-function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Game>, ownedIds: Set<string>): HomeTrendRow[] {
-  const rows: HomeTrendRow[] = [
-    {
-      id: "new-releases",
-      title: "New releases",
-      description: "New Steam releases currently receiving front-page placement.",
-      games: gamesForCandidates(
-        sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:newreleases") || hasSource(candidate, "featured:new_releases")),
-        enrichedById,
-        ownedIds
-      )
-    },
-    {
-      id: "coming-soon",
-      title: "Coming soon",
-      description: "Upcoming titles Steam is already promoting.",
-      games: gamesForCandidates(
-        sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:comingsoon") || hasSource(candidate, "featured:coming_soon")),
-        enrichedById,
-        ownedIds
-      )
-    },
-    {
-      id: "featured",
-      title: "Featured",
-      description: "Platform front-page picks from the Steam Store featured feed.",
-      games: gamesForCandidates(sources.storeFeatured, enrichedById, ownedIds)
-    },
-    {
-      id: "top-sellers",
-      title: "Top sellers",
-      description: "Store category leaders with price and discount metadata.",
-      games: gamesForCandidates(
-        sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:topsellers") || hasSource(candidate, "featured:top_sellers")),
-        enrichedById,
-        ownedIds
-      )
-    },
-    {
-      id: "specials",
-      title: "Specials",
-      description: "Discounted games and daily deals from the Store front page.",
-      games: gamesForCandidates(
-        sources.featuredCategories.filter((candidate) => hasSource(candidate, "featured:specials") || hasSource(candidate, "featured:dailydeal")),
-        enrichedById,
-        ownedIds
-      )
-    }
-  ];
-
-  return rows.filter((row) => row.games.length > 0);
-}
-
 export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch = fetch, previous?: HomeModel, options: BuildHomeOptions = {}): Promise<HomeModel> {
   const previousRanks = previousChartRanks(previous);
   const cachedGames = previousDiscoveryGames(previous);
@@ -886,7 +796,7 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
     .map((candidate) => ({ candidate, discovery: scoreCandidate(candidate, previousRanks) }))
     .sort((a, b) => candidatePriority(b.candidate, b.discovery) - candidatePriority(a.candidate, a.discovery))
     .slice(0, 72);
-  const enrichmentCandidates = mergeCandidates([...prioritized.map((item) => item.candidate), ...trendingCandidatePool(sources)]);
+  const enrichmentCandidates = mergeCandidates(prioritized.map((item) => item.candidate));
   const feedGames = enrichmentCandidates.map((candidate) => gameFromCandidate(candidate, scoreCandidate(candidate, previousRanks)));
   const enriched = [
     ...feedGames,
@@ -927,7 +837,6 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
   const popularNow = uniqueGames(
     heroPool.filter(isHomeHeroSafe)
   ).slice(0, 20);
-  const trendingRows = buildTrendRows(sources, enrichedById, ownedIds);
   const recentActivity = [...localGames]
     .filter((game) => gameActivityTime(game) > 0)
     .sort((a, b) => gameActivityTime(b) - gameActivityTime(a))
@@ -945,7 +854,6 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
     popularNow,
     recommended: [],
     newAndNotable: [],
-    trendingRows,
     generatedAt: new Date().toISOString(),
     stale: false
   };

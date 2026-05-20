@@ -29,6 +29,7 @@ import type {
   SteamLocalAccount,
   SteamPairingResult,
   SteamSearchResult,
+  SteamStoreEmbedInfo,
   SyncStatus,
   SyncResult,
   SteamWishlistItem,
@@ -263,6 +264,8 @@ const api = {
     connectFamily: (steamId: string): Promise<AppSettings> => ipcRenderer.invoke("steam:connectFamily", steamId),
     refreshFamily: (steamId: string): Promise<AppSettings> => ipcRenderer.invoke("steam:refreshFamily", steamId),
     disconnectFamily: (steamId: string): Promise<AppSettings> => ipcRenderer.invoke("steam:disconnectFamily", steamId),
+    storeEmbed: (): Promise<SteamStoreEmbedInfo> => ipcRenderer.invoke("steam:storeEmbed"),
+    captureStoreSession: (): Promise<AppSettings | undefined> => ipcRenderer.invoke("steam:captureStoreSession"),
     listLocalAccounts: (): Promise<SteamLocalAccount[]> => ipcRenderer.invoke("steam:listLocalAccounts"),
     getActiveUser: (): Promise<SteamActiveUser> => ipcRenderer.invoke("steam:getActiveUser"),
     setAccountLocalUsername: (steamId: string, localUsername: string | undefined): Promise<AppSettings> =>

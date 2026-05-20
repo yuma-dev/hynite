@@ -11,7 +11,7 @@ import { discoverInstalledSteamApps, hashFolderPath, readLoginUsers, SteamImport
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SteamStoreEmbedInfo, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -32,8 +32,10 @@ import { SpotlightService } from "./spotlightService";
 import {
   authenticateSteamSession,
   disconnectSteamFamilySession,
+  isSteamStoreSessionLoggedIn,
   pairSteamAccount,
-  refreshSteamAccessToken
+  refreshSteamAccessToken,
+  steamFamilySessionPartition
 } from "./steamAuthService";
 import { initMainObservability, setObservabilityEnabled } from "./observability";
 import { acceleratorFromHotkeyInput } from "../shared/hotkey";
@@ -112,6 +114,7 @@ const ONBOARDING_WINDOW_HEIGHT = 560;
 const MIN_ONBOARDING_WINDOW_WIDTH = 760;
 const MIN_ONBOARDING_WINDOW_HEIGHT = 360;
 const MIN_VISIBLE_WINDOW_PX = 80;
+const STEAM_STORE_HOME_URL = "https://store.steampowered.com/";
 const METADATA_REFRESH_CONCURRENCY = 4;
 const RICH_METADATA_CONCURRENCY = 1;
 const RICH_METADATA_STARTUP_LIMIT = Number.POSITIVE_INFINITY;
@@ -122,6 +125,18 @@ const STEAM_SYNC_UPSERT_YIELD_INTERVAL = 25;
 const STEAM_SYNC_MIN_UPSERT_YIELD_INTERVAL = 5;
 const PREFETCH_LAST_PLAYED_BATCH_SIZE = 100;
 const RESOURCE_SAMPLE_INTERVAL_MS = 5_000;
+
+function pairedAtTime(account: SteamAccountSettings): number {
+  const time = Date.parse(account.pairedAt);
+  return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY;
+}
+
+function firstPairedSteamAccount(accounts: SteamAccountSettings[]): SteamAccountSettings | undefined {
+  return accounts.reduce<SteamAccountSettings | undefined>((earliest, account) => {
+    if (!earliest) return account;
+    return pairedAtTime(account) < pairedAtTime(earliest) ? account : earliest;
+  }, undefined);
+}
 
 function envFlagEnabled(value: string | undefined): boolean {
   return value === "1" || value === "true";
@@ -2096,6 +2111,7 @@ function createWindow(windowState: WindowState | undefined, options: { showWhenR
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
       backgroundThrottling: false
     }
   });
@@ -3994,6 +4010,53 @@ function registerIpc(): void {
     return settingsService.setLaunchAccountPreference(gameId, trimmed ? trimmed : undefined);
   });
   handleIpc("steam:removeAccount", async (_event, steamId: string) => onboardingPreview ? settingsService.get() : settingsService.removeSteamAccount(steamId));
+  handleIpc("steam:storeEmbed", async (): Promise<SteamStoreEmbedInfo> => {
+    const settings = await settingsService.get();
+    const account = firstPairedSteamAccount(settings.steamAccounts);
+    if (!account) {
+      return {
+        available: false,
+        url: STEAM_STORE_HOME_URL,
+        reason: "no-account"
+      };
+    }
+
+    const loggedIn = await isSteamStoreSessionLoggedIn(account.steamId).catch(() => false);
+    return {
+      available: true,
+      url: STEAM_STORE_HOME_URL,
+      partition: steamFamilySessionPartition(account.steamId),
+      loggedIn,
+      account: {
+        steamId: account.steamId,
+        personaName: account.personaName,
+        hasFamilySession: Boolean(account.familySession)
+      }
+    };
+  });
+  handleIpc("steam:captureStoreSession", async (): Promise<AppSettings | undefined> => {
+    if (onboardingPreview) {
+      return settingsService.get();
+    }
+    const current = await settingsService.get();
+    const account = firstPairedSteamAccount(current.steamAccounts);
+    if (!account) {
+      return undefined;
+    }
+    const refreshed = await refreshSteamAccessToken(account.steamId);
+    if (!refreshed || refreshed.steamId !== account.steamId) {
+      return undefined;
+    }
+    const encrypted = await nativeBridge.encryptSecret({ value: refreshed.accessToken, scope: "current-user" });
+    return settingsService.patchSteamAccount(account.steamId, {
+      familySession: {
+        accessToken: encrypted,
+        steamId: refreshed.steamId,
+        expiresAt: refreshed.expiresAt,
+        connectedAt: account.familySession?.connectedAt ?? new Date().toISOString()
+      }
+    });
+  });
 
   handleIpc("home:get", async () => {
     const settings = await settingsService.get();

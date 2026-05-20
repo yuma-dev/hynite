@@ -28,7 +28,6 @@ export class HomeService {
       hasCache: Boolean(previous),
       cacheStale: previous?.stale,
       cachePopularNow: previous?.popularNow.length ?? 0,
-      cacheTrendingRows: previous?.trendingRows.length ?? 0,
       rebuildRunning: Boolean(this.rebuild)
     });
     const hasPreviousDiscovery = previous ? this.hasDiscovery(previous) : false;
@@ -92,9 +91,7 @@ export class HomeService {
       this.logDecision("home:discovery", "Home background rebuild finished", {
         generatedAt: model.generatedAt,
         popularNow: model.popularNow.length,
-        heroTitles: model.popularNow.slice(0, 5).map((game) => game.title),
-        trendingRows: model.trendingRows.length,
-        trendingGames: model.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
+        heroTitles: model.popularNow.slice(0, 5).map((game) => game.title)
       });
       this.onRebuilt?.(model);
     } catch (error) {
@@ -127,8 +124,7 @@ export class HomeService {
         message: "Home discovery rebuild produced no discovery rows",
         details: {
           localGames: games.length,
-          popularNow: model.popularNow.length,
-          trendingRows: model.trendingRows.length
+          popularNow: model.popularNow.length
         }
       });
     }
@@ -178,7 +174,6 @@ export class HomeService {
       popularNow: [],
       recommended: [],
       newAndNotable: [],
-      trendingRows: [],
       generatedAt: new Date().toISOString(),
       stale: true
     };
@@ -207,16 +202,12 @@ export class HomeService {
       ...model,
       popularNow: model.popularNow.map(apply),
       recommended: model.recommended.map(apply),
-      newAndNotable: model.newAndNotable.map(apply),
-      trendingRows: model.trendingRows.map((row) => ({
-        ...row,
-        games: row.games.map(apply)
-      }))
+      newAndNotable: model.newAndNotable.map(apply)
     };
   }
 
   private hasDiscovery(model: HomeModel): boolean {
-    return model.popularNow.length > 0 || model.trendingRows.some((row) => row.games.length > 0);
+    return model.popularNow.length > 0;
   }
 
   private logDecision(phase: string, message: string, details?: Record<string, unknown>): void {
@@ -253,7 +244,7 @@ export class HomeService {
   }
 
   private hasUnsafeDiscoveryCache(model: HomeModel): boolean {
-    const games = [...model.popularNow, ...model.recommended, ...model.newAndNotable, ...model.trendingRows.flatMap((row) => row.games)];
+    const games = [...model.popularNow, ...model.recommended, ...model.newAndNotable];
     return games.some((game) => {
       if (this.isLegacyGuessedLibraryCapsuleUrl(game.libraryCapsuleUrl) || this.isLegacyGuessedLibraryCapsuleUrl(game.coverUrl)) {
         return true;

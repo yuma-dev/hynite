@@ -43,7 +43,6 @@ function homeModel(patch: Partial<HomeModel> = {}): HomeModel {
     popularNow: [],
     recommended: [],
     newAndNotable: [],
-    trendingRows: [],
     generatedAt: "2026-05-15T00:00:00.000Z",
     stale: false,
     ...patch
@@ -121,16 +120,9 @@ describe("HomeService", () => {
     rebuild.resolve(homeModel({ popularNow: [cachedGame] }));
   });
 
-  it("adds official header fallback to cached Steam discovery rows without vertical art", async () => {
+  it("adds official header fallback to cached Steam discovery games without vertical art", async () => {
     await writeFile(cachePath, JSON.stringify(homeModel({
-      trendingRows: [
-        {
-          id: "top-two-weeks",
-          title: "Popular this week",
-          description: "Cached trend row",
-          games: [game("steam:111", "Cached Trend")]
-        }
-      ]
+      popularNow: [game("steam:111", "Cached Discovery")]
     })));
     const rebuild = deferred<HomeModel>();
     buildHomeModelMock.mockReturnValue(rebuild.promise);
@@ -139,8 +131,8 @@ describe("HomeService", () => {
 
     const result = await service.get([]);
 
-    expect(result.trendingRows[0]?.games[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/111/header.jpg");
-    expect(result.trendingRows[0]?.games[0]?.backgroundUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/111/header.jpg");
+    expect(result.popularNow[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/111/header.jpg");
+    expect(result.popularNow[0]?.backgroundUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/111/header.jpg");
     rebuild.resolve(homeModel());
     await vi.waitFor(() => expect(onRebuilt).toHaveBeenCalled());
   });

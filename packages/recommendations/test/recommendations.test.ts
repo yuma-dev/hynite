@@ -34,10 +34,7 @@ describe("recommendations", () => {
   it("falls back when discovery sources hang", async () => {
     const sourceUrls = [
       "featuredcategories",
-      "/api/featured/",
-      "ISteamChartsService",
-      "steamspy.com/api.php",
-      "steamspy.com/"
+      "/api/featured/"
     ];
     const fetchMock = async (url: string | URL | Request, init?: RequestInit) => {
       const href = String(url);
@@ -129,7 +126,7 @@ describe("recommendations", () => {
     expect(home.popularNow[0]?.headerUrl).toBeTruthy();
   });
 
-  it("uses Steam Store featured content for the hero set instead of SteamSpy", async () => {
+  it("uses Steam Store featured content for the hero set", async () => {
     const fetchMock = async (url: string) => {
       if (url.includes("featuredcategories")) {
         return new Response(JSON.stringify({ status: 1 }), { status: 200 });
@@ -159,7 +156,7 @@ describe("recommendations", () => {
     expect(home.popularNow[0]?.coverUrl).toBeUndefined();
   });
 
-  it("filters NSFW games from the Home hero while keeping them in Trending rows", async () => {
+  it("filters NSFW games from the Home hero", async () => {
     const names: Record<string, string> = {
       "101": "Explicit Trend Game",
       "102": "Safe Trend Game"
@@ -221,10 +218,6 @@ describe("recommendations", () => {
     const home = await buildHomeModel([], fetchMock as typeof fetch);
 
     expect(home.popularNow.map((item) => item.title)).toEqual(["Safe Trend Game"]);
-    expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games.map((item) => item.title)).toEqual([
-      "Explicit Trend Game",
-      "Safe Trend Game"
-    ]);
   });
 
   it("filters explicit Store feed titles from the Home hero before rich descriptors load", async () => {
@@ -255,10 +248,6 @@ describe("recommendations", () => {
     const home = await buildHomeModel([], fetchMock as typeof fetch);
 
     expect(home.popularNow.map((item) => item.title)).toEqual(["Space Factory"]);
-    expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games.map((item) => item.title)).toEqual([
-      "Horny Hentai Porn Game",
-      "Space Factory"
-    ]);
   });
 
   it("filters adult-marker titles with non-word symbols from the Home hero", async () => {
@@ -417,101 +406,6 @@ describe("recommendations", () => {
     expect(home.popularNow.map((item) => item.title)).toEqual(["Meadow Trails"]);
   });
 
-  it("builds categorized trending rows from chart, SteamSpy, and Store category feeds", async () => {
-    const names: Record<string, string> = {
-      "111": "SteamSpy Top Game",
-      "123": "Top Seller Game",
-      "222": "Fresh Trend Game",
-      "456": "New Release Game",
-      "789": "Chart Rank Game"
-    };
-    const fetchMock = async (url: string) => {
-      if (url.includes("featuredcategories")) {
-        return new Response(
-          JSON.stringify({
-            top_sellers: {
-              id: "cat_topsellers",
-              name: "Top Sellers",
-              items: [{ id: 123, type: 0, name: names["123"], final_price: 1999, currency: "USD", header_image: "top.jpg" }]
-            },
-            new_releases: {
-              id: "cat_newreleases",
-              name: "New Releases",
-              items: [{ id: 456, type: 0, name: names["456"], final_price: 2999, currency: "USD", header_image: "new.jpg" }]
-            }
-          }),
-          { status: 200 }
-        );
-      }
-
-      if (url.includes("/api/featured/")) {
-        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
-      }
-
-      if (url.includes("ISteamChartsService")) {
-        return new Response(JSON.stringify({ response: { ranks: [{ rank: 1, appid: 789, peak_in_game: 50000 }] } }), { status: 200 });
-      }
-
-      if (url.includes("top100in2weeks")) {
-        return new Response(
-          JSON.stringify({
-            "111": { appid: 111, name: names["111"], ccu: 25000, owners: "1,000,000 .. 2,000,000", positive: 900, negative: 100 }
-          }),
-          { status: 200 }
-        );
-      }
-
-      if (url === "https://steamspy.com/") {
-        return new Response(
-          '<table id="trendinggames"><tbody><tr><a href=/app/222><img src="fresh.jpg">Fresh Trend Game</a><td data-order="2026-05-01"></td><td data-order="1499"></td><td data-order="100000"></td></tr></tbody></table>',
-          { status: 200 }
-        );
-      }
-
-      if (url.includes("api.steamcmd.net")) {
-        const appid = url.split("/").pop() ?? "";
-        return new Response(
-          JSON.stringify({
-            data: {
-              [appid]: {
-                common: {
-                  name: names[appid]
-                }
-              }
-            }
-          }),
-          { status: 200 }
-        );
-      }
-
-      const appid = new URL(url).searchParams.get("appids") ?? "";
-      return new Response(
-        JSON.stringify({
-          [appid]: {
-            success: true,
-            data: {
-              name: names[appid],
-              short_description: `${names[appid]} description`
-            }
-          }
-        }),
-        { status: 200 }
-      );
-    };
-
-    const home = await buildHomeModel([], fetchMock as typeof fetch);
-
-    expect(home.trendingRows.find((row) => row.id === "most-played-now")?.games[0]?.title).toBe("Chart Rank Game");
-    expect(home.trendingRows.find((row) => row.id === "most-played-now")?.games[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/789/header.jpg");
-    expect(home.trendingRows.find((row) => row.id === "top-two-weeks")?.games[0]?.title).toBe("SteamSpy Top Game");
-    expect(home.trendingRows.find((row) => row.id === "top-two-weeks")?.games[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/111/header.jpg");
-    expect(home.trendingRows.find((row) => row.id === "rising-recently")?.games[0]?.title).toBe("Fresh Trend Game");
-    expect(home.trendingRows.find((row) => row.id === "rising-recently")?.games[0]?.coverUrl).toBeUndefined();
-    expect(home.trendingRows.find((row) => row.id === "rising-recently")?.games[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/222/header.jpg");
-    expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games[0]?.title).toBe("Top Seller Game");
-    expect(home.trendingRows.find((row) => row.id === "new-releases")?.games[0]?.title).toBe("New Release Game");
-  });
-
   it("enriches discovery games with Steam appinfo covers instead of unverified deterministic covers", async () => {
     const fetchMock = async (url: string, init?: RequestInit) => {
       if (init?.method === "HEAD") {
@@ -572,14 +466,14 @@ describe("recommendations", () => {
 
     const home = await buildHomeModel([], fetchMock as typeof fetch);
 
-    expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games[0]?.libraryCapsuleUrl).toBe(
+    expect(home.popularNow[0]?.libraryCapsuleUrl).toBe(
       "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/346110/library_600x900.jpg"
     );
   });
 
   it("aborts discovery rebuilds when Steam rate limits source fetches", async () => {
     const fetchMock = async (url: string) => {
-      if (url.includes("steampowered.com") || url.includes("ISteamChartsService")) {
+      if (url.includes("steampowered.com")) {
         throw new SteamRateLimitError("Steam returned 429 Too Many Requests", 5000);
       }
 
@@ -620,70 +514,11 @@ describe("recommendations", () => {
       popularNow: [cached],
       recommended: [],
       newAndNotable: [],
-      trendingRows: [],
       generatedAt: "2026-05-06T00:00:00.000Z",
       stale: false
     });
 
     expect(home.popularNow[0]?.coverUrl).toBe("cached-cover.jpg");
-  });
-
-  it("re-enriches cached chart discovery when metadata had no vertical capsule", async () => {
-    const fetchMock = async (url: string) => {
-      if (url.includes("featuredcategories")) {
-        return new Response(JSON.stringify({ status: 1 }), { status: 200 });
-      }
-
-      if (url.includes("/api/featured/")) {
-        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
-      }
-
-      if (url.includes("ISteamChartsService")) {
-        return new Response(JSON.stringify({ response: { ranks: [{ rank: 1, appid: 123, peak_in_game: 50000 }] } }), { status: 200 });
-      }
-
-      if (url.includes("api.steamcmd.net")) {
-        return new Response(
-          JSON.stringify({
-            data: {
-              "123": {
-                common: {
-                  name: "Named Game",
-                  library_assets_full: {
-                    library_capsule: {
-                      image: { english: "hash/library_capsule.jpg" }
-                    }
-                  }
-                }
-              }
-            }
-          }),
-          { status: 200 }
-        );
-      }
-
-      return new Response("", { status: 500 });
-    };
-
-    const cached = game("steam:123", "Named Game");
-    cached.coverUrl = "stale-header.jpg";
-    cached.libraryCapsuleUrl = undefined;
-    cached.headerUrl = "stale-header.jpg";
-    const home = await buildHomeModel([], fetchMock as typeof fetch, {
-      recentActivity: [],
-      continuePlaying: [],
-      mostPlayed: [],
-      popularNow: [],
-      recommended: [],
-      newAndNotable: [],
-      trendingRows: [{ id: "most-played-now", title: "Most played now", description: "", games: [cached] }],
-      generatedAt: "2026-05-06T00:00:00.000Z",
-      stale: false
-    });
-
-    const chartGame = home.trendingRows.find((row) => row.id === "most-played-now")?.games[0];
-    expect(chartGame?.libraryCapsuleUrl).toBe("https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/123/hash/library_capsule.jpg");
-    expect(chartGame?.coverUrl).toBe("https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/123/hash/library_capsule.jpg");
   });
 
   it("ignores legacy guessed cached library capsules for discovery rows", async () => {
@@ -737,7 +572,6 @@ describe("recommendations", () => {
       popularNow: [cached],
       recommended: [],
       newAndNotable: [],
-      trendingRows: [],
       generatedAt: "2026-05-06T00:00:00.000Z",
       stale: false
     });

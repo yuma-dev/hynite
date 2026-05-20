@@ -294,7 +294,6 @@ button {
 .wide-game,
 .hero-cover,
 .hero-title-button,
-.trend-hero-frame,
 .close-button,
 .primary-action,
 .secondary-action,
@@ -1782,10 +1781,7 @@ button {
 
 .home-skeleton-title,
 .home-skeleton-line,
-.home-skeleton-actions span,
-.trend-skeleton-frame,
-.trend-skeleton-row > span,
-.trend-skeleton-row i {
+.home-skeleton-actions span {
   --sk-dark: #1c1e26;
   --sk-light: #2a2e3e;
   display: block;
@@ -1825,245 +1821,85 @@ button {
   border-radius: 8px;
 }
 
-.trending-page {
-  padding-bottom: 30px;
+.steam-store-page {
+  height: 100vh;
+  min-height: 100vh;
+  display: grid;
+  background: #050608;
 }
 
-.trend-hero {
-  min-height: clamp(320px, 44svh, 470px);
+.steam-store-webview-frame {
   position: relative;
-  overflow: hidden;
-  border-bottom: 0.5px solid var(--line);
-  display: grid;
-  grid-template-columns: minmax(360px, min(50vw, 720px)) minmax(280px, 1fr);
-  align-items: center;
-  gap: clamp(20px, 3vw, 38px);
-  margin: -28px -36px 18px;
-  padding: clamp(24px, 4vw, 42px);
+  height: clamp(520px, 70svh, 820px);
+  background: #050608;
 }
 
-.trend-hero-skeleton {
-  grid-template-columns: minmax(360px, min(50vw, 720px)) minmax(280px, 1fr);
-}
-
-.trend-skeleton-frame {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 10px;
-}
-
-.trend-skeleton-copy {
-  display: grid;
-  gap: 12px;
-}
-
-.trend-skeleton-rows {
-  display: grid;
-  gap: 22px;
-}
-
-.trend-skeleton-row {
-  display: grid;
-  gap: 12px;
-}
-
-.trend-skeleton-row > span {
-  width: 180px;
-  height: 22px;
-}
-
-.trend-skeleton-row div {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(120px, 1fr));
-  gap: 14px;
-}
-
-.trend-skeleton-row i {
-  aspect-ratio: 2 / 3;
-  border-radius: 10px;
-}
-
-.trend-hero-frame {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border: 0;
-  border-radius: 10px;
-  padding: 0;
-  overflow: hidden;
-  cursor: pointer;
-  position: relative;
-  background-color: #050608;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
-}
-
-.trend-hero-frame span {
-  display: block;
-  width: 100%;
+.steam-store-webview-frame.steam-store-webview-full {
   height: 100%;
-  background-size: cover;
-  background-position: center;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
 }
 
-.trend-copy {
-  position: relative;
-  min-width: 0;
-  max-height: calc(100% - 24px);
-  overflow: hidden;
-}
-
-.trend-kicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
+.steam-store-webview-frame.steam-store-empty {
+  height: 100%;
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
   color: var(--text-2);
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
-.trend-copy h1 {
+.steam-store-webview-frame.steam-store-empty p {
   margin: 0;
-  font-size: 42px;
-  line-height: 0.98;
-  letter-spacing: 0;
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.trend-copy p {
-  max-width: 620px;
+  max-width: min(520px, calc(100% - 32px));
   color: var(--text-2);
-  line-height: 1.45;
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  font-size: 13px;
+  text-align: center;
 }
 
-.trend-stat-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 16px 0;
-}
-
-.trend-stat-list span {
-  min-height: 28px;
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 0 10px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-  font-size: 12px;
-}
-
-.discovery-body {
-  display: grid;
-  gap: 0;
-}
-
-.discovery-notable {
-  margin-bottom: 32px;
-}
-
-.notable-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 14px;
-}
-
-.notable-card {
-  position: relative;
-  border: 0;
-  border-radius: 10px;
-  overflow: hidden;
-  cursor: pointer;
-  background: #15171c;
-  aspect-ratio: 16 / 9;
-  display: block;
-  padding: 0;
-}
-
-.notable-img {
-  position: absolute;
-  inset: 0;
+.steam-store-webview {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  transition: transform 220ms ease;
+  border: 0;
+  display: flex;
+  background: #101217;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
-.notable-card:hover .notable-img,
-.notable-card:focus-visible .notable-img {
-  transform: scale(1.03);
+.steam-store-webview.ready {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
-.notable-overlay {
+.steam-store-overlay {
   position: absolute;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  padding: 12px 14px;
-  background: linear-gradient(0deg, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0) 55%);
-}
-
-.notable-signal {
-  display: inline-flex;
-  align-self: flex-start;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.15);
-  color: var(--text);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  margin-bottom: 6px;
-}
-
-.notable-signal[data-signal="New release"] {
-  background: rgba(80, 200, 120, 0.25);
-  color: #82e8a8;
-}
-
-.notable-title {
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 1.2;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.notable-meta {
-  color: var(--text-2);
-  font-size: 11px;
-  margin-top: 4px;
-}
-
-.notable-card:hover,
-.notable-card:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.18);
-}
-
-.trend-skeleton-notable {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
+  place-items: center;
+  background: rgba(5, 6, 8, 0.72);
+  color: var(--text);
+  pointer-events: none;
 }
 
-.trend-skeleton-notable i {
-  aspect-ratio: 16 / 9;
-  border-radius: 10px;
+.steam-store-overlay.preparing {
+  background: #050608;
+}
+
+.steam-store-overlay.failed {
+  gap: 12px;
+  align-content: center;
+  pointer-events: auto;
+}
+
+.steam-store-overlay.failed p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
 }
 
 .hero-logo-title {
@@ -5186,22 +5022,7 @@ dd {
     padding: 26px;
   }
 
-  .trend-hero {
-    margin: -22px -22px 18px;
-    grid-template-columns: minmax(280px, 0.95fr) minmax(250px, 1fr);
-    min-height: clamp(300px, 42svh, 400px);
-    padding: 26px;
-  }
-
-  .trend-tabs {
-    margin-left: -22px;
-    margin-right: -22px;
-    padding-left: 22px;
-    padding-right: 22px;
-  }
-
   .hero h1,
-  .trend-copy h1,
   .screen-title h1,
   .library-head h1 {
     font-size: 30px;
@@ -5254,31 +5075,16 @@ dd {
     height: clamp(286px, 46svh, 360px);
   }
 
-  .trend-hero {
-    grid-template-columns: 1fr;
-    align-items: end;
-    min-height: clamp(300px, 48svh, 390px);
-  }
-
   .hero-cover {
     display: none;
   }
 
-  .trend-hero-frame {
-    display: none;
-  }
-
-  .hero-copy,
-  .trend-copy {
+  .hero-copy {
     max-width: min(580px, 100%);
   }
 
-  .notable-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .trend-skeleton-notable {
-    grid-template-columns: 1fr 1fr;
+  .steam-store-webview-frame {
+    height: clamp(460px, 66svh, 720px);
   }
 }
 
@@ -5287,12 +5093,7 @@ dd {
     height: clamp(270px, 48svh, 340px);
   }
 
-  .trend-hero {
-    min-height: clamp(276px, 48svh, 350px);
-  }
-
-  .hero p,
-  .trend-copy p {
+  .hero p {
     -webkit-line-clamp: 2;
   }
 
@@ -5302,14 +5103,6 @@ dd {
 }
 
 @media (max-width: 720px) {
-
-  .notable-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .trend-skeleton-notable {
-    grid-template-columns: 1fr 1fr;
-  }
 
   .library-head,
   .section-head,
