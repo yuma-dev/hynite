@@ -134,6 +134,12 @@ export type UpsertImportedGameSummary = {
   metadataVersion: number;
 };
 
+export type SteamTagDirectoryEntry = {
+  tagId: string;
+  name: string;
+  updatedAt: string;
+};
+
 function parseArray(value: string): string[] {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -535,6 +541,45 @@ export class HyniteRepository {
       raw: parseJson<unknown>(row.raw_json, undefined),
       fetchedAt: row.fetched_at
     };
+  }
+
+  getSteamTagNames(tagIds: string[]): Map<string, string> {
+    const uniqueIds = [...new Set(tagIds.map((id) => id.trim()).filter(Boolean))];
+    if (uniqueIds.length === 0) {
+      return new Map();
+    }
+
+    const placeholders = uniqueIds.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(`SELECT tag_id, name FROM steam_tag_directory WHERE tag_id IN (${placeholders})`)
+      .all(...uniqueIds) as Array<{ tag_id: string; name: string }>;
+    return new Map(rows.map((row) => [row.tag_id, row.name]));
+  }
+
+  upsertSteamTags(tags: Array<{ tagId: string; name: string; updatedAt?: string }>): void {
+    const rows = tags
+      .map((tag) => ({
+        tagId: tag.tagId.trim(),
+        name: tag.name.trim(),
+        updatedAt: tag.updatedAt ?? new Date().toISOString()
+      }))
+      .filter((tag) => tag.tagId && tag.name);
+    if (rows.length === 0) {
+      return;
+    }
+
+    const insert = this.db.prepare(
+      `INSERT INTO steam_tag_directory (tag_id, name, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(tag_id) DO UPDATE SET
+         name = excluded.name,
+         updated_at = excluded.updated_at`
+    );
+    this.transaction(() => {
+      for (const row of rows) {
+        insert.run(row.tagId, row.name, row.updatedAt);
+      }
+    });
   }
 
   listGames(): Game[] {

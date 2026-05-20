@@ -83,6 +83,7 @@ let foregroundStartupBackgroundWorkScheduled = false;
 let settingsBackupTimer: NodeJS.Timeout | undefined;
 let resetEverythingInProgress = false;
 let spotlightState: SpotlightState = { enabled: true, hotkey: "Alt+Space", registered: false };
+let steamTagDirectoryRefresh: Promise<void> | undefined;
 let registeredSpotlightHotkey: string | undefined;
 let pendingSpotlightAction: SpotlightPendingAction | undefined;
 let spotlightLaunchHandoffActive = false;
@@ -740,6 +741,98 @@ async function cacheMetadataAssets(patch: GameMetadataPatch, refresh = false): P
   return assetCacheService ? assetCacheService.cacheMetadataPatch(patch, { refresh }) : patch;
 }
 
+type SteamTagApiEntry = {
+  tagid?: number | string;
+  name?: string;
+};
+
+function steamTagIdsFromAppInfo(storeTags: Record<string, string> | undefined): string[] {
+  return [...new Set(
+    Object.values(storeTags ?? {})
+      .map((tag) => tag.trim())
+      .filter((tag) => /^\d+$/.test(tag))
+  )];
+}
+
+function inlineSteamTagNames(storeTags: Record<string, string> | undefined): string[] {
+  return Object.values(storeTags ?? {})
+    .map((tag) => tag.trim())
+    .filter((tag) => tag && !/^\d+$/.test(tag));
+}
+
+async function refreshSteamTagDirectory(): Promise<void> {
+  if (steamTagDirectoryRefresh) {
+    return steamTagDirectoryRefresh;
+  }
+
+  steamTagDirectoryRefresh = (async () => {
+    const response = await fetch("https://store.steampowered.com/tagdata/populartags/english?cc=DE");
+    if (!response.ok) {
+      throw new Error(`Steam tag directory returned ${response.status}`);
+    }
+
+    const json = (await response.json()) as SteamTagApiEntry[];
+    const tags = json
+      .map((entry) => ({
+        tagId: entry.tagid === undefined ? "" : String(entry.tagid),
+        name: entry.name?.trim() ?? ""
+      }))
+      .filter((entry) => entry.tagId && entry.name);
+    repository.upsertSteamTags(tags);
+    diagnosticLogService?.log({
+      level: "info",
+      phase: "metadata:steam-tags",
+      message: "Steam tag directory refreshed",
+      details: { tags: tags.length }
+    });
+  })().finally(() => {
+    steamTagDirectoryRefresh = undefined;
+  });
+
+  return steamTagDirectoryRefresh;
+}
+
+async function resolveSteamAppInfoTagNames(storeTags: Record<string, string> | undefined, game: ImportedGame): Promise<string[]> {
+  const inlineNames = inlineSteamTagNames(storeTags);
+  const tagIds = steamTagIdsFromAppInfo(storeTags);
+  if (tagIds.length === 0) {
+    return inlineNames;
+  }
+
+  let known = repository.getSteamTagNames(tagIds);
+  const missing = tagIds.filter((tagId) => !known.has(tagId));
+  if (missing.length > 0) {
+    diagnosticLogService?.log({
+      level: "info",
+      phase: "metadata:steam-tags",
+      message: `${game.title}: resolving unknown Steam tag ids`,
+      details: {
+        appid: game.externalId,
+        missingTagIds: missing.slice(0, 20),
+        totalMissing: missing.length
+      }
+    });
+    try {
+      await refreshSteamTagDirectory();
+      known = repository.getSteamTagNames(tagIds);
+    } catch (error) {
+      diagnosticLogService?.log({
+        level: "warning",
+        phase: "metadata:steam-tags",
+        message: `${game.title}: Steam tag directory refresh failed`,
+        details: {
+          appid: game.externalId,
+          missingTagIds: missing.slice(0, 20),
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+    }
+  }
+
+  return [...inlineNames, ...tagIds.map((tagId) => known.get(tagId)).filter((name): name is string => Boolean(name))]
+    .filter((name, index, names) => names.indexOf(name) === index);
+}
+
 async function fetchNativeSteamAppInfoMetadata(game: ImportedGame) {
   const span = profileSpan("native-bridge", "steam-appinfo:native", { appid: game.externalId, title: game.title });
   try {
@@ -747,6 +840,7 @@ async function fetchNativeSteamAppInfoMetadata(game: ImportedGame) {
     if (appInfo) {
       saveSteamRawMetadata(makeGameId(game.provider, game.externalId), game.externalId, "steam_appinfo", appInfo.raw ?? appInfo);
     }
+    const storeTagNames = appInfo ? await resolveSteamAppInfoTagNames(appInfo.storeTags, game) : [];
     const patch = metadataFromSteamAppInfo(
       game.externalId,
       appInfo
@@ -760,6 +854,8 @@ async function fetchNativeSteamAppInfoMetadata(game: ImportedGame) {
             headerImage: appInfo.headerImage,
             smallCapsule: appInfo.smallCapsule,
             associations: appInfo.associations,
+            storeTags: appInfo.storeTags,
+            storeTagNames,
             libraryAssetsFull: appInfo.libraryAssetsFull,
             libraryAssets: appInfo.libraryAssets,
             extended: appInfo.extended
@@ -772,6 +868,8 @@ async function fetchNativeSteamAppInfoMetadata(game: ImportedGame) {
       appid: game.externalId,
       title: game.title,
       returned: Boolean(appInfo),
+      storeTagIds: steamTagIdsFromAppInfo(appInfo?.storeTags).length,
+      storeTagNames: storeTagNames.length,
       fields: Object.keys(patch)
     });
     return patch;

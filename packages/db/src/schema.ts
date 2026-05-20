@@ -208,5 +208,17 @@ export const migrations = [
       CREATE INDEX IF NOT EXISTS idx_steam_wishlist_release_date ON steam_wishlist_items(release_date);
       CREATE INDEX IF NOT EXISTS idx_steam_wishlist_accounts_steam_id ON steam_wishlist_accounts(steam_id);
     `
+  },
+  {
+    id: 11,
+    sql: `
+      CREATE TABLE IF NOT EXISTS steam_tag_directory (
+        tag_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_steam_tag_directory_name ON steam_tag_directory(name);
+    `
   }
 ] as const;

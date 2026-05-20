@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { type Game, type HomeModel, gameActivityTime } from "@hynite/core";
-import { buildHomeModel, filterHomeHeroGames, type BuildHomeOptions } from "@hynite/recommendations";
+import { buildHomeModel, filterHomeHeroGames, homeHeroSafetyReason, type BuildHomeOptions } from "@hynite/recommendations";
 import type { DiagnosticLogService } from "./diagnosticLogService";
 
 const HOME_LOCAL_ROW_LIMIT = 72;
@@ -90,7 +90,9 @@ export class HomeService {
       this.logDecision("home:discovery", "Home background rebuild started", { games: games.length });
       const model = await this.buildAndWrite(games, previous, options);
       this.logDecision("home:discovery", "Home background rebuild finished", {
+        generatedAt: model.generatedAt,
         popularNow: model.popularNow.length,
+        heroTitles: model.popularNow.slice(0, 5).map((game) => game.title),
         trendingRows: model.trendingRows.length,
         trendingGames: model.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
       });
@@ -142,10 +144,30 @@ export class HomeService {
   private cachedOrLocalModel(games: Game[], previous: HomeModel | undefined, stale: boolean): HomeModel {
     const localRows = this.localRows(games);
     if (previous) {
+      const filteredPopularNow = filterHomeHeroGames(previous.popularNow);
+      const excluded = previous.popularNow
+        .map((game) => ({ game, reason: homeHeroSafetyReason(game) }))
+        .filter((item): item is { game: Game; reason: string } => Boolean(item.reason));
+      this.logDecision("home:get", "Returning cached Home model", {
+        generatedAt: previous.generatedAt,
+        stale,
+        cachedPopularNow: previous.popularNow.length,
+        filteredPopularNow: filteredPopularNow.length,
+        filteredHeroTitles: filteredPopularNow.slice(0, 5).map((game) => game.title),
+        excludedHeroGames: excluded.slice(0, 20).map(({ game, reason }) => ({
+          id: game.id,
+          title: game.title,
+          reason,
+          genres: game.genres,
+          tags: game.tags,
+          contentDescriptors: game.contentDescriptors
+        })),
+        totalExcludedHeroGames: excluded.length
+      });
       return {
         ...previous,
         ...localRows,
-        popularNow: filterHomeHeroGames(previous.popularNow),
+        popularNow: filteredPopularNow,
         stale
       };
     }

@@ -235,6 +235,162 @@ describe("recommendations", () => {
     ]);
   });
 
+  it("filters adult-marker titles with non-word symbols from the Home hero", async () => {
+    const fetchMock = async (url: string) => {
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "cat_topsellers",
+              name: "Top Sellers",
+              items: [
+                { id: 211, type: 0, name: "18+ Secret Room", final_price: 1999, currency: "USD", header_image: "explicit.jpg" },
+                { id: 212, type: 0, name: "Garden Builder", final_price: 1999, currency: "USD", header_image: "safe.jpg" }
+              ]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      return new Response("", { status: 500 });
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch);
+
+    expect(home.popularNow.map((item) => item.title)).toEqual(["Garden Builder"]);
+  });
+
+  it("filters adult Store descriptions from the Home hero when titles are clean", async () => {
+    const names: Record<string, string> = {
+      "221": "Midnight Academy",
+      "222": "Orchard Quest"
+    };
+    const fetchMock = async (url: string) => {
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "cat_topsellers",
+              name: "Top Sellers",
+              items: [
+                { id: 221, type: 0, name: names["221"], final_price: 1999, currency: "USD", header_image: "explicit.jpg" },
+                { id: 222, type: 0, name: names["222"], final_price: 1999, currency: "USD", header_image: "safe.jpg" }
+              ]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      if (url.includes("api.steamcmd.net")) {
+        const appid = url.split("/").pop() ?? "";
+        return new Response(
+          JSON.stringify({
+            data: {
+              [appid]: {
+                common: {
+                  name: names[appid]
+                }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      const appid = new URL(url).searchParams.get("appids") ?? "";
+      return new Response(
+        JSON.stringify({
+          [appid]: {
+            success: true,
+            data: {
+              name: names[appid],
+              short_description: appid === "221" ? "A visual novel with adult content and suggestive themes." : "A calm farming adventure.",
+              genres: [{ id: "1", description: "Adventure" }]
+            }
+          }
+        }),
+        { status: 200 }
+      );
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch);
+
+    expect(home.popularNow.map((item) => item.title)).toEqual(["Orchard Quest"]);
+  });
+
+  it("filters Steam appinfo adult user tags from the Home hero", async () => {
+    const names: Record<string, string> = {
+      "231": "Crystal Venture",
+      "232": "Meadow Trails"
+    };
+    const fetchMock = async (url: string) => {
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "cat_topsellers",
+              name: "Top Sellers",
+              items: [
+                { id: 231, type: 0, name: names["231"], final_price: 1999, currency: "USD", header_image: "tagged.jpg" },
+                { id: 232, type: 0, name: names["232"], final_price: 1999, currency: "USD", header_image: "safe.jpg" }
+              ]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      if (url.includes("api.steamcmd.net")) {
+        const appid = url.split("/").pop() ?? "";
+        return new Response(
+          JSON.stringify({
+            data: {
+              [appid]: {
+                common: {
+                  name: names[appid],
+                  store_tags: appid === "231" ? { 0: "Sexual Content", 1: "2D", 2: "Hentai", 3: "Anime" } : { 0: "Adventure" }
+                }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      const appid = new URL(url).searchParams.get("appids") ?? "";
+      return new Response(
+        JSON.stringify({
+          [appid]: {
+            success: true,
+            data: {
+              name: names[appid],
+              genres: [{ id: "1", description: "Adventure" }]
+            }
+          }
+        }),
+        { status: 200 }
+      );
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch);
+
+    expect(home.popularNow.map((item) => item.title)).toEqual(["Meadow Trails"]);
+  });
+
   it("builds categorized trending rows from chart, SteamSpy, and Store category feeds", async () => {
     const names: Record<string, string> = {
       "111": "SteamSpy Top Game",

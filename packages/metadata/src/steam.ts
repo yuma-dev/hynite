@@ -335,6 +335,9 @@ type SteamAppInfoResponse = {
         header_image?: string | Record<string, string>;
         small_capsule?: string | Record<string, string>;
         associations?: Record<string, SteamAppInfoAssociation> | SteamAppInfoAssociation[];
+        store_tags?: Record<string, string>;
+        storeTags?: Record<string, string>;
+        storeTagNames?: string[];
         library_assets_full?: {
           library_capsule?: { image?: Record<string, string>; image2x?: Record<string, string> };
           library_hero?: { image?: Record<string, string>; image2x?: Record<string, string> };
@@ -376,6 +379,9 @@ export type SteamAppInfoCommon = {
   small_capsule?: string | Record<string, string>;
   smallCapsule?: string | Record<string, string>;
   associations?: Record<string, SteamAppInfoAssociation> | SteamAppInfoAssociation[];
+  store_tags?: Record<string, string>;
+  storeTags?: Record<string, string>;
+  storeTagNames?: string[];
   library_assets_full?: {
     library_capsule?: SteamAppInfoAsset;
     library_hero?: SteamAppInfoAsset;
@@ -440,6 +446,15 @@ function appInfoAssociationNames(common: SteamAppInfoCommon | undefined, type: s
     .filter((association) => association.type?.toLocaleLowerCase() === type)
     .map((association) => association.name?.trim())
     .filter((name): name is string => Boolean(name));
+}
+
+function appInfoStoreTags(common: SteamAppInfoCommon | undefined): string[] | undefined {
+  const resolved = common?.storeTagNames?.map((tag) => tag.trim()).filter(Boolean) ?? [];
+  const inline = Object.values(common?.store_tags ?? common?.storeTags ?? {})
+    .map((tag) => tag.trim())
+    .filter((tag) => tag && !/^\d+$/.test(tag));
+  const tags = [...resolved, ...inline].filter((tag, index, values) => values.indexOf(tag) === index);
+  return tags.length ? tags : undefined;
 }
 
 function summarizeAppInfoAssets(common: SteamAppInfoCommon | undefined): Record<string, unknown> {
@@ -523,6 +538,7 @@ export function metadataFromSteamAppInfo(
     logoUrl,
     headerUrl,
     communityIconUrl: clientIconUrl,
+    tags: appInfoStoreTags(common),
     developers: developers.length ? developers : extendedDevelopers.length ? extendedDevelopers : undefined,
     publishers: publishers.length ? publishers : extendedPublishers.length ? extendedPublishers : undefined,
     releaseDate: parseSteamReleaseTimestamp(common.steam_release_date ?? common.steamReleaseDate),

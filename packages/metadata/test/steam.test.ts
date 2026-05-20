@@ -95,6 +95,11 @@ describe("fetchSteamMetadata", () => {
                   0: { name: "Studio A", type: "developer" },
                   1: { name: "Publisher B", type: "publisher" }
                 },
+                store_tags: {
+                  0: "Sexual Content",
+                  1: "2D",
+                  2: "Hentai"
+                },
                 clienticon: "client-icon-hash",
                 icon: "icon-hash",
                 header_image: { english: "header-hash/header.jpg" },
@@ -128,6 +133,7 @@ describe("fetchSteamMetadata", () => {
       logoUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3743800/logo-hash/logo.png",
       headerUrl: "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3743800/header-hash/header.jpg",
       communityIconUrl: "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/3743800/client-icon-hash.ico",
+      tags: ["Sexual Content", "2D", "Hentai"],
       developers: ["Studio A"],
       publishers: ["Publisher B"],
       releaseDate: "2025-12-01",

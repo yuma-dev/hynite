@@ -20,6 +20,23 @@ afterEach(() => {
 });
 
 describe("HyniteRepository", () => {
+  it("persists Steam tag id directory entries", () => {
+    const repository = createRepository();
+
+    repository.upsertSteamTags([
+      { tagId: "12095", name: "Sexual Content" },
+      { tagId: "9130", name: "Hentai" }
+    ]);
+    repository.upsertSteamTags([{ tagId: "9130", name: "Hentai" }]);
+
+    expect(Object.fromEntries(repository.getSteamTagNames(["12095", "9130", "999999"]))).toEqual({
+      "12095": "Sexual Content",
+      "9130": "Hentai"
+    });
+
+    repository.close();
+  });
+
   it("clears library games without removing imported download sources", () => {
     const repository = createRepository();
     repository.upsertImportedGame({

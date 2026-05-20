@@ -5256,6 +5256,73 @@ function ImageViewer({
   );
 }
 
+function LaunchHandoffPreview({
+  backgroundUrl,
+  logoUrl,
+  game
+}: {
+  backgroundUrl?: string;
+  logoUrl?: string;
+  game: Game;
+}) {
+  const backgroundStyle = backgroundUrl ? { backgroundImage: `url(${backgroundUrl})` } : undefined;
+  return (
+    <div className="launch-preview" style={fallbackArt(game)}>
+      <div className="launch-preview-bg launch-preview-bg-blur" style={backgroundStyle} />
+      <div className="launch-preview-bg launch-preview-bg-main" style={backgroundStyle} />
+      <div className="launch-preview-tint" />
+      <div className="launch-preview-identity">
+        {logoUrl
+          ? <img className="launch-preview-logo" src={logoUrl} alt="" draggable={false} />
+          : <span className="launch-preview-title">{game.title}</span>}
+        <div className="launch-preview-line">
+          <span />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecentGameItem({
+  game,
+  onAction,
+  onSelect,
+  onContextMenu
+}: {
+  game: Game;
+  onAction: (game: Game) => void;
+  onSelect: (game: Game) => void;
+  onContextMenu: (event: React.MouseEvent<HTMLElement>, game: Game) => void;
+}) {
+  const isInstalled = game.installState === "installed";
+  const launchable = canLaunch(game);
+  const RecentActionIcon = isInstalled ? Play : launchable ? Download : Info;
+  const actionLabel = isInstalled ? `Play ${game.title}` : launchable ? `Download ${game.title}` : `View details for ${game.title}`;
+  return (
+    <div className="recent-link" onContextMenu={(event) => onContextMenu(event, game)}>
+      <button
+        type="button"
+        className="recent-icon-button"
+        onClick={() => onAction(game)}
+        aria-label={actionLabel}
+      >
+        <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
+          {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
+          <span className="recent-play-overlay">
+            <RecentActionIcon size={13} fill={isInstalled ? "currentColor" : "none"} />
+          </span>
+        </span>
+      </button>
+      <button type="button" className="recent-details-button" onClick={() => onSelect(game)} aria-label={`View details for ${game.title}`}>
+        <span className="rail-label">
+          <strong>{game.title}</strong>
+          <em>{activityLabel(game)}</em>
+        </span>
+      </button>
+    </div>
+  );
+}
+
 function GameAssetEditor({
   game,
   reduceMotion,
@@ -5285,12 +5352,12 @@ function GameAssetEditor({
     poster: gameAssetUrl(game, "poster")
   }));
   const [fitModes, setFitModes] = useState<Record<GameAssetKind, AssetFitMode>>({
-    grid: "crop",
-    hero: "crop",
+    grid: "contain",
+    hero: "contain",
     logo: "contain",
-    icon: "crop",
-    header: "crop",
-    poster: "crop"
+    icon: "contain",
+    header: "contain",
+    poster: "contain"
   });
   const [cropByKind, setCropByKind] = useState<Record<GameAssetKind, { x: number; y: number; zoom: number }>>({
     grid: { x: 0, y: 0, zoom: 1 },
@@ -5328,7 +5395,17 @@ function GameAssetEditor({
     );
   }, [activeKind, candidates, providerFilter]);
 
-  const activeUrl = selectedUrls[activeKind];
+  const previewGame = useMemo<Game>(() => ({
+    ...game,
+    libraryCapsuleUrl: selectedUrls.grid ?? game.libraryCapsuleUrl,
+    coverUrl:          selectedUrls.grid ?? game.coverUrl,
+    backgroundUrl:     selectedUrls.hero ?? game.backgroundUrl,
+    logoUrl:           selectedUrls.logo ?? game.logoUrl,
+    communityIconUrl:  selectedUrls.icon ?? game.communityIconUrl,
+    headerUrl:         selectedUrls.header ?? game.headerUrl,
+    trailerPosterUrl:  selectedUrls.poster ?? game.trailerPosterUrl,
+  }), [game, selectedUrls]);
+
   const activeSlot = assetSlot(activeKind);
   const activeCrop = cropByKind[activeKind];
   const activeFit = fitModes[activeKind];
@@ -5421,139 +5498,98 @@ function GameAssetEditor({
           <div>
             <p className="eyebrow">Game</p>
             <h2 id="asset-editor-title">Edit game assets</h2>
-            <label className="asset-title-field">
-              <span>Display name</span>
-              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-            </label>
           </div>
           <button className="close-button inline-close" type="button" onClick={onClose} aria-label="Close asset editor">
             <X size={18} />
           </button>
         </div>
         <div className="asset-editor-body">
-          <aside className="asset-slot-list" aria-label="Asset slots">
-            {ASSET_SLOTS.map((slot) => {
-              const url = selectedUrls[slot.kind];
-              return (
-                <button
-                  key={slot.kind}
-                  type="button"
-                  className={slot.kind === activeKind ? "active" : undefined}
-                  onClick={() => setActiveKind(slot.kind)}
-                  aria-current={slot.kind === activeKind ? "true" : undefined}
-                >
-                  <span className={`asset-slot-thumb ${slot.className}`}>
-                    {url ? <img src={url} alt="" /> : null}
-                  </span>
-                  <span>
-                    <strong>{slot.label}</strong>
-                    <em>{slot.ratio}</em>
-                  </span>
-                </button>
-              );
-            })}
+          <aside className="asset-preview-panel" data-active={activeKind}>
+            <p className="asset-preview-label">Preview</p>
+            <div className="asset-preview-cover-wrap">
+              <GameCover game={previewGame} onSelect={() => {}} showLogo inLibrary />
+            </div>
+            <div className="asset-preview-launch-wrap">
+              <LaunchHandoffPreview
+                backgroundUrl={previewGame.backgroundUrl}
+                logoUrl={previewGame.logoUrl}
+                game={previewGame}
+              />
+            </div>
+            <div className="asset-preview-sidecar-wrap">
+              <RecentGameItem game={previewGame} onAction={() => {}} onSelect={() => {}} onContextMenu={() => {}} />
+            </div>
+            <label className="asset-title-field">
+              <span>Display name</span>
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+            </label>
           </aside>
           <main className="asset-editor-main">
-            <div className="asset-preview-row">
-              <div className={`asset-preview-frame ${activeSlot.className}`}>
-                {activeUrl ? (
-                  <img
-                    src={activeUrl}
-                    alt=""
-                    style={{
-                      objectFit: activeFit === "contain" ? "contain" : "cover",
-                      transform: activeFit === "crop" ? `scale(${activeCrop.zoom}) translate(${-activeCrop.x / 8}%, ${-activeCrop.y / 8}%)` : undefined
-                    }}
-                  />
-                ) : (
-                  <span>No asset selected</span>
-                )}
-              </div>
-              <div className="asset-controls">
-                <div>
-                  <h3>{activeSlot.label}</h3>
-                  <p>{activeSlot.ratio}</p>
-                </div>
-                <div className="segmented-control">
+            <div className="asset-slot-tabs" role="tablist" aria-label="Asset slots">
+              {ASSET_SLOTS.map((slot) => {
+                const isActive = slot.kind === activeKind;
+                return (
                   <button
+                    key={slot.kind}
                     type="button"
-                    className={activeFit === "crop" ? "active" : undefined}
-                    onClick={() => setFitModes((current) => ({ ...current, [activeKind]: "crop" }))}
+                    role="tab"
+                    className={isActive ? "active" : undefined}
+                    onClick={() => setActiveKind(slot.kind)}
+                    aria-selected={isActive}
                   >
-                    <Crop size={14} />
-                    Crop
+                    {slot.label}
                   </button>
-                  <button
-                    type="button"
-                    className={activeFit === "contain" ? "active" : undefined}
-                    onClick={() => setFitModes((current) => ({ ...current, [activeKind]: "contain" }))}
-                  >
-                    <Images size={14} />
-                    Fit
-                  </button>
-                </div>
-                {activeFit === "crop" ? (
-                  <div className="crop-controls">
-                    <label>
-                      <span>Zoom</span>
-                      <input
-                        type="range"
-                        min="1"
-                        max="2.2"
-                        step="0.02"
-                        value={activeCrop.zoom}
-                        onChange={(event) => setCropByKind((current) => ({ ...current, [activeKind]: { ...current[activeKind], zoom: Number(event.target.value) } }))}
-                      />
-                    </label>
-                    <label>
-                      <span>X</span>
-                      <input
-                        type="range"
-                        min="-50"
-                        max="50"
-                        step="1"
-                        value={activeCrop.x}
-                        onChange={(event) => setCropByKind((current) => ({ ...current, [activeKind]: { ...current[activeKind], x: Number(event.target.value) } }))}
-                      />
-                    </label>
-                    <label>
-                      <span>Y</span>
-                      <input
-                        type="range"
-                        min="-50"
-                        max="50"
-                        step="1"
-                        value={activeCrop.y}
-                        onChange={(event) => setCropByKind((current) => ({ ...current, [activeKind]: { ...current[activeKind], y: Number(event.target.value) } }))}
-                      />
-                    </label>
-                  </div>
-                ) : null}
-                <label className="custom-asset-url">
-                  <span>Custom URL</span>
-                  <div>
-                    <input value={customUrl} onChange={(event) => setCustomUrl(event.target.value)} placeholder="https://..." />
-                    <button type="button" className="icon-action" onClick={applyCustomUrl}>
-                      <Link2 size={14} />
-                      Use
-                    </button>
-                  </div>
-                </label>
-              </div>
+                );
+              })}
             </div>
 
-            <div className="asset-provider-tabs">
-              {ASSET_PROVIDERS.map((entry) => (
+            <div className="asset-editor-controls">
+              <div className="asset-provider-tabs">
+                {ASSET_PROVIDERS.map((entry) => (
+                  <button
+                    key={entry.provider}
+                    type="button"
+                    className={providerFilter === entry.provider ? "active" : undefined}
+                    onClick={() => setProviderFilter(entry.provider)}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </div>
+              <div className="segmented-control">
                 <button
-                  key={entry.provider}
                   type="button"
-                  className={providerFilter === entry.provider ? "active" : undefined}
-                  onClick={() => setProviderFilter(entry.provider)}
+                  className={activeFit === "contain" ? "active" : undefined}
+                  onClick={() => setFitModes((current) => ({ ...current, [activeKind]: "contain" }))}
                 >
-                  {entry.label}
+                  <Images size={14} />
+                  Fit
                 </button>
-              ))}
+                <button
+                  type="button"
+                  className={activeFit === "crop" ? "active" : undefined}
+                  onClick={() => setFitModes((current) => ({ ...current, [activeKind]: "crop" }))}
+                >
+                  <Crop size={14} />
+                  Crop
+                </button>
+              </div>
             </div>
+            {activeFit === "crop" ? (
+              <p className="asset-editor-extra asset-crop-note">
+                Image will be center-cropped to fill the slot on save.
+              </p>
+            ) : null}
+            <label className="asset-editor-extra custom-asset-url">
+              <span>Custom URL</span>
+              <div>
+                <input value={customUrl} onChange={(event) => setCustomUrl(event.target.value)} placeholder="https://..." />
+                <button type="button" className="icon-action" onClick={applyCustomUrl}>
+                  <Link2 size={14} />
+                  Use
+                </button>
+              </div>
+            </label>
 
             {error ? <p className="error-line">{error}</p> : null}
             {warnings.length ? <p className="asset-warning">{warnings.slice(0, 3).join(" ")}</p> : null}
@@ -5564,33 +5600,35 @@ function GameAssetEditor({
               </div>
             ) : filteredCandidates.length ? (
               <div className="asset-candidate-grid">
-                {filteredCandidates.map((candidate) => {
-                  const selected = selectedUrls[candidate.kind] === candidate.url;
-                  return (
-                    <button
-                      key={candidate.id}
-                      type="button"
-                      className={selected ? "selected" : undefined}
-                      onClick={() => selectCandidate(candidate)}
-                    >
-                      <span className={`asset-candidate-image ${assetSlot(candidate.kind).className}`}>
-                        <img src={candidate.thumbnailUrl ?? candidate.url} alt="" loading="lazy" />
-                      </span>
-                      <span className="asset-candidate-meta">
-                        <strong>{candidate.label}</strong>
-                        <em>
-                          {[
-                            providerLabel(candidate.provider),
-                            candidate.width && candidate.height ? `${candidate.width}x${candidate.height}` : undefined,
-                            candidate.score !== undefined ? `score ${candidate.score}` : undefined,
-                            candidate.nsfw ? "NSFW" : undefined,
-                            candidate.humor ? "Humor" : undefined
-                          ].filter(Boolean).join(" / ")}
-                        </em>
-                      </span>
-                    </button>
-                  );
-                })}
+                <div className="asset-candidate-columns">
+                  {filteredCandidates.map((candidate) => {
+                    const selected = selectedUrls[candidate.kind] === candidate.url;
+                    return (
+                      <button
+                        key={candidate.id}
+                        type="button"
+                        className={selected ? "selected" : undefined}
+                        onClick={() => selectCandidate(candidate)}
+                      >
+                        <span className="asset-candidate-image">
+                          <img src={candidate.thumbnailUrl ?? candidate.url} alt="" loading="lazy" />
+                        </span>
+                        <span className="asset-candidate-meta">
+                          <strong>{candidate.label}</strong>
+                          <em>
+                            {[
+                              providerLabel(candidate.provider),
+                              candidate.width && candidate.height ? `${candidate.width}x${candidate.height}` : undefined,
+                              candidate.score !== undefined ? `score ${candidate.score}` : undefined,
+                              candidate.nsfw ? "NSFW" : undefined,
+                              candidate.humor ? "Humor" : undefined
+                            ].filter(Boolean).join(" / ")}
+                          </em>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <p className="muted">No assets for this slot and provider.</p>
@@ -7296,8 +7334,10 @@ function LauncherShell() {
     const promise = window.hynite.home.get().then((nextHome) => {
       homeDebug("renderer get finished", {
         durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        generatedAt: nextHome.generatedAt,
         stale: nextHome.stale,
         popularNow: nextHome.popularNow.length,
+        heroTitles: nextHome.popularNow.slice(0, 5).map((game) => game.title),
         trendingRows: nextHome.trendingRows.length,
         trendingGames: nextHome.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
       });
@@ -7534,8 +7574,10 @@ function LauncherShell() {
       const token = ++homeApplyTokenRef.current;
       homeDebug("renderer update event received", {
         token,
+        generatedAt: nextHome.generatedAt,
         stale: nextHome.stale,
         popularNow: nextHome.popularNow.length,
+        heroTitles: nextHome.popularNow.slice(0, 5).map((game) => game.title),
         trendingRows: nextHome.trendingRows.length,
         trendingGames: nextHome.trendingRows.reduce((sum, row) => sum + row.games.length, 0)
       });
@@ -8101,35 +8143,15 @@ function LauncherShell() {
                 <span className="rail-label">Recent</span>
               </p>
               <div className="recent-list">
-                {recentGames.slice(0, 30).map((game) => {
-                  const isInstalled = game.installState === "installed";
-                  const launchable = canLaunch(game);
-                  const RecentActionIcon = isInstalled ? Play : launchable ? Download : Info;
-                  const actionLabel = isInstalled ? `Play ${game.title}` : launchable ? `Download ${game.title}` : `View details for ${game.title}`;
-                  return (
-                    <div key={game.id} className="recent-link" onContextMenu={(event) => openGameContextMenu(event, game)}>
-                      <button
-                        type="button"
-                        className="recent-icon-button"
-                        onClick={() => (launchable ? void launchGame(game) : void selectGame(game))}
-                        aria-label={actionLabel}
-                      >
-                        <span className={game.communityIconUrl ? "recent-icon has-image" : "recent-icon"} style={!game.communityIconUrl ? fallbackArt(game) : undefined}>
-                          {game.communityIconUrl ? <img src={game.communityIconUrl} alt="" /> : null}
-                          <span className="recent-play-overlay">
-                            <RecentActionIcon size={13} fill={isInstalled ? "currentColor" : "none"} />
-                          </span>
-                        </span>
-                      </button>
-                      <button type="button" className="recent-details-button" onClick={() => void selectGame(game)} aria-label={`View details for ${game.title}`}>
-                        <span className="rail-label">
-                          <strong>{game.title}</strong>
-                          <em>{activityLabel(game)}</em>
-                        </span>
-                      </button>
-                    </div>
-                  );
-                })}
+                {recentGames.slice(0, 30).map((game) => (
+                  <RecentGameItem
+                    key={game.id}
+                    game={game}
+                    onAction={(g) => (canLaunch(g) ? void launchGame(g) : void selectGame(g))}
+                    onSelect={(g) => void selectGame(g)}
+                    onContextMenu={(event, g) => openGameContextMenu(event, g)}
+                  />
+                ))}
               </div>
             </div>
           </div>

@@ -123,8 +123,19 @@ const fallbackPopular = [
 const HOME_LOCAL_ROW_LIMIT = 72;
 const DISCOVERY_ENRICHMENT_CONCURRENCY = 2;
 const DISCOVERY_ENRICHMENT_BUDGET_MS = 2_500;
-const HOME_HERO_NSFW_PATTERN =
-  /\b(?:18\+|adult(?:\s+only)?|nsfw|xxx|hentai|ecchi|eroge|porn(?:ographic|ography)?|erotic|sexual(?:\s+(?:content|themes?))?|nudity|nude|naked|sex|sexy|lust|fetish|bdsm|strip(?:per|ping)?|brothel|prostitut(?:e|ion)|incest|futanari|futa|milf|boobs?|breasts?)\b/i;
+const HOME_HERO_NSFW_PATTERNS = [
+  {
+    reason: "adult age marker",
+    pattern: /(?:^|[\s([{"'_/\\-])(?:18\+|r[-\s]?18)(?:$|[\s)\]}.,:;!?'"_/\\-])/i
+  },
+  {
+    reason: "adult/sexual marker",
+    pattern: /\b(?:adult(?:\s+(?:only|content|game|games|visual\s+novel))?|nsfw|xxx|hentai|ecchi|eroge|porn(?:ographic|ography)?|erotic|sexual(?:\s+(?:content|themes?|material))?|nudity|nude|naked|sex|sexy|suggestive(?:\s+themes?)?|risque|lewd|lust(?:ful)?|fetish|bdsm|strip(?:per|ping)?|brothel|prostitut(?:e|ion)|incest|futanari|futa|milf|boobs?|breasts?)\b/i
+  }
+];
+
+type HomeHeroSafetyFields = Pick<Game, "title" | "genres" | "tags" | "contentDescriptors"> &
+  Partial<Pick<Game, "shortDescription" | "aboutText">>;
 
 function isLegacyGuessedLibraryCapsuleUrl(value: string | undefined): boolean {
   return Boolean(value && /^https:\/\/(?:cdn\.akamai\.steamstatic\.com\/steam|steamcdn-a\.akamaihd\.net\/steam)\/apps\/\d+\/library_600x900(?:_2x)?\.jpg(?:\?.*)?$/i.test(value));
@@ -134,9 +145,71 @@ function usableArtworkUrl(value: string | undefined): string | undefined {
   return isLegacyGuessedLibraryCapsuleUrl(value) ? undefined : value;
 }
 
-export function isHomeHeroSafe(game: Pick<Game, "title" | "genres" | "tags" | "contentDescriptors">): boolean {
-  const safetyText = [game.title, ...game.genres, ...game.tags, ...game.contentDescriptors].join(" ");
-  return !HOME_HERO_NSFW_PATTERN.test(safetyText);
+const STEAM_CATEGORY_TAGS = new Set([
+  "captions available",
+  "commentary available",
+  "cross-platform multiplayer",
+  "family sharing",
+  "full controller support",
+  "hdr available",
+  "in-app purchases",
+  "includes level editor",
+  "includes source sdk",
+  "lan co-op",
+  "lan pvp",
+  "mmo",
+  "multi-player",
+  "online co-op",
+  "online pvp",
+  "partial controller support",
+  "pvp",
+  "remote play on phone",
+  "remote play on tablet",
+  "remote play on tv",
+  "remote play together",
+  "shared/split screen",
+  "shared/split screen co-op",
+  "shared/split screen pvp",
+  "single-player",
+  "stats",
+  "steam achievements",
+  "steam cloud",
+  "steam deck",
+  "steam leaderboards",
+  "steam trading cards",
+  "steam turn notifications",
+  "steam workshop",
+  "stereo sound",
+  "tracked controller support",
+  "valve anti-cheat enabled",
+  "vr only",
+  "vr supported"
+]);
+
+function hasResolvedStoreTags(game: Pick<Game, "tags">): boolean {
+  return game.tags.some((tag) => !STEAM_CATEGORY_TAGS.has(tag.trim().toLocaleLowerCase()));
+}
+
+function homeHeroSafetyText(game: HomeHeroSafetyFields): string {
+  return [game.title, game.shortDescription, game.aboutText, ...game.genres, ...game.tags, ...game.contentDescriptors]
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+}
+
+export function homeHeroSafetyReason(game: HomeHeroSafetyFields): string | undefined {
+  const safetyText = homeHeroSafetyText(game);
+  for (const { reason, pattern } of HOME_HERO_NSFW_PATTERNS) {
+    const match = pattern.exec(safetyText);
+    if (match) {
+      return `${reason}: ${match[0].trim()}`;
+    }
+  }
+
+  return undefined;
+}
+
+export function isHomeHeroSafe(game: HomeHeroSafetyFields): boolean {
+  return !homeHeroSafetyReason(game);
 }
 
 export function filterHomeHeroGames(games: Game[]): Game[] {
@@ -434,22 +507,6 @@ function mergeCandidates(values: Candidate[]): Candidate[] {
   return [...candidates.values()];
 }
 
-async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper: (item: T) => Promise<U>): Promise<U[]> {
-  const results = new Array<U>(items.length);
-  let index = 0;
-
-  async function worker(): Promise<void> {
-    while (index < items.length) {
-      const currentIndex = index;
-      index += 1;
-      results[currentIndex] = await mapper(items[currentIndex] as T);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
-  return results;
-}
-
 async function enrichWithinBudget(
   candidates: Candidate[],
   previousRanks: Map<string, number>,
@@ -457,31 +514,62 @@ async function enrichWithinBudget(
   cachedGames: Map<string, Game>,
   options: BuildHomeOptions
 ): Promise<Game[]> {
+  const results = new Array<Game | undefined>(candidates.length);
   let timedOut = false;
+  let nextIndex = 0;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<Game[]>((resolve) => {
+  const timeout = new Promise<"timeout">((resolve) => {
     timeoutId = setTimeout(() => {
       timedOut = true;
       options.logger?.({
         level: "warning",
         phase: "home:discovery",
-        message: "Home discovery enrichment exceeded budget; using feed data for banner/trending rows",
-        details: { budgetMs: DISCOVERY_ENRICHMENT_BUDGET_MS, candidates: candidates.length }
+        message: "Home discovery enrichment exceeded budget; using completed metadata plus feed data for banner/trending rows",
+        details: {
+          budgetMs: DISCOVERY_ENRICHMENT_BUDGET_MS,
+          candidates: candidates.length,
+          enriched: results.filter(Boolean).length
+        }
       });
-      resolve([]);
+      resolve("timeout");
     }, DISCOVERY_ENRICHMENT_BUDGET_MS);
   });
-  const enriched = mapWithConcurrency(
-    candidates,
-    DISCOVERY_ENRICHMENT_CONCURRENCY,
-    (candidate) => enrichCandidate(candidate, scoreCandidate(candidate, previousRanks), fetchImpl, cachedGames, options)
-  ).then((games) => timedOut ? [] : games.filter((game): game is Game => Boolean(game)));
 
-  return Promise.race([enriched, timeout]).finally(() => {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
+  async function worker(): Promise<void> {
+    while (!timedOut) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      const candidate = candidates[currentIndex];
+      if (!candidate) {
+        return;
+      }
+
+      const game = await enrichCandidate(candidate, scoreCandidate(candidate, previousRanks), fetchImpl, cachedGames, options);
+      if (game) {
+        results[currentIndex] = game;
+      }
     }
-  });
+  }
+
+  const workers = Promise.all(Array.from({ length: Math.min(DISCOVERY_ENRICHMENT_CONCURRENCY, candidates.length) }, () => worker()));
+  const completed = workers.then(() => "completed" as const);
+  const outcome = await Promise.race([completed, timeout]);
+  if (outcome === "timeout") {
+    workers.catch((error) => {
+      options.logger?.({
+        level: isSteamRateLimitError(error) ? "warning" : "error",
+        phase: "metadata:discovery",
+        message: "Home discovery enrichment failed after timeout",
+        details: { error: error instanceof Error ? error.message : String(error) }
+      });
+    });
+  }
+
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+  }
+
+  return results.filter((game): game is Game => Boolean(game));
 }
 
 function normalizedReviewScore(candidate: Candidate): number {
@@ -619,7 +707,7 @@ async function enrichCandidate(
   };
   const cached = cachedGames.get(base.id);
   const cachedLibraryCapsuleUrl = usableArtworkUrl(cached?.libraryCapsuleUrl);
-  if (cached && cachedLibraryCapsuleUrl) {
+  if (cached && cachedLibraryCapsuleUrl && hasResolvedStoreTags(cached)) {
     const fallbackHeaderUrl = cached.headerUrl ?? candidate.headerUrl ?? cached.backgroundUrl;
     return {
       ...cached,
@@ -932,12 +1020,35 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
 
   const ownedIds = new Set(localGames.flatMap((game) => game.sourceIds.map((source) => `${source.provider}:${source.externalId}`)));
   const enrichedById = new Map(enriched.map((game) => [game.id, game]));
-  const popularNow = uniqueGames(
+  const heroPool = uniqueGames(
     prioritized
       .map((item) => enrichedById.get(candidateGameId(item.candidate)))
       .filter((game): game is Game => Boolean(game))
       .filter((game) => !ownedIds.has(game.id))
-      .filter(isHomeHeroSafe)
+  );
+  const rejectedHeroGames = heroPool
+    .map((game) => ({ game, reason: homeHeroSafetyReason(game) }))
+    .filter((item): item is { game: Game; reason: string } => Boolean(item.reason));
+  if (rejectedHeroGames.length > 0) {
+    options.logger?.({
+      level: "info",
+      phase: "home:discovery",
+      message: "Home hero NSFW filter excluded discovery games",
+      details: {
+        excluded: rejectedHeroGames.slice(0, 20).map(({ game, reason }) => ({
+          id: game.id,
+          title: game.title,
+          reason,
+          genres: game.genres,
+          tags: game.tags,
+          contentDescriptors: game.contentDescriptors
+        })),
+        totalExcluded: rejectedHeroGames.length
+      }
+    });
+  }
+  const popularNow = uniqueGames(
+    heroPool.filter(isHomeHeroSafe)
   ).slice(0, 20);
   const trendingRows = buildTrendRows(sources, enrichedById, ownedIds);
   const recentActivity = [...localGames]
