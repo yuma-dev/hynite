@@ -1238,10 +1238,15 @@ const GameCover = memo(function GameCover({
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const [coverFailed, setCoverFailed] = useState(false);
-  const cover = coverFailed ? heroStill(game) : primaryCover(game, { allowDisplayFallback });
+  const primaryCoverUrl = primaryCover(game, { allowDisplayFallback });
+  const fallbackCoverUrl = heroStill(game);
+  const cover = coverFailed ? fallbackCoverUrl : primaryCoverUrl;
+  const coverImgRef = useRef<HTMLImageElement | null>(null);
   const coverProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
+  const coverProfileUrlRef = useRef<string | undefined>();
   const logoProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
   const profileDetailsRef = useRef<Record<string, unknown> | undefined>(profileDetails);
+  const loadedCoverSrcRef = useRef<string | undefined>();
   const isInstalled = game.installState === "installed";
   const launchable = canLaunch(game);
   const activity = formatCoverActivity(game);
@@ -1255,19 +1260,79 @@ const GameCover = memo(function GameCover({
   }, [profileDetails]);
 
   useEffect(() => {
-    setImgLoaded(false);
     setCoverFailed(false);
-  }, [game.id]);
+  }, [game.id, primaryCoverUrl]);
+
+  useLayoutEffect(() => {
+    loadedCoverSrcRef.current = undefined;
+    setImgLoaded(false);
+  }, [cover]);
+
+  const finishCoverLoad = useCallback((image: HTMLImageElement) => {
+    const loadedSrc = image.currentSrc || image.src;
+    if (!loadedSrc || loadedCoverSrcRef.current === loadedSrc) {
+      return;
+    }
+
+    loadedCoverSrcRef.current = loadedSrc;
+    setImgLoaded(true);
+    if (coverProfileUrlRef.current === cover) {
+      coverProfileRef.current?.end("ok", {
+        ...profileDetailsRef.current,
+        role: "cover",
+        gameId: game.id,
+        title: game.title,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        lazy: true
+      });
+      coverProfileRef.current = undefined;
+      coverProfileUrlRef.current = undefined;
+    }
+    onCoverLoad?.({
+      ...profileDetailsRef.current,
+      gameId: game.id,
+      title: game.title,
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight
+    });
+  }, [cover, game.id, game.title, onCoverLoad]);
+
+  useLayoutEffect(() => {
+    if (!cover) {
+      return;
+    }
+
+    const image = coverImgRef.current;
+    if (!image?.complete) {
+      return;
+    }
+
+    if (image.naturalWidth > 0) {
+      finishCoverLoad(image);
+    } else if (!coverFailed) {
+      setCoverFailed(true);
+    }
+  }, [cover, coverFailed, finishCoverLoad]);
 
   useEffect(() => {
     if (!cover) return undefined;
     const details = { ...profileDetailsRef.current, role: "cover", gameId: game.id, title: game.title, lazy: true };
     const span = profileImageStart(cover, details);
     coverProfileRef.current = span;
+    coverProfileUrlRef.current = cover;
+    const image = coverImgRef.current;
+    if (image?.complete && image.naturalWidth > 0) {
+      span.end("ok", { ...details, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight });
+      coverProfileRef.current = undefined;
+      coverProfileUrlRef.current = undefined;
+      return undefined;
+    }
     return () => {
       if (coverProfileRef.current === span) {
         span.end("cancelled", details);
         coverProfileRef.current = undefined;
+        coverProfileUrlRef.current = undefined;
       }
     };
   }, [cover, game.id, game.title]);
@@ -1311,36 +1376,25 @@ const GameCover = memo(function GameCover({
       <span className="cover-art">
         {cover ? (
           <img
+            ref={coverImgRef}
             className={imgLoaded ? "cover-img loaded" : "cover-img"}
             src={cover}
             alt=""
             loading="lazy"
             decoding="async"
             onLoad={(event) => {
-              setImgLoaded(true);
-              coverProfileRef.current?.end("ok", {
-                ...profileDetailsRef.current,
-                role: "cover",
-                gameId: game.id,
-                title: game.title,
-                naturalWidth: event.currentTarget.naturalWidth,
-                naturalHeight: event.currentTarget.naturalHeight,
-                lazy: true
-              });
-              onCoverLoad?.({
-                ...profileDetailsRef.current,
-                gameId: game.id,
-                title: game.title,
-                naturalWidth: event.currentTarget.naturalWidth,
-                naturalHeight: event.currentTarget.naturalHeight
-              });
-              coverProfileRef.current = undefined;
+              finishCoverLoad(event.currentTarget);
             }}
             onError={() => {
               const details = { ...profileDetailsRef.current, role: "cover", gameId: game.id, title: game.title, lazy: true };
               profileImageError(cover, details);
-              coverProfileRef.current?.end("error", details);
-              coverProfileRef.current = undefined;
+              if (coverProfileUrlRef.current === cover) {
+                coverProfileRef.current?.end("error", details);
+                coverProfileRef.current = undefined;
+                coverProfileUrlRef.current = undefined;
+              }
+              loadedCoverSrcRef.current = undefined;
+              setImgLoaded(false);
               if (!coverFailed) setCoverFailed(true);
             }}
           />
