@@ -121,6 +121,30 @@ describe("HomeService", () => {
     rebuild.resolve(homeModel({ popularNow: [cachedGame] }));
   });
 
+  it("adds official header fallback to cached Steam discovery rows without vertical art", async () => {
+    await writeFile(cachePath, JSON.stringify(homeModel({
+      trendingRows: [
+        {
+          id: "top-two-weeks",
+          title: "Popular this week",
+          description: "Cached trend row",
+          games: [game("steam:111", "Cached Trend")]
+        }
+      ]
+    })));
+    const rebuild = deferred<HomeModel>();
+    buildHomeModelMock.mockReturnValue(rebuild.promise);
+    const onRebuilt = vi.fn();
+    const service = new HomeService(cachePath, undefined, onRebuilt);
+
+    const result = await service.get([]);
+
+    expect(result.trendingRows[0]?.games[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/111/header.jpg");
+    expect(result.trendingRows[0]?.games[0]?.backgroundUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/111/header.jpg");
+    rebuild.resolve(homeModel());
+    await vi.waitFor(() => expect(onRebuilt).toHaveBeenCalled());
+  });
+
   it("does not return unsafe discovery cache and rebuilds in the background", async () => {
     const unsafeGame = game("steam:3", "Unsafe Game", {
       coverUrl: "https://cdn.akamai.steamstatic.com/steam/apps/3/library_600x900.jpg",

@@ -144,14 +144,15 @@ export class HomeService {
   private cachedOrLocalModel(games: Game[], previous: HomeModel | undefined, stale: boolean): HomeModel {
     const localRows = this.localRows(games);
     if (previous) {
-      const filteredPopularNow = filterHomeHeroGames(previous.popularNow);
-      const excluded = previous.popularNow
+      const cached = this.withDiscoveryHeaderFallbacks(previous);
+      const filteredPopularNow = filterHomeHeroGames(cached.popularNow);
+      const excluded = cached.popularNow
         .map((game) => ({ game, reason: homeHeroSafetyReason(game) }))
         .filter((item): item is { game: Game; reason: string } => Boolean(item.reason));
       this.logDecision("home:get", "Returning cached Home model", {
-        generatedAt: previous.generatedAt,
+        generatedAt: cached.generatedAt,
         stale,
-        cachedPopularNow: previous.popularNow.length,
+        cachedPopularNow: cached.popularNow.length,
         filteredPopularNow: filteredPopularNow.length,
         filteredHeroTitles: filteredPopularNow.slice(0, 5).map((game) => game.title),
         excludedHeroGames: excluded.slice(0, 20).map(({ game, reason }) => ({
@@ -165,7 +166,7 @@ export class HomeService {
         totalExcludedHeroGames: excluded.length
       });
       return {
-        ...previous,
+        ...cached,
         ...localRows,
         popularNow: filteredPopularNow,
         stale
@@ -180,6 +181,37 @@ export class HomeService {
       trendingRows: [],
       generatedAt: new Date().toISOString(),
       stale: true
+    };
+  }
+
+  private withDiscoveryHeaderFallbacks(model: HomeModel): HomeModel {
+    const apply = (game: Game): Game => {
+      if (game.headerUrl || game.backgroundUrl) {
+        return game;
+      }
+
+      const steamAppId = game.sourceIds.find((source) => source.provider === "steam")?.externalId;
+      if (!steamAppId) {
+        return game;
+      }
+
+      const headerUrl = `https://cdn.akamai.steamstatic.com/steam/apps/${encodeURIComponent(steamAppId)}/header.jpg`;
+      return {
+        ...game,
+        headerUrl,
+        backgroundUrl: headerUrl
+      };
+    };
+
+    return {
+      ...model,
+      popularNow: model.popularNow.map(apply),
+      recommended: model.recommended.map(apply),
+      newAndNotable: model.newAndNotable.map(apply),
+      trendingRows: model.trendingRows.map((row) => ({
+        ...row,
+        games: row.games.map(apply)
+      }))
     };
   }
 

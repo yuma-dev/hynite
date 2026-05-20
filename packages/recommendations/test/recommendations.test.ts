@@ -31,6 +31,32 @@ describe("recommendations", () => {
     expect(home.continuePlaying).toEqual([]);
   });
 
+  it("falls back when discovery sources hang", async () => {
+    const sourceUrls = [
+      "featuredcategories",
+      "/api/featured/",
+      "ISteamChartsService",
+      "steamspy.com/api.php",
+      "steamspy.com/"
+    ];
+    const fetchMock = async (url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url);
+      if (sourceUrls.some((sourceUrl) => href.includes(sourceUrl))) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        });
+      }
+
+      return new Response("{}", { status: 500 });
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch, undefined, { discoverySourceFetchTimeoutMs: 5 });
+
+    expect(home.popularNow.length).toBeGreaterThan(0);
+    expect(home.popularNow[0]?.discovery?.sources).toContain("fallback");
+    expect(home.stale).toBe(false);
+  });
+
   it("excludes owned games from recommendations", async () => {
     const fetchMock = async () => ({ ok: false, status: 500 }) as Response;
     const home = await buildHomeModel([game("steam:730", "Counter-Strike 2")], fetchMock as typeof fetch);
@@ -476,9 +502,12 @@ describe("recommendations", () => {
     const home = await buildHomeModel([], fetchMock as typeof fetch);
 
     expect(home.trendingRows.find((row) => row.id === "most-played-now")?.games[0]?.title).toBe("Chart Rank Game");
+    expect(home.trendingRows.find((row) => row.id === "most-played-now")?.games[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/789/header.jpg");
     expect(home.trendingRows.find((row) => row.id === "top-two-weeks")?.games[0]?.title).toBe("SteamSpy Top Game");
+    expect(home.trendingRows.find((row) => row.id === "top-two-weeks")?.games[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/111/header.jpg");
     expect(home.trendingRows.find((row) => row.id === "rising-recently")?.games[0]?.title).toBe("Fresh Trend Game");
     expect(home.trendingRows.find((row) => row.id === "rising-recently")?.games[0]?.coverUrl).toBeUndefined();
+    expect(home.trendingRows.find((row) => row.id === "rising-recently")?.games[0]?.headerUrl).toBe("https://cdn.akamai.steamstatic.com/steam/apps/222/header.jpg");
     expect(home.trendingRows.find((row) => row.id === "top-sellers")?.games[0]?.title).toBe("Top Seller Game");
     expect(home.trendingRows.find((row) => row.id === "new-releases")?.games[0]?.title).toBe("New Release Game");
   });

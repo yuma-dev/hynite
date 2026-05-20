@@ -146,6 +146,10 @@ function homeDebug(message: string, details?: Record<string, unknown>): void {
   }
 }
 
+function homeHasDiscoveryContent(home: HomeModel | undefined): boolean {
+  return Boolean(home && (home.popularNow.length > 0 || home.trendingRows.some((row) => row.games.length > 0)));
+}
+
 function requestSteamSwitchConfirmation(prompt: Omit<SteamSwitchPrompt, "resolve">): Promise<boolean> {
   return new Promise((resolve) => {
     const detail = { ...prompt, handled: false, resolve };
@@ -233,6 +237,7 @@ const HERO_AUTOPLAY_MS = 9000;
 const HOME_REFRESH_DEBOUNCE_MS = 250;
 const HOME_STALE_RETRY_DELAY_MS = 2000;
 const HOME_STALE_RETRY_MAX = 1;
+const HOME_DISCOVERY_LOADING_MAX_MS = 15_000;
 const HOME_DETAIL_INTENT_PREFETCH_DELAY_MS = 150;
 const HOME_ROW_BATCH_SIZE = 12;
 const HOME_ROW_STEP_ITEMS = 3;
@@ -340,8 +345,13 @@ function isVerifiedVerticalCoverUrl(value: string | undefined): boolean {
   return Boolean(value && (/(?:\/|%2f)library_(?:600x900|capsule)(?:_2x)?\.(?:jpg|png|webp)(?:\?|$)/i.test(value) || /steamgriddb\.com\/grid\//i.test(value)));
 }
 
-function primaryCover(game: Game): string | undefined {
-  return game.libraryCapsuleUrl ?? (isVerifiedVerticalCoverUrl(game.coverUrl) ? game.coverUrl : undefined);
+function primaryCover(game: Game, options: { allowDisplayFallback?: boolean } = {}): string | undefined {
+  const verticalCover = game.libraryCapsuleUrl ?? (isVerifiedVerticalCoverUrl(game.coverUrl) ? game.coverUrl : undefined);
+  if (verticalCover || !options.allowDisplayFallback) {
+    return verticalCover;
+  }
+
+  return game.headerUrl ?? game.backgroundUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.thumbnailUrl ?? game.screenshots[0]?.fullUrl;
 }
 
 function heroStill(game: Game): string | undefined {
@@ -1082,7 +1092,8 @@ const GameCover = memo(function GameCover({
   showLogo = true,
   profileDetails,
   onCoverLoad,
-  onIntent
+  onIntent,
+  allowDisplayFallback = false
 }: {
   game: Game;
   onSelect: (game: Game) => void;
@@ -1094,9 +1105,10 @@ const GameCover = memo(function GameCover({
   profileDetails?: Record<string, unknown>;
   onCoverLoad?: (details: Record<string, unknown>) => void;
   onIntent?: (game: Game) => void;
+  allowDisplayFallback?: boolean;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
-  const cover = primaryCover(game);
+  const cover = primaryCover(game, { allowDisplayFallback });
   const coverProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
   const logoProfileRef = useRef<ReturnType<typeof profileImageStart> | undefined>();
   const profileDetailsRef = useRef<Record<string, unknown> | undefined>(profileDetails);
@@ -1278,7 +1290,8 @@ function GameRow({
   cardsPerRow,
   onSelect,
   onGameContextMenu,
-  onGameIntent
+  onGameIntent,
+  libraryGameIds
 }: {
   title: string;
   description?: string;
@@ -1287,6 +1300,7 @@ function GameRow({
   onSelect: (game: Game) => void;
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
   onGameIntent?: (game: Game) => void;
+  libraryGameIds?: Set<string>;
 }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(stripRef);
@@ -1373,9 +1387,20 @@ function GameRow({
           </button>
         ) : null}
         <div className="cover-strip" ref={stripRef} style={cardGridStyle(cardsPerRow)} onScroll={onRowScroll} onPointerOver={spotlight.onPointerOver} onPointerLeave={spotlight.onPointerLeave}>
-          {visibleGames.map((game) => (
-            <GameCover key={game.id} game={game} onSelect={onSelect} onContextMenu={onGameContextMenu} onIntent={onGameIntent} />
-          ))}
+          {visibleGames.map((game) => {
+            const inLibrary = libraryGameIds ? libraryGameIds.has(game.id) : true;
+            return (
+              <GameCover
+                key={game.id}
+                game={game}
+                onSelect={onSelect}
+                onContextMenu={onGameContextMenu}
+                onIntent={onGameIntent}
+                inLibrary={inLibrary}
+                allowDisplayFallback={!inLibrary}
+              />
+            );
+          })}
         </div>
         {canScrollRight ? (
           <button className="row-arrow right" type="button" onClick={() => scrollByItems(1)} aria-label={`Show next ${title} games`}>
@@ -1515,7 +1540,8 @@ function Hero({
   libraryGameIds,
   onSelect,
   onOpenSettings,
-  onGameIntent
+  onGameIntent,
+  discoveryLoading
 }: {
   home?: HomeModel;
   settings?: AppSettings;
@@ -1523,6 +1549,7 @@ function Hero({
   onSelect: (game: Game) => void;
   onOpenSettings: () => void;
   onGameIntent?: (game: Game) => void;
+  discoveryLoading: boolean;
 }) {
   const heroGames = useMemo(() => {
     const rows = home?.popularNow ?? [];
@@ -1543,7 +1570,7 @@ function Hero({
   const description = heroGame ? heroDescription(heroGame) : undefined;
   const reduceHeroMotion = Boolean(settings?.reduceMotion);
   const heroImageKey = `${heroGame?.id ?? "empty"}:${heroImage ?? "fallback"}`;
-  const loadingDiscovery = Boolean(home?.stale && heroGames.length === 0 && (settings?.steamAccounts.length || settings?.steamWebApiKey));
+  const loadingDiscovery = Boolean(discoveryLoading && heroGames.length === 0 && (settings?.steamAccounts.length || settings?.steamWebApiKey));
 
   useEffect(() => {
     setHeroDirection(1);
@@ -1763,7 +1790,8 @@ function HomeScreen({
   onSelect,
   onOpenSettings,
   onGameContextMenu,
-  onGameIntent
+  onGameIntent,
+  discoveryLoading
 }: {
   home?: HomeModel;
   settings?: AppSettings;
@@ -1772,13 +1800,14 @@ function HomeScreen({
   onOpenSettings: () => void;
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
   onGameIntent?: (game: Game) => void;
+  discoveryLoading: boolean;
 }) {
   const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
   return (
     <main className="page">
-      <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onOpenSettings={onOpenSettings} onGameIntent={onGameIntent} />
-      <GameRow title="Recently played" games={home?.continuePlaying ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} onGameIntent={onGameIntent} />
-      <GameRow title="Most played" games={home?.mostPlayed ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} onGameIntent={onGameIntent} />
+      <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onOpenSettings={onOpenSettings} onGameIntent={onGameIntent} discoveryLoading={discoveryLoading} />
+      <GameRow title="Recently played" games={home?.continuePlaying ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} onGameIntent={onGameIntent} libraryGameIds={libraryGameIds} />
+      <GameRow title="Most played" games={home?.mostPlayed ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} onGameIntent={onGameIntent} libraryGameIds={libraryGameIds} />
     </main>
   );
 }
@@ -1808,19 +1837,21 @@ function TrendingScreen({
   settings,
   libraryGameIds,
   onSelect,
-  onGameContextMenu
+  onGameContextMenu,
+  discoveryLoading
 }: {
   home?: HomeModel;
   settings?: AppSettings;
   libraryGameIds: Set<string>;
   onSelect: (game: Game) => void;
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
+  discoveryLoading: boolean;
 }) {
   const rows = home?.trendingRows ?? [];
   const spotlight = rows.find((row) => row.games.length > 0)?.games[0] ?? home?.popularNow[0];
   const spotlightImage = spotlight ? heroStill(spotlight) : undefined;
   const reduceMotion = Boolean(settings?.reduceMotion);
-  const loadingDiscovery = Boolean(home?.stale && rows.length === 0);
+  const loadingDiscovery = discoveryLoading && rows.length === 0;
 
   if (!spotlight || rows.length === 0) {
     if (loadingDiscovery) {
@@ -1901,7 +1932,7 @@ function TrendingScreen({
       <div className="trend-rows">
         {rows.map((row) => (
           <div key={row.id} id={`trend-row-${row.id}`} className="trend-row-anchor">
-            <GameRow title={row.title} description={row.description} games={row.games} cardsPerRow={normalizeCardsPerRow(settings?.cardsPerRow)} onSelect={onSelect} onGameContextMenu={onGameContextMenu} />
+            <GameRow title={row.title} description={row.description} games={row.games} cardsPerRow={normalizeCardsPerRow(settings?.cardsPerRow)} onSelect={onSelect} onGameContextMenu={onGameContextMenu} libraryGameIds={libraryGameIds} />
           </div>
         ))}
       </div>
@@ -6674,6 +6705,7 @@ function LauncherShell() {
   const [route, setRoute] = useState<Route>("home");
   const routeRef = useRef<Route>("home");
   const [home, setHome] = useState<HomeModel | undefined>();
+  const [homeDiscoveryLoading, setHomeDiscoveryLoading] = useState(false);
   const [games, setGames] = useState<Game[]>([]);
   const [recentGames, setRecentGames] = useState<Game[]>([]);
   const [allGames, setAllGames] = useState<Game[]>([]);
@@ -6743,6 +6775,7 @@ function LauncherShell() {
   const refreshPromiseRef = useRef<Promise<void> | undefined>();
   const homePromiseRef = useRef<Promise<HomeModel> | undefined>();
   const homeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const homeDiscoveryLoadingTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const homeRefreshRetryRef = useRef(0);
   const homeApplyTokenRef = useRef(0);
   const homeDetailCacheRef = useRef<Map<string, GameDetail>>(new Map());
@@ -7356,6 +7389,35 @@ function LauncherShell() {
     return promise;
   }
 
+  function clearHomeDiscoveryLoadingTimer(): void {
+    if (homeDiscoveryLoadingTimerRef.current) {
+      clearTimeout(homeDiscoveryLoadingTimerRef.current);
+      homeDiscoveryLoadingTimerRef.current = undefined;
+    }
+  }
+
+  function trackHomeDiscoveryLoading(nextHome: HomeModel): void {
+    const pending = nextHome.stale && !homeHasDiscoveryContent(nextHome);
+    if (!pending) {
+      clearHomeDiscoveryLoadingTimer();
+      setHomeDiscoveryLoading(false);
+      return;
+    }
+
+    setHomeDiscoveryLoading(true);
+    if (homeDiscoveryLoadingTimerRef.current) {
+      return;
+    }
+
+    homeDiscoveryLoadingTimerRef.current = setTimeout(() => {
+      homeDiscoveryLoadingTimerRef.current = undefined;
+      homeDebug("renderer discovery loading timeout elapsed", {
+        timeoutMs: HOME_DISCOVERY_LOADING_MAX_MS
+      });
+      setHomeDiscoveryLoading(false);
+    }, HOME_DISCOVERY_LOADING_MAX_MS);
+  }
+
   function scheduleHomeRefresh(options: { retryIfStale?: boolean; delayMs?: number } = {}): void {
     const token = ++homeApplyTokenRef.current;
     if (homeRefreshTimerRef.current) {
@@ -7373,6 +7435,7 @@ function LauncherShell() {
       void loadHome({ dedupe: false }).then((nextHome) => {
         if (homeApplyTokenRef.current === token) {
           setHome(nextHome);
+          trackHomeDiscoveryLoading(nextHome);
         }
         if (nextHome.stale && options.retryIfStale && homeRefreshRetryRef.current < HOME_STALE_RETRY_MAX) {
           homeRefreshRetryRef.current += 1;
@@ -7478,6 +7541,7 @@ function LauncherShell() {
         trendingRows: nextHome.trendingRows.length
       });
       setHome(nextHome);
+      trackHomeDiscoveryLoading(nextHome);
       if (nextHome.stale) {
         scheduleHomeRefresh({ retryIfStale: true });
       }
@@ -7583,6 +7647,7 @@ function LauncherShell() {
       });
       homeRefreshRetryRef.current = 0;
       setHome(nextHome);
+      trackHomeDiscoveryLoading(nextHome);
       if (!homeFirstLoadedRef.current) {
         homeFirstLoadedRef.current = true;
       }
@@ -7592,6 +7657,7 @@ function LauncherShell() {
         clearTimeout(homeRefreshTimerRef.current);
         homeRefreshTimerRef.current = undefined;
       }
+      clearHomeDiscoveryLoadingTimer();
       if (homeIntentPrefetchTimerRef.current) {
         clearTimeout(homeIntentPrefetchTimerRef.current);
         homeIntentPrefetchTimerRef.current = undefined;
@@ -7964,10 +8030,10 @@ function LauncherShell() {
 
   const routeContent = useMemo(() => {
     if (route === "home") {
-      return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} onGameIntent={scheduleHomeDetailPrefetch} />;
+      return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} onGameIntent={scheduleHomeDetailPrefetch} discoveryLoading={homeDiscoveryLoading} />;
     }
     if (route === "trending") {
-      return <TrendingScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onGameContextMenu={openGameContextMenu} />;
+      return <TrendingScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onGameContextMenu={openGameContextMenu} discoveryLoading={homeDiscoveryLoading} />;
     }
     if (route === "library") {
       return (
@@ -8035,7 +8101,7 @@ function LauncherShell() {
         onSeed={() => void window.hynite.debug.seed().then(() => refresh())}
       />
     );
-  }, [route, home, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy, cardsPerRow, wishlistCount]);
+  }, [route, home, homeDiscoveryLoading, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy, cardsPerRow, wishlistCount]);
 
   // Dev helpers — available in the browser console:
   //   window.__fakeUpdate()       shows "Update available", click the button to simulate download

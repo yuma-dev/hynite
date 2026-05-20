@@ -108,6 +108,7 @@ export type BuildHomeOptions = {
   steamGridDbApiKey?: string;
   logger?: RecommendationLogger;
   steamAppInfoProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>;
+  discoverySourceFetchTimeoutMs?: number;
 };
 
 const fallbackPopular = [
@@ -123,6 +124,7 @@ const fallbackPopular = [
 const HOME_LOCAL_ROW_LIMIT = 72;
 const DISCOVERY_ENRICHMENT_CONCURRENCY = 2;
 const DISCOVERY_ENRICHMENT_BUDGET_MS = 2_500;
+const DISCOVERY_SOURCE_FETCH_TIMEOUT_MS = 10_000;
 const HOME_HERO_NSFW_PATTERNS = [
   {
     reason: "adult age marker",
@@ -238,12 +240,17 @@ function emptyGame(appid: string, title: string): Game {
   };
 }
 
+function officialSteamHeaderUrl(appid: string): string {
+  return `https://cdn.akamai.steamstatic.com/steam/apps/${encodeURIComponent(appid)}/header.jpg`;
+}
+
 function gameFromCandidate(candidate: Candidate, discovery: GameDiscovery): Game {
   const title = candidate.title?.trim() || `Steam App ${candidate.appid}`;
+  const headerUrl = candidate.headerUrl ?? officialSteamHeaderUrl(candidate.appid);
   return {
     ...emptyGame(candidate.appid, title),
-    headerUrl: candidate.headerUrl,
-    backgroundUrl: candidate.headerUrl,
+    headerUrl,
+    backgroundUrl: headerUrl,
     discovery,
     metadataStatus: "partial"
   };
@@ -303,8 +310,23 @@ function storeUrl(appid: string, item?: FeaturedItem): string {
   return item?.url ?? `https://store.steampowered.com/app/${encodeURIComponent(appid)}`;
 }
 
-async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await steamFetch(fetchImpl)("https://store.steampowered.com/api/featuredcategories/?cc=DE&l=english");
+async function fetchWithTimeout(fetchImpl: typeof fetch, input: RequestInfo | URL, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(input, { signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`Discovery source fetch timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchFeaturedCategories(fetchImpl: typeof fetch, timeoutMs: number): Promise<Candidate[]> {
+  const response = await fetchWithTimeout(steamFetch(fetchImpl), "https://store.steampowered.com/api/featuredcategories/?cc=DE&l=english", timeoutMs);
   if (!response.ok) {
     throw new Error(`Steam featured categories returned ${response.status}`);
   }
@@ -346,8 +368,8 @@ async function fetchFeaturedCategories(fetchImpl: typeof fetch): Promise<Candida
   return [...candidates.values()];
 }
 
-async function fetchStoreFeatured(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await steamFetch(fetchImpl)("https://store.steampowered.com/api/featured/?cc=DE&l=english");
+async function fetchStoreFeatured(fetchImpl: typeof fetch, timeoutMs: number): Promise<Candidate[]> {
+  const response = await fetchWithTimeout(steamFetch(fetchImpl), "https://store.steampowered.com/api/featured/?cc=DE&l=english", timeoutMs);
   if (!response.ok) {
     throw new Error(`Steam featured returned ${response.status}`);
   }
@@ -397,8 +419,8 @@ function decodeHtml(value: string): string {
     .trim();
 }
 
-async function fetchSteamSpyTrending(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await fetchImpl("https://steamspy.com/");
+async function fetchSteamSpyTrending(fetchImpl: typeof fetch, timeoutMs: number): Promise<Candidate[]> {
+  const response = await fetchWithTimeout(fetchImpl, "https://steamspy.com/", timeoutMs);
   if (!response.ok) {
     throw new Error(`SteamSpy homepage returned ${response.status}`);
   }
@@ -425,8 +447,8 @@ async function fetchSteamSpyTrending(fetchImpl: typeof fetch): Promise<Candidate
   })).filter((candidate) => candidate.appid && candidate.title);
 }
 
-async function fetchSteamSpyTop(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await fetchImpl("https://steamspy.com/api.php?request=top100in2weeks");
+async function fetchSteamSpyTop(fetchImpl: typeof fetch, timeoutMs: number): Promise<Candidate[]> {
+  const response = await fetchWithTimeout(fetchImpl, "https://steamspy.com/api.php?request=top100in2weeks", timeoutMs);
   if (!response.ok) {
     throw new Error(`SteamSpy returned ${response.status}`);
   }
@@ -448,8 +470,8 @@ async function fetchSteamSpyTop(fetchImpl: typeof fetch): Promise<Candidate[]> {
     }));
 }
 
-async function fetchSteamCharts(fetchImpl: typeof fetch): Promise<Candidate[]> {
-  const response = await steamFetch(fetchImpl)("https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?format=json");
+async function fetchSteamCharts(fetchImpl: typeof fetch, timeoutMs: number): Promise<Candidate[]> {
+  const response = await fetchWithTimeout(steamFetch(fetchImpl), "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?format=json", timeoutMs);
   if (!response.ok) {
     throw new Error(`Steam charts returned ${response.status}`);
   }
@@ -470,13 +492,13 @@ async function fetchSteamCharts(fetchImpl: typeof fetch): Promise<Candidate[]> {
   }));
 }
 
-async function fetchDiscoverySources(fetchImpl: typeof fetch, logger?: RecommendationLogger): Promise<DiscoverySources> {
+async function fetchDiscoverySources(fetchImpl: typeof fetch, logger?: RecommendationLogger, timeoutMs = DISCOVERY_SOURCE_FETCH_TIMEOUT_MS): Promise<DiscoverySources> {
   const [storeFeatured, featuredCategories, steamCharts, steamSpyTop, steamSpyTrending] = await Promise.allSettled([
-    fetchStoreFeatured(fetchImpl),
-    fetchFeaturedCategories(fetchImpl),
-    fetchSteamCharts(fetchImpl),
-    fetchSteamSpyTop(fetchImpl),
-    fetchSteamSpyTrending(fetchImpl)
+    fetchStoreFeatured(fetchImpl, timeoutMs),
+    fetchFeaturedCategories(fetchImpl, timeoutMs),
+    fetchSteamCharts(fetchImpl, timeoutMs),
+    fetchSteamSpyTop(fetchImpl, timeoutMs),
+    fetchSteamSpyTrending(fetchImpl, timeoutMs)
   ]);
   const rateLimited = [storeFeatured, featuredCategories, steamCharts].find((result) => result.status === "rejected" && isSteamRateLimitError(result.reason));
   if (rateLimited?.status === "rejected") {
@@ -993,7 +1015,7 @@ function buildTrendRows(sources: DiscoverySources, enrichedById: Map<string, Gam
 export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch = fetch, previous?: HomeModel, options: BuildHomeOptions = {}): Promise<HomeModel> {
   const previousRanks = previousChartRanks(previous);
   const cachedGames = previousDiscoveryGames(previous);
-  const sources = await fetchDiscoverySources(fetchImpl, options.logger);
+  const sources = await fetchDiscoverySources(fetchImpl, options.logger, options.discoverySourceFetchTimeoutMs);
   let heroCandidates = mergeCandidates([...sources.storeFeatured, ...sources.featuredCategories]);
   if (heroCandidates.length === 0) {
     heroCandidates = fallbackPopular.map((item) => ({
