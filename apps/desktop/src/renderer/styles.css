@@ -1821,6 +1821,142 @@ button {
   border-radius: 8px;
 }
 
+.detail-sk {
+  --sk-dark: #111318;
+  --sk-light: #1d2030;
+  background: var(--sk-dark);
+  border-radius: 5px;
+  animation: skeletonBreath 1800ms ease-in-out infinite;
+}
+
+.detail-sk:nth-child(2) { animation-delay: 120ms; }
+.detail-sk:nth-child(3) { animation-delay: 240ms; }
+.detail-sk:nth-child(4) { animation-delay: 360ms; }
+.detail-sk:nth-child(5) { animation-delay: 480ms; }
+.detail-sk:nth-child(6) { animation-delay: 600ms; }
+
+.detail-sk-media {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.5vw;
+}
+
+.detail-sk-thumbs {
+  display: flex;
+  gap: 0.5vw;
+  margin-top: 0.7vw;
+}
+
+.detail-sk-thumb {
+  width: 3.6vw;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.3vw;
+}
+
+.detail-sk-heading {
+  height: 0.82vw;
+  width: 38%;
+  border-radius: 4px;
+  margin-bottom: 0.9vw;
+}
+
+.detail-sk-body-line {
+  height: 0.72vw;
+  border-radius: 4px;
+}
+
+.detail-sk-meta-line {
+  height: 0.68vw;
+  width: 75%;
+  border-radius: 4px;
+}
+
+.detail-sk-actions {
+  display: flex;
+  gap: 0.55vw;
+  margin-top: 1.1vw;
+}
+
+.detail-sk-btn {
+  height: 1.9vw;
+  width: 4.6vw;
+  border-radius: 0.45vw;
+}
+
+.detail-sk-btn.sm {
+  width: 3.4vw;
+}
+
+.detail-sk-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45vw;
+  margin-top: 0.9vw;
+}
+
+.detail-sk-pill {
+  height: 1.8vw;
+  width: 5vw;
+  border-radius: 999vw;
+}
+
+.detail-sk-pill:nth-child(2) { width: 4.2vw; }
+.detail-sk-pill:nth-child(3) { width: 5.6vw; }
+
+.detail-sk-dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.detail-sk-dl-row {
+  display: grid;
+  gap: 5px;
+}
+
+.detail-sk-dt {
+  height: 10px;
+  width: 65%;
+  border-radius: 3px;
+}
+
+.detail-sk-dd {
+  height: 13px;
+  width: 85%;
+  border-radius: 4px;
+}
+
+.detail-sk-taglist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.detail-sk-tag {
+  height: 24px;
+  border-radius: 999px;
+}
+
+.detail-sk-search {
+  height: 1.8vw;
+  border-radius: 0.4vw;
+  width: 100%;
+  margin-top: 0.7vw;
+}
+
+.detail-sk-matches {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.detail-sk-match {
+  height: 2.2vw;
+  border-radius: 0.35vw;
+}
+
 .steam-store-page {
   height: 100vh;
   min-height: 100vh;

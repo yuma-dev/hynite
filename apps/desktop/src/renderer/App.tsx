@@ -5971,11 +5971,138 @@ function GameAssetEditor({
   );
 }
 
+function DetailOverlaySkeleton({
+  game,
+  onClose
+}: {
+  game: Game;
+  onClose: () => void;
+}) {
+  const cover = primaryCover(game);
+  const media = heroStill(game);
+  console.log("[detail-skeleton] rendering skeleton for", game.title);
+  return (
+    <motion.div
+      className="detail-modal-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, transition: { duration: 0 } }}
+      onClick={onClose}
+    >
+      <motion.section
+        className="detail-modal"
+        initial={{ y: 34, scale: 0.985, opacity: 0 }}
+        animate={{ y: 0, scale: 1, opacity: 1 }}
+        exit={{ opacity: 0, transition: { duration: 0 } }}
+        transition={{ duration: 0.24, ease: "easeOut" }}
+        onClick={(e) => e.stopPropagation()}
+        aria-busy
+        aria-label={`Loading ${game.title}`}
+      >
+        {media ? (
+          <>
+            <div className="detail-media">
+              <span style={{ backgroundImage: `url(${media})` }} />
+            </div>
+            <div className="detail-shade" />
+          </>
+        ) : null}
+        <div className="detail-modal-body">
+          <main className="detail-main">
+            <section className="detail-block">
+              <div className="detail-sk detail-sk-media" />
+              <div className="detail-sk-thumbs">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="detail-sk detail-sk-thumb" />
+                ))}
+              </div>
+            </section>
+            <section className="detail-block">
+              <div className="detail-sk detail-sk-heading" />
+              {([90, 100, 78, 68, 52] as const).map((w, i) => (
+                <div
+                  key={i}
+                  className="detail-sk detail-sk-body-line"
+                  style={{ width: `${w}%`, marginTop: i > 0 ? "0.45vw" : 0 }}
+                />
+              ))}
+            </section>
+          </main>
+
+          <aside className="detail-sidebar">
+            <section className="detail-side-identity" style={fallbackArt(game)}>
+              <div className="detail-side-cover" style={{ cursor: "default" }}>
+                <span style={cover ? { backgroundImage: `url(${cover})` } : undefined} />
+              </div>
+              <div>
+                <p className="eyebrow">{game.discovery?.signal ?? "Steam library"}</p>
+                <h1>{game.title}</h1>
+                <div className="detail-sk detail-sk-meta-line" style={{ marginTop: "0.45vw" }} />
+                <div className="detail-sk-actions">
+                  <div className="detail-sk detail-sk-btn" />
+                  <div className="detail-sk detail-sk-btn sm" />
+                  <div className="detail-sk detail-sk-btn sm" />
+                </div>
+              </div>
+            </section>
+
+            <section className="detail-block compact">
+              <h2>Activity</h2>
+              <div className="detail-sk-pills">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="detail-sk detail-sk-pill" />
+                ))}
+              </div>
+              <div className="detail-sk-dl">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="detail-sk-dl-row">
+                    <div className="detail-sk detail-sk-dt" />
+                    <div className="detail-sk detail-sk-dd" />
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="detail-block compact">
+              <h2>Steam data</h2>
+              <div className="detail-sk-dl">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="detail-sk-dl-row">
+                    <div className="detail-sk detail-sk-dt" />
+                    <div className="detail-sk detail-sk-dd" />
+                  </div>
+                ))}
+              </div>
+              <div className="detail-sk-taglist">
+                {([52, 66, 44, 70, 58, 48] as const).map((w, i) => (
+                  <div key={i} className="detail-sk detail-sk-tag" style={{ width: `${w}px` }} />
+                ))}
+              </div>
+            </section>
+
+            <section className="detail-block compact">
+              <h2>Download options</h2>
+              <div className="detail-sk detail-sk-search" />
+              <div className="detail-sk-matches">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="detail-sk detail-sk-match" />
+                ))}
+              </div>
+            </section>
+          </aside>
+        </div>
+      </motion.section>
+    </motion.div>
+  );
+}
+
 function DetailOverlay({
   game,
   settings,
   onSettingsChanged,
   reduceMotion,
+  fromSkeleton,
+  onFromSkeletonHandled,
   onClose,
   onGameUpdated,
   onChanged
@@ -5984,6 +6111,8 @@ function DetailOverlay({
   settings?: AppSettings;
   onSettingsChanged: (settings: AppSettings) => void;
   reduceMotion?: boolean;
+  fromSkeleton?: boolean;
+  onFromSkeletonHandled?: () => void;
   onClose: () => void;
   onGameUpdated: (game: GameDetail) => void;
   onChanged: () => void;
@@ -6001,6 +6130,11 @@ function DetailOverlay({
   const [expandedSourceIds, setExpandedSourceIds] = useState<Set<string>>(() => new Set());
   const [visibleBySource, setVisibleBySource] = useState<Record<string, number>>({});
   const mainScrollRef = useRef<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (fromSkeleton) onFromSkeletonHandled?.();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -6164,10 +6298,10 @@ function DetailOverlay({
 
   return (
     <>
-    <motion.div className="detail-modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+    <motion.div className="detail-modal-backdrop" initial={fromSkeleton ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
       <motion.section
         className="detail-modal"
-        initial={{ y: 34, scale: 0.985, opacity: 0 }}
+        initial={fromSkeleton ? false : { y: 34, scale: 0.985, opacity: 0 }}
         animate={{ y: 0, scale: 1, opacity: 1 }}
         exit={{ y: 28, scale: 0.985, opacity: 0 }}
         transition={{ duration: 0.24, ease: "easeOut" }}
@@ -7003,6 +7137,8 @@ function LauncherShell() {
   const [libraryGameIds, setLibraryGameIds] = useState<Set<string>>(() => new Set());
   const [wishlistCount, setWishlistCount] = useState(0);
   const [selected, setSelected] = useState<GameDetail | undefined>();
+  const [selectedPending, setSelectedPending] = useState<Game | undefined>();
+  const detailFromSkeletonRef = useRef(false);
   const [settings, setSettings] = useState<AppSettings | undefined>();
   const [localIssueCount, setLocalIssueCount] = useState(0);
   const [activeGroupId, setActiveGroupIdState] = useState<string | undefined>();
@@ -8193,6 +8329,7 @@ function LauncherShell() {
     soundEngine.play("gameSelect");
     const cachedHomeDetail = homeDetailCacheRef.current.get(game.id);
     if (cachedHomeDetail) {
+      console.log("[detail-skeleton] cache hit →", game.title);
       const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "home-detail-cache" });
       setSelected(cachedHomeDetail);
       applySpan.end("ok");
@@ -8201,6 +8338,35 @@ function LauncherShell() {
     }
 
     if (!libraryGameIds.has(game.id)) {
+      const hasRichData = Boolean(game.shortDescription || game.aboutText || game.screenshots.length || game.trailerUrl);
+      if (!hasRichData) {
+        console.log("[detail-skeleton] discovery path, sparse → skeleton for", game.title);
+        setSelectedPending(game);
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        try {
+          const detail = await hydrateHomeDetail(game);
+          console.log("[detail-skeleton] discovery hydrated, showing overlay", game.title);
+          detailFromSkeletonRef.current = true;
+          setSelectedPending(undefined);
+          setSelected(detail);
+        } catch {
+          detailFromSkeletonRef.current = true;
+          setSelectedPending(undefined);
+          const partialDetail = { ...game, sourceMatches: [] };
+          setSelected(partialDetail);
+          void window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT })
+            .then((sourceMatches) => {
+              const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "source-search" });
+              setSelected((current) => (current?.id === game.id ? { ...game, sourceMatches } : current));
+              applySpan.end("ok");
+            })
+            .catch(console.error);
+        }
+        span.end("ok", { id: game.id, title: game.title, source: "discovery", hydrationDeferred: false });
+        return;
+      }
+
+      console.log("[detail-skeleton] discovery path, rich data →", game.title);
       const partialDetail = { ...game, sourceMatches: [] };
       const applyPartialSpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "discovery-partial" });
       setSelected(partialDetail);
@@ -8226,8 +8392,14 @@ function LauncherShell() {
       return;
     }
 
+    console.log("[detail-skeleton] library path → showing skeleton for", game.title);
+    setSelectedPending(game);
+    // Yield back to the event handler so React flushes the batch and paints the skeleton
+    // before starting the IPC call. Without this, React batches pending+resolved together.
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
     try {
       const ipcSpan = profileSpan("renderer-render", "renderer:detail-open:games-get", { id: game.id, title: game.title });
+      console.log("[detail-skeleton] ipc start", game.title);
       const detail = await window.hynite.games.get(game.id);
       ipcSpan.end("ok", {
         id: game.id,
@@ -8239,6 +8411,9 @@ function LauncherShell() {
       });
       const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "library" });
       homeDetailCacheRef.current.set(game.id, detail);
+      console.log("[detail-skeleton] ipc done, showing overlay", game.title);
+      detailFromSkeletonRef.current = true;
+      setSelectedPending(undefined);
       setSelected(detail);
       applySpan.end("ok");
       span.end("ok", { id: game.id, title: game.title, source: "library" });
@@ -8248,10 +8423,13 @@ function LauncherShell() {
         const sourceMatches = await window.hynite.sources.searchTitle(game.title, { limit: DOWNLOAD_MATCH_SEARCH_LIMIT });
         sourceSpan.end("ok", { id: game.id, title: game.title, sourceMatches: sourceMatches.length });
         const applySpan = profileSpan("renderer-render", "renderer:detail-open:apply-state", { id: game.id, title: game.title, source: "source-search" });
+        detailFromSkeletonRef.current = true;
+        setSelectedPending(undefined);
         setSelected({ ...game, sourceMatches });
         applySpan.end("ok");
         span.end("ok", { id: game.id, title: game.title, source: "source-search" });
       } catch (error) {
+        setSelectedPending(undefined);
         span.end("error", { id: game.id, title: game.title, error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
@@ -8523,13 +8701,22 @@ function LauncherShell() {
         <AnimatePresence>
           {selected ? (
             <DetailOverlay
+              key={`detail-${selected.id}`}
               game={selected}
               settings={settings}
               onSettingsChanged={setSettings}
               reduceMotion={settings?.reduceMotion}
+              fromSkeleton={detailFromSkeletonRef.current}
+              onFromSkeletonHandled={() => { detailFromSkeletonRef.current = false; }}
               onClose={() => setSelected(undefined)}
               onGameUpdated={setSelected}
               onChanged={() => void refresh()}
+            />
+          ) : selectedPending ? (
+            <DetailOverlaySkeleton
+              key={`skeleton-${selectedPending.id}`}
+              game={selectedPending}
+              onClose={() => setSelectedPending(undefined)}
             />
           ) : null}
         </AnimatePresence>

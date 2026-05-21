@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Game } from "@hynite/core";
 import { SteamRateLimitError } from "@hynite/metadata";
-import { buildHomeModel } from "../src";
+import { HOME_DISCOVERY_CACHE_VERSION, buildHomeModel } from "../src";
 
 function game(id: string, title: string): Game {
   return {
@@ -519,6 +519,76 @@ describe("recommendations", () => {
     });
 
     expect(home.popularNow[0]?.coverUrl).toBe("cached-cover.jpg");
+  });
+
+  it("reuses current cached discovery rows even when Steam user tags were unavailable", async () => {
+    const fetchMock = async (url: string) => {
+      if (url.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "top_sellers",
+              items: [{ id: 123, type: 0, name: "Named Game", header_image: "fresh-header.jpg" }]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      throw new Error(`Unexpected metadata fetch: ${url}`);
+    };
+
+    const cached = game("steam:123", "Named Game");
+    cached.tags = ["Single-player"];
+    cached.libraryCapsuleUrl = "cached-cover.jpg";
+    cached.coverUrl = "cached-cover.jpg";
+    const home = await buildHomeModel([], fetchMock as typeof fetch, {
+      recentActivity: [],
+      continuePlaying: [],
+      mostPlayed: [],
+      popularNow: [cached],
+      recommended: [],
+      newAndNotable: [],
+      generatedAt: "2026-05-06T00:00:00.000Z",
+      stale: false,
+      cacheVersion: HOME_DISCOVERY_CACHE_VERSION
+    });
+
+    expect(home.popularNow[0]?.coverUrl).toBe("cached-cover.jpg");
+    expect(home.popularNow[0]?.headerUrl).toBe("fresh-header.jpg");
+  });
+
+  it("does not persist guessed Steam portrait URLs for feed-only discovery fallbacks", async () => {
+    const fetchMock = async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.includes("featuredcategories")) {
+        return new Response(
+          JSON.stringify({
+            top_sellers: {
+              id: "top_sellers",
+              items: [{ id: 123, type: 0, name: "Named Game", header_image: "header.jpg" }]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (href.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+
+      return new Response("", { status: 500 });
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch);
+
+    expect(home.popularNow[0]?.coverUrl).toBeUndefined();
+    expect(home.popularNow[0]?.libraryCapsuleUrl).toBeUndefined();
+    expect(home.popularNow[0]?.headerUrl).toMatch(/\/header\.jpg$/);
   });
 
   it("ignores legacy guessed cached library capsules for discovery rows", async () => {

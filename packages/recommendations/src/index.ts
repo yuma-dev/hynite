@@ -78,6 +78,8 @@ export type BuildHomeOptions = {
   discoverySourceFetchTimeoutMs?: number;
 };
 
+export const HOME_DISCOVERY_CACHE_VERSION = 2;
+
 const fallbackPopular = [
   { appid: "730", title: "Counter-Strike 2" },
   { appid: "570", title: "Dota 2" },
@@ -214,13 +216,10 @@ function officialSteamHeaderUrl(appid: string): string {
 function gameFromCandidate(candidate: Candidate, discovery: GameDiscovery): Game {
   const title = candidate.title?.trim() || `Steam App ${candidate.appid}`;
   const headerUrl = candidate.headerUrl ?? officialSteamHeaderUrl(candidate.appid);
-  const portraitUrl = `https://cdn.akamai.steamstatic.com/steam/apps/${encodeURIComponent(candidate.appid)}/library_600x900.jpg`;
   return {
     ...emptyGame(candidate.appid, title),
     headerUrl,
     backgroundUrl: headerUrl,
-    libraryCapsuleUrl: portraitUrl,
-    coverUrl: portraitUrl,
     discovery,
     metadataStatus: "partial"
   };
@@ -519,10 +518,27 @@ function scoreCandidate(candidate: Candidate, _previousRanks: Map<string, number
   };
 }
 
+function canReuseCachedDiscoveryGame(game: Game, currentCache: boolean): boolean {
+  if (game.metadataStatus === "none" || /^Steam App \d+$/i.test(game.title)) {
+    return false;
+  }
+
+  if (isLegacyGuessedLibraryCapsuleUrl(game.libraryCapsuleUrl) || isLegacyGuessedLibraryCapsuleUrl(game.coverUrl)) {
+    return false;
+  }
+
+  if (currentCache) {
+    return true;
+  }
+
+  return Boolean(usableArtworkUrl(game.libraryCapsuleUrl) && (hasResolvedStoreTags(game) || game.metadataStatus === "complete"));
+}
+
 function previousDiscoveryGames(previous?: HomeModel): Map<string, Game> {
   const games = new Map<string, Game>();
+  const currentCache = previous?.cacheVersion === HOME_DISCOVERY_CACHE_VERSION;
   for (const game of [...(previous?.popularNow ?? []), ...(previous?.recommended ?? []), ...(previous?.newAndNotable ?? [])]) {
-    if (game.metadataStatus !== "none" && !/^Steam App \d+$/i.test(game.title)) {
+    if (canReuseCachedDiscoveryGame(game, currentCache)) {
       games.set(game.id, game);
     }
   }
@@ -593,14 +609,18 @@ async function enrichCandidate(
     installState: "not_installed" as const
   };
   const cached = cachedGames.get(base.id);
-  const cachedLibraryCapsuleUrl = usableArtworkUrl(cached?.libraryCapsuleUrl);
-  if (cached && cachedLibraryCapsuleUrl && hasResolvedStoreTags(cached)) {
-    const fallbackHeaderUrl = cached.headerUrl ?? candidate.headerUrl ?? cached.backgroundUrl;
+  if (cached) {
+    const cachedLibraryCapsuleUrl = usableArtworkUrl(cached.libraryCapsuleUrl);
+    const cachedCoverUrl = usableArtworkUrl(cached.coverUrl);
+    const fallbackHeaderUrl = candidate.headerUrl ?? cached.headerUrl ?? cached.backgroundUrl ?? officialSteamHeaderUrl(candidate.appid);
+    const title = candidate.title?.trim() || cached.title;
     return {
       ...cached,
+      title,
+      sortTitle: makeSortTitle(title),
       discovery,
       libraryCapsuleUrl: cachedLibraryCapsuleUrl,
-      coverUrl: cachedLibraryCapsuleUrl,
+      coverUrl: cachedLibraryCapsuleUrl ?? cachedCoverUrl,
       headerUrl: fallbackHeaderUrl,
       backgroundUrl: cached.backgroundUrl ?? fallbackHeaderUrl,
       metadataStatus: cached.metadataStatus
@@ -855,6 +875,7 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
     recommended: [],
     newAndNotable: [],
     generatedAt: new Date().toISOString(),
-    stale: false
+    stale: false,
+    cacheVersion: HOME_DISCOVERY_CACHE_VERSION
   };
 }

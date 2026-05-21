@@ -8,6 +8,7 @@ const HOME_LOCAL_ROW_LIMIT = 72;
 
 export class HomeService {
   private rebuild?: Promise<void>;
+  private discoveryRefreshAttemptedThisRun = false;
 
   constructor(
     private readonly cachePath: string,
@@ -39,7 +40,7 @@ export class HomeService {
       return this.cachedOrLocalModel(games, undefined, true);
     }
 
-    if (!hasPreviousDiscovery) {
+    if (!previous || !hasPreviousDiscovery) {
       this.logDecision("home:get", "No usable Home discovery cache exists; scheduling rebuild and returning local model", {
         games: games.length
       });
@@ -47,12 +48,20 @@ export class HomeService {
       return this.cachedOrLocalModel(games, previous, true);
     }
 
-    this.startBackgroundRebuild(games, previous, options);
+    if (!this.discoveryRefreshAttemptedThisRun) {
+      this.startBackgroundRebuild(games, previous, options);
+    } else {
+      this.logDecision("home:get", "Returning cached Home model without another discovery rebuild", {
+        generatedAt: previous.generatedAt,
+        popularNow: previous.popularNow.length
+      });
+    }
     return this.cachedOrLocalModel(games, previous, false);
   }
 
   async clearCache(): Promise<void> {
     await rm(this.cachePath, { force: true });
+    this.discoveryRefreshAttemptedThisRun = false;
   }
 
   private startBackgroundRebuild(
@@ -68,6 +77,7 @@ export class HomeService {
       return;
     }
 
+    this.discoveryRefreshAttemptedThisRun = true;
     this.logDecision("home:discovery", "Home background rebuild scheduled", {
       games: games.length,
       hasPrevious: Boolean(previous)
@@ -141,7 +151,9 @@ export class HomeService {
     const localRows = this.localRows(games);
     if (previous) {
       const cached = this.withDiscoveryHeaderFallbacks(previous);
-      const filteredPopularNow = filterHomeHeroGames(cached.popularNow);
+      const ownedIds = this.ownedSourceIds(games);
+      const filteredPopularNow = filterHomeHeroGames(cached.popularNow)
+        .filter((game) => !this.isOwnedDiscoveryGame(game, ownedIds));
       const excluded = cached.popularNow
         .map((game) => ({ game, reason: homeHeroSafetyReason(game) }))
         .filter((item): item is { game: Game; reason: string } => Boolean(item.reason));
@@ -233,6 +245,18 @@ export class HomeService {
         .sort((a, b) => (b.playtimeMinutes ?? 0) - (a.playtimeMinutes ?? 0))
         .slice(0, HOME_LOCAL_ROW_LIMIT)
     };
+  }
+
+  private ownedSourceIds(games: Game[]): Set<string> {
+    return new Set(games.flatMap((game) => game.sourceIds.map((source) => `${source.provider}:${source.externalId}`)));
+  }
+
+  private isOwnedDiscoveryGame(game: Game, ownedIds: Set<string>): boolean {
+    if (ownedIds.has(game.id)) {
+      return true;
+    }
+
+    return game.sourceIds.some((source) => ownedIds.has(`${source.provider}:${source.externalId}`));
   }
 
   private async readCache(): Promise<HomeModel | undefined> {

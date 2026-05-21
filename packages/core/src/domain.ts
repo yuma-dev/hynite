@@ -437,6 +437,7 @@ export type HomeModel = {
   newAndNotable: Game[];
   generatedAt: string;
   stale: boolean;
+  cacheVersion?: number;
 };
 
 export type SteamFamilySession = {

@@ -103,7 +103,7 @@ describe("HomeService", () => {
     });
   });
 
-  it("returns valid cached discovery immediately and schedules a rebuild", async () => {
+  it("returns valid cached discovery immediately and only schedules one session rebuild", async () => {
     const cachedGame = game("steam:2", "Cached Game", {
       libraryCapsuleUrl: "cached-library-capsule.jpg"
     });
@@ -118,6 +118,36 @@ describe("HomeService", () => {
     expect(result.popularNow[0]?.title).toBe("Cached Game");
     expect(buildHomeModelMock).toHaveBeenCalledTimes(1);
     rebuild.resolve(homeModel({ popularNow: [cachedGame] }));
+    await vi.waitFor(async () => {
+      const written = JSON.parse(await readFile(cachePath, "utf8")) as HomeModel;
+      expect(written).toMatchObject({ popularNow: [{ id: "steam:2" }] });
+    });
+
+    const second = await service.get([game("steam:1", "Local Game")]);
+
+    expect(second.stale).toBe(false);
+    expect(second.popularNow[0]?.title).toBe("Cached Game");
+    expect(buildHomeModelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters owned games out of cached discovery without an extra discovery rebuild", async () => {
+    const cachedGame = game("steam:2", "Cached Game", {
+      libraryCapsuleUrl: "cached-library-capsule.jpg"
+    });
+    await writeFile(cachePath, JSON.stringify(homeModel({ popularNow: [cachedGame] })));
+    const rebuild = deferred<HomeModel>();
+    buildHomeModelMock.mockReturnValue(rebuild.promise);
+    const service = new HomeService(cachePath);
+
+    const result = await service.get([game("steam:2", "Cached Game")]);
+
+    expect(result.popularNow).toEqual([]);
+    expect(buildHomeModelMock).toHaveBeenCalledTimes(1);
+    rebuild.resolve(homeModel({ popularNow: [cachedGame] }));
+    await vi.waitFor(async () => {
+      const written = JSON.parse(await readFile(cachePath, "utf8")) as HomeModel;
+      expect(written).toMatchObject({ popularNow: [{ id: "steam:2" }] });
+    });
   });
 
   it("adds official header fallback to cached Steam discovery games without vertical art", async () => {
@@ -145,7 +175,8 @@ describe("HomeService", () => {
     await writeFile(cachePath, JSON.stringify(homeModel({ popularNow: [unsafeGame] })));
     const rebuild = deferred<HomeModel>();
     buildHomeModelMock.mockReturnValue(rebuild.promise);
-    const service = new HomeService(cachePath);
+    const onRebuilt = vi.fn();
+    const service = new HomeService(cachePath, undefined, onRebuilt);
 
     const result = await service.get([game("steam:1", "Local Game")]);
 
@@ -153,6 +184,7 @@ describe("HomeService", () => {
     expect(result.popularNow).toEqual([]);
     expect(buildHomeModelMock).toHaveBeenCalledTimes(1);
     rebuild.resolve(homeModel({ popularNow: [game("steam:4", "Safe Game")] }));
+    await vi.waitFor(() => expect(onRebuilt).toHaveBeenCalled());
   });
 
   it("keeps returning stale local data when a background rebuild fails", async () => {
