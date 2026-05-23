@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search } from "lucide-react";
+import { Bug, Search } from "lucide-react";
 import type { SpotlightSearchResult } from "@hynite/core";
 import type { LaunchOutcome } from "../preload";
+import { reportLaunchFailure } from "./observability";
 import { soundEngine } from "./sound";
 
 const PAGE_SIZE = 30;
 const LOAD_MORE_THRESHOLD_PX = 32;
+type LaunchFailureOutcome = Extract<LaunchOutcome, { kind: "launch-failed" }>;
+type LaunchFailureState = LaunchFailureOutcome & {
+  reportStatus?: "idle" | "sending" | "sent" | "failed";
+};
+
 function sourceText(result: SpotlightSearchResult): string {
   const source = result.sourceLabels.length ? result.sourceLabels.join(", ") : "library";
   const state = result.installState === "installed"
@@ -29,6 +35,7 @@ export function SpotlightApp() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [launchHandoff, setLaunchHandoff] = useState<SpotlightSearchResult | undefined>();
+  const [launchFailure, setLaunchFailure] = useState<LaunchFailureState | undefined>();
   const [showKey, setShowKey] = useState(0);
   const [panelReady, setPanelReady] = useState(true);
   const selected = results[selectedIndex];
@@ -75,6 +82,7 @@ export function SpotlightApp() {
 
     const stopOnShow = window.hynite.spotlight.onShow(() => {
       setMessage(undefined);
+      setLaunchFailure(undefined);
       setLaunchHandoff(undefined);
       void window.hynite.spotlight.setLaunchHandoffActive(false).catch(() => undefined);
       setQuery("");
@@ -122,6 +130,7 @@ export function SpotlightApp() {
   async function activate(result: SpotlightSearchResult | undefined): Promise<void> {
     if (!result || loading) return;
     setMessage(undefined);
+    setLaunchFailure(undefined);
     setLoading(true);
     try {
       if (!result.launchable) {
@@ -135,6 +144,11 @@ export function SpotlightApp() {
         setLaunchHandoff(undefined);
         await window.hynite.spotlight.setLaunchHandoffActive(false);
         setMessage(outcome.reason);
+      } else if (outcome.kind === "launch-failed") {
+        setLaunchHandoff(undefined);
+        await window.hynite.spotlight.setLaunchHandoffActive(false);
+        setLaunchFailure({ ...outcome, reportStatus: "idle" });
+        setMessage(outcome.message);
       } else if (outcome.kind === "requires-switch") {
         setLaunchHandoff(undefined);
         await window.hynite.spotlight.setLaunchHandoffActive(false);
@@ -145,9 +159,37 @@ export function SpotlightApp() {
     } catch (error) {
       setLaunchHandoff(undefined);
       await window.hynite.spotlight.setLaunchHandoffActive(false);
-      setMessage(error instanceof Error ? error.message : "Launch failed.");
+      const failure: LaunchFailureOutcome = {
+        kind: "launch-failed",
+        gameId: result.id,
+        gameTitle: result.title,
+        message: "Hynite could not start this game.",
+        technicalMessage: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      };
+      setLaunchFailure({ ...failure, reportStatus: "idle" });
+      setMessage(failure.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  function reportSpotlightLaunchFailure(): void {
+    if (!launchFailure || launchFailure.reportStatus === "sending" || launchFailure.reportStatus === "sent") {
+      return;
+    }
+    setLaunchFailure({ ...launchFailure, reportStatus: "sending" });
+    try {
+      reportLaunchFailure(launchFailure);
+      setLaunchFailure((current) => current?.gameId === launchFailure.gameId && current.technicalMessage === launchFailure.technicalMessage
+        ? { ...current, reportStatus: "sent" }
+        : current);
+      setMessage("Report sent.");
+    } catch (error) {
+      setLaunchFailure((current) => current?.gameId === launchFailure.gameId && current.technicalMessage === launchFailure.technicalMessage
+        ? { ...current, reportStatus: "failed" }
+        : current);
+      setMessage(error instanceof Error ? error.message : "Report failed.");
     }
   }
 
@@ -194,6 +236,7 @@ export function SpotlightApp() {
                 setQuery(event.currentTarget.value);
                 setSelectedIndex(0);
                 setMessage(undefined);
+                setLaunchFailure(undefined);
               }}
               placeholder="Search games"
               autoFocus
@@ -241,6 +284,17 @@ export function SpotlightApp() {
 
           <footer className="spotlight-footer">
             <span>{message ?? (loading ? "Working..." : "Enter to launch, Esc to close")}</span>
+            {launchFailure ? (
+              <button
+                type="button"
+                className="spotlight-report"
+                onClick={reportSpotlightLaunchFailure}
+                disabled={launchFailure.reportStatus === "sending" || launchFailure.reportStatus === "sent"}
+              >
+                <Bug size={12} />
+                {launchFailure.reportStatus === "sending" ? "Reporting..." : launchFailure.reportStatus === "sent" ? "Reported" : "Report"}
+              </button>
+            ) : null}
           </footer>
         </section>
       ) : null}

@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
+  Bug,
   ChevronDown,
   CalendarDays,
   ChevronLeft,
@@ -65,7 +66,8 @@ import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from ".
 import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
 import { bindingLabel, bindingPressed, controllerBindingOrder, CONTROLLER_ACTION_HELP, CONTROLLER_ACTION_LABELS, firstPressedBinding, normalizeControllerSettings, pressedButtonIndexes, readGamepadState } from "./controllerInput";
 import { acceleratorFromHotkeyInput } from "../shared/hotkey";
-import type { UpdaterStatus } from "../preload";
+import type { LaunchOutcome, UpdaterStatus } from "../preload";
+import { reportLaunchFailure } from "./observability";
 import logo64Url from "../../../../assets/icons/logo-64.png?url";
 import logo128Url from "../../../../assets/icons/logo-128.png?url";
 import logo256Url from "../../../../assets/icons/logo-256.png?url";
@@ -99,8 +101,16 @@ type LaunchHandoffState = {
   reduceMotion: boolean;
 };
 
+type LaunchFailureOutcome = Extract<LaunchOutcome, { kind: "launch-failed" }>;
+type LaunchFailurePromptState = LaunchFailureOutcome & {
+  reportStatus?: "idle" | "sending" | "sent" | "failed";
+  reportEventId?: string;
+  reportError?: string;
+};
+
 const STEAM_SWITCH_CONFIRM_EVENT = "hynite:steam-switch-confirm";
 const LAUNCH_GAME_EVENT = "hynite:launch-game";
+const LAUNCH_FAILURE_EVENT = "hynite:launch-failure";
 const TRAILER_AUDIO_STORAGE_KEY = "hynite:trailer-audio:v1";
 const TWITCH_DEVELOPER_APPS_URL = "https://dev.twitch.tv/console/apps";
 const LAUNCH_HANDOFF_PREVIEW_MS = 1800;
@@ -158,12 +168,36 @@ function requestSteamSwitchConfirmation(prompt: Omit<SteamSwitchPrompt, "resolve
   });
 }
 
+function dispatchLaunchFailure(failure: LaunchFailureOutcome): void {
+  window.dispatchEvent(new CustomEvent(LAUNCH_FAILURE_EVENT, { detail: failure }));
+}
+
+function launchFailureFromCaughtError(gameId: string, error: unknown): LaunchFailureOutcome {
+  return {
+    kind: "launch-failed",
+    gameId,
+    message: "Hynite could not start this game.",
+    technicalMessage: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined
+  };
+}
+
 async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boolean> {
-  const result = await window.hynite.games.launch(id, preferredSteamId);
+  let result: LaunchOutcome;
+  try {
+    result = await window.hynite.games.launch(id, preferredSteamId);
+  } catch (error) {
+    dispatchLaunchFailure(launchFailureFromCaughtError(id, error));
+    return false;
+  }
   if (result.kind === "launched") {
     soundEngine.play("gameLaunch");
     musicEngine.onGameLaunch();
     return true;
+  }
+  if (result.kind === "launch-failed") {
+    dispatchLaunchFailure(result);
+    return false;
   }
   if (result.kind === "no-account") {
     window.alert(result.reason);
@@ -182,11 +216,21 @@ async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boo
       targetSteamId: result.target.steamId
     });
     if (!confirmed) return false;
-    const switchResult = await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
+    let switchResult: LaunchOutcome;
+    try {
+      switchResult = await window.hynite.steam.switchAndLaunch(result.gameId, result.target.steamId);
+    } catch (error) {
+      dispatchLaunchFailure(launchFailureFromCaughtError(result.gameId, error));
+      return false;
+    }
     if (switchResult.kind === "launched") {
       soundEngine.play("gameLaunch");
       musicEngine.onGameLaunch();
       return true;
+    }
+    if (switchResult.kind === "launch-failed") {
+      dispatchLaunchFailure(switchResult);
+      return false;
     }
     if (switchResult.kind === "no-account") {
       window.alert(switchResult.reason);
@@ -4049,6 +4093,73 @@ function SettingsResetWarningModal({ warning, onClose }: { warning: SettingsHeal
   );
 }
 
+function LaunchFailureModal({
+  failure,
+  onClose,
+  onReport
+}: {
+  failure: LaunchFailurePromptState;
+  onClose: () => void;
+  onReport: () => void;
+}) {
+  const title = failure.gameTitle ?? "Game";
+  const reportLabel =
+    failure.reportStatus === "sending"
+      ? "Reporting..."
+      : failure.reportStatus === "sent"
+        ? "Reported"
+        : "Report";
+
+  return (
+    <motion.div className="modal-backdrop switch-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <motion.div
+        className="name-dialog launch-error-dialog"
+        initial={{ opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 8 }}
+        transition={{ duration: 0.14 }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="launch-error-title"
+      >
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">Launch failed</p>
+            <h2 id="launch-error-title">{title}</h2>
+          </div>
+          <button className="close-button inline-close" type="button" onClick={onClose} aria-label="Close launch error">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="name-dialog-body launch-error-body">
+          <p>{failure.message}</p>
+          {failure.path ? <code className="launch-error-code">{failure.path}</code> : null}
+          <p className="muted">{failure.technicalMessage}</p>
+          {failure.reportStatus === "sent" ? (
+            <p className="launch-error-status">Report sent{failure.reportEventId ? `: ${failure.reportEventId}` : "."}</p>
+          ) : failure.reportStatus === "failed" ? (
+            <p className="launch-error-status error-line">{failure.reportError ?? "Report failed."}</p>
+          ) : null}
+          <div className="launch-error-actions">
+            <button className="secondary-action" type="button" onClick={onClose}>
+              Dismiss
+            </button>
+            <button
+              className="primary-action"
+              type="button"
+              onClick={onReport}
+              disabled={failure.reportStatus === "sending" || failure.reportStatus === "sent"}
+            >
+              <Bug size={14} />
+              {reportLabel}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 type SettingsTab = "steam" | "metadata" | "sources" | "audio" | "view" | "bigPicture" | "controller" | "advanced";
 
 function soundFileName(filePath?: string): string {
@@ -7145,6 +7256,7 @@ function LauncherShell() {
   const [contextMenu, setContextMenu] = useState<GameContextMenuRequest | undefined>();
   const [nameDialog, setNameDialog] = useState<NameDialogState | undefined>();
   const [switchPrompt, setSwitchPrompt] = useState<SteamSwitchPrompt | undefined>();
+  const [launchFailurePrompt, setLaunchFailurePrompt] = useState<LaunchFailurePromptState | undefined>();
   const [settingsHealthWarning, setSettingsHealthWarning] = useState<SettingsHealthWarning | undefined>();
   const [launchHandoff, setLaunchHandoff] = useState<LaunchHandoffState | undefined>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus | undefined>();
@@ -7525,6 +7637,19 @@ function LauncherShell() {
   }, []);
 
   useEffect(() => {
+    const onLaunchFailure = (event: Event) => {
+      const detail = (event as CustomEvent<LaunchFailureOutcome>).detail;
+      if (!detail) {
+        return;
+      }
+      setLaunchFailurePrompt({ ...detail, reportStatus: "idle" });
+    };
+
+    window.addEventListener(LAUNCH_FAILURE_EVENT, onLaunchFailure);
+    return () => window.removeEventListener(LAUNCH_FAILURE_EVENT, onLaunchFailure);
+  }, []);
+
+  useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
 
@@ -7548,6 +7673,29 @@ function LauncherShell() {
     activeGroupIdRef.current = next;
     setActiveGroupIdState(next);
   }, []);
+
+  const reportCurrentLaunchFailure = useCallback(() => {
+    if (!launchFailurePrompt || launchFailurePrompt.reportStatus === "sending" || launchFailurePrompt.reportStatus === "sent") {
+      return;
+    }
+
+    const failure = launchFailurePrompt;
+    setLaunchFailurePrompt({ ...failure, reportStatus: "sending", reportError: undefined });
+    try {
+      const reportEventId = reportLaunchFailure(failure);
+      setLaunchFailurePrompt((current) => current?.gameId === failure.gameId && current.technicalMessage === failure.technicalMessage
+        ? { ...current, reportStatus: "sent", reportEventId }
+        : current);
+    } catch (error) {
+      setLaunchFailurePrompt((current) => current?.gameId === failure.gameId && current.technicalMessage === failure.technicalMessage
+        ? {
+            ...current,
+            reportStatus: "failed",
+            reportError: error instanceof Error ? error.message : "Report failed."
+          }
+        : current);
+    }
+  }, [launchFailurePrompt]);
 
   const resolveLaunchSnapshot = useCallback(async (detail: LaunchGameEventDetail): Promise<Game | GameDetail | undefined> => {
     if (detail.game) {
@@ -8735,6 +8883,13 @@ function LauncherShell() {
         />
         {nameDialog ? <NameDialog state={nameDialog} onClose={() => setNameDialog(undefined)} /> : null}
         {switchPrompt ? <SteamSwitchModal prompt={switchPrompt} /> : null}
+        {launchFailurePrompt ? (
+          <LaunchFailureModal
+            failure={launchFailurePrompt}
+            onClose={() => setLaunchFailurePrompt(undefined)}
+            onReport={reportCurrentLaunchFailure}
+          />
+        ) : null}
         {settingsHealthWarning ? (
           <SettingsResetWarningModal warning={settingsHealthWarning} onClose={() => setSettingsHealthWarning(undefined)} />
         ) : null}

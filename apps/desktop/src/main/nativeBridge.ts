@@ -95,7 +95,18 @@ export class NativeBridge {
     if (input.command?.startsWith("steam://")) {
       await shell.openExternal(input.command);
     } else if (input.executablePath) {
-      await shell.openPath(input.executablePath);
+      if (process.platform === "win32") {
+        await this.launchWindowsExecutable(input.executablePath, input.workingDirectory);
+      } else {
+        const errorMessage = await shell.openPath(input.executablePath);
+        if (errorMessage) {
+          const error = new Error(errorMessage) as NodeJS.ErrnoException;
+          error.code = "EOPENPATH";
+          error.path = input.executablePath;
+          error.syscall = "openPath";
+          throw error;
+        }
+      }
     } else {
       throw new Error("No launch command or executable path is available.");
     }
@@ -104,6 +115,31 @@ export class NativeBridge {
       id: randomUUID(),
       startedAt: new Date().toISOString()
     };
+  }
+
+  private launchWindowsExecutable(executablePath: string, workingDirectory?: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const cwd = workingDirectory ?? dirname(executablePath);
+      // Escape single quotes for PowerShell single-quoted strings
+      const escapedPath = executablePath.replace(/'/g, "''");
+      const escapedCwd = cwd.replace(/'/g, "''");
+      // Start-Process uses ShellExecuteEx which properly surfaces UAC prompts
+      // for executables with elevation manifests, unlike shell.openPath.
+      const child = spawn("powershell.exe", [
+        "-NonInteractive", "-NoProfile", "-Command",
+        `Start-Process -FilePath '${escapedPath}' -WorkingDirectory '${escapedCwd}'`
+      ], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+      let stderr = "";
+      child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+      child.on("error", reject);
+      child.on("exit", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(stderr.trim() || `Failed to launch executable (exit code ${code})`));
+        }
+      });
+    });
   }
 
   async openFolder(path: string): Promise<void> {

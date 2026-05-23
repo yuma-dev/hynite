@@ -3264,7 +3264,65 @@ type LaunchResult =
       currentSteamId?: string;
       target: { steamId: string; accountName: string; personaName?: string };
     }
-  | { kind: "no-account"; reason: string };
+  | { kind: "no-account"; reason: string }
+  | {
+      kind: "launch-failed";
+      gameId: string;
+      gameTitle?: string;
+      message: string;
+      technicalMessage: string;
+      code?: string;
+      errno?: number;
+      syscall?: string;
+      path?: string;
+      command?: string;
+      stack?: string;
+    };
+
+function errorRecord(error: unknown): Record<string, unknown> | undefined {
+  return typeof error === "object" && error !== null ? error as Record<string, unknown> : undefined;
+}
+
+function errorStringProp(error: unknown, prop: string): string | undefined {
+  const value = errorRecord(error)?.[prop];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function errorNumberProp(error: unknown, prop: string): number | undefined {
+  const value = errorRecord(error)?.[prop];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function launchFailureMessage(error: unknown): string {
+  const code = errorStringProp(error, "code");
+  if (code === "EACCES") {
+    return "Windows denied access to the configured executable.";
+  }
+  if (code === "ENOENT") {
+    return "The configured executable could not be found.";
+  }
+  if (code === "EOPENPATH") {
+    return "Windows could not open the configured shortcut or file.";
+  }
+  return "Hynite could not start this game.";
+}
+
+function launchFailureResult(gameId: string, error: unknown): LaunchResult {
+  const game = repository.getGame(gameId);
+  return {
+    kind: "launch-failed",
+    gameId,
+    gameTitle: game?.title,
+    message: launchFailureMessage(error),
+    technicalMessage: error instanceof Error ? error.message : String(error),
+    code: errorStringProp(error, "code"),
+    errno: errorNumberProp(error, "errno"),
+    syscall: errorStringProp(error, "syscall"),
+    path: errorStringProp(error, "path") ?? game?.executablePath,
+    command: repository.getLaunchCommand(gameId),
+    stack: error instanceof Error ? error.stack : undefined
+  };
+}
 
 function launchSwitchResult(
   id: string,
@@ -3287,6 +3345,15 @@ function launchSwitchResult(
 }
 
 async function resolveLaunchOrSwitch(id: string, preferredSteamId?: string): Promise<LaunchResult> {
+  try {
+    return await resolveLaunchOrSwitchInner(id, preferredSteamId);
+  } catch (error) {
+    console.warn(`Game launch failed for ${id}`, error);
+    return launchFailureResult(id, error);
+  }
+}
+
+async function resolveLaunchOrSwitchInner(id: string, preferredSteamId?: string): Promise<LaunchResult> {
   const game = repository.getGame(id);
   if (!game) {
     throw new Error(`Game ${id} was not found.`);
@@ -3341,7 +3408,7 @@ async function performLaunch(id: string): Promise<{ kind: "launched" } & LaunchS
   }
   const localSource = game.sourceIds.find((source) => source.provider === "local");
   if (localSource && game.executablePath) {
-    const session = launchTracker.spawnAndTrack(id, game.executablePath, game.installDirectory);
+    const session = await launchTracker.spawnAndTrack(id, game.executablePath, game.installDirectory);
     return { kind: "launched", ...session };
   }
   const steamSource = game.sourceIds.find((source) => source.provider === "steam");
@@ -3979,16 +4046,21 @@ function registerIpc(): void {
 
   handleIpc("games:launch", async (_event, id: string, preferredSteamId?: string) => resolveLaunchOrSwitch(id, preferredSteamId));
   handleIpc("steam:switchAndLaunch", async (_event, id: string, targetSteamId: string) => {
-    const settings = await settingsService.get();
-    const target = settings.steamAccounts.find((account) => account.steamId === targetSteamId);
-    if (!target) {
-      throw new Error(`Paired Steam account ${targetSteamId} not found.`);
+    try {
+      const settings = await settingsService.get();
+      const target = settings.steamAccounts.find((account) => account.steamId === targetSteamId);
+      if (!target) {
+        throw new Error(`Paired Steam account ${targetSteamId} not found.`);
+      }
+      if (!target.localUsername) {
+        throw new Error("Map a local Steam username to this account before switching.");
+      }
+      await switchSteamAccount({ steamId: target.steamId, accountName: target.localUsername });
+      return await performLaunch(id);
+    } catch (error) {
+      console.warn(`Steam switch launch failed for ${id}`, error);
+      return launchFailureResult(id, error);
     }
-    if (!target.localUsername) {
-      throw new Error("Map a local Steam username to this account before switching.");
-    }
-    await switchSteamAccount({ steamId: target.steamId, accountName: target.localUsername });
-    return performLaunch(id);
   });
   handleIpc("steam:listLocalAccounts", async () => {
     const { accounts } = await readLoginUsers();

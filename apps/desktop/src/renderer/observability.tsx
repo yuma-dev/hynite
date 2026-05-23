@@ -1,5 +1,6 @@
 import React from "react";
 import * as Sentry from "@sentry/electron/renderer";
+import type { LaunchOutcome } from "../preload";
 
 // Renderer events are forwarded to the main process, which owns the DSN,
 // release, environment and scrubbing. So renderer init is intentionally
@@ -13,6 +14,35 @@ export function initRendererObservability(): void {
   initialized = true;
   Sentry.init({});
   installTestCrashHelper();
+}
+
+type LaunchFailureOutcome = Extract<LaunchOutcome, { kind: "launch-failed" }>;
+
+export function reportLaunchFailure(failure: LaunchFailureOutcome): string {
+  return Sentry.captureException(
+    new Error(`Game launch failed: ${failure.gameTitle ?? failure.gameId}: ${failure.technicalMessage}`),
+    {
+      tags: {
+        feature: "game-launch",
+        gameId: failure.gameId,
+        errorCode: failure.code ?? "unknown"
+      },
+      contexts: {
+        launch: {
+          gameId: failure.gameId,
+          gameTitle: failure.gameTitle,
+          message: failure.message,
+          technicalMessage: failure.technicalMessage,
+          code: failure.code,
+          errno: failure.errno,
+          syscall: failure.syscall,
+          path: failure.path,
+          command: failure.command,
+          stack: failure.stack
+        }
+      }
+    }
+  );
 }
 
 /**

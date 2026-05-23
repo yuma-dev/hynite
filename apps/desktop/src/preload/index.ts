@@ -43,6 +43,19 @@ export type { UpdaterStatus } from "../main/updaterService";
 export type LaunchOutcome =
   | ({ kind: "launched" } & LaunchSession)
   | {
+      kind: "launch-failed";
+      gameId: string;
+      gameTitle?: string;
+      message: string;
+      technicalMessage: string;
+      code?: string;
+      errno?: number;
+      syscall?: string;
+      path?: string;
+      command?: string;
+      stack?: string;
+    }
+  | {
       kind: "requires-switch";
       gameId: string;
       gameTitle: string;

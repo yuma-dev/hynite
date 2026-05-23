@@ -4425,6 +4425,51 @@ dd {
   overflow: hidden;
 }
 
+.launch-error-dialog {
+  width: min(520px, 92vw);
+}
+
+.launch-error-body {
+  display: grid;
+  gap: 12px;
+}
+
+.launch-error-body > p {
+  margin: 0;
+}
+
+.launch-error-code {
+  display: block;
+  max-height: 96px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.launch-error-status {
+  min-height: 18px;
+  color: rgba(86, 211, 145, 0.94);
+  font-size: 12px;
+}
+
+.launch-error-status.error-line {
+  margin: 0;
+  color: rgba(247, 142, 126, 0.94);
+}
+
+.launch-error-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
 .name-dialog-body {
   display: grid;
   gap: 14px;
