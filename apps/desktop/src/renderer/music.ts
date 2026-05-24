@@ -39,6 +39,7 @@ export type MusicStatus = {
   currentTrackArtist: string | null;
   currentTrackAlbum: string | null;
   currentTrackCopyright: string | null;
+  userMuted: boolean;
 };
 
 type TrackCache = { filePath: string; buffer: AudioBuffer };
@@ -109,6 +110,7 @@ export class MusicEngine {
   private settings: MusicSettings = normalizeMusicSettings();
   private forceEnabled = false;
   private forceContinuous = false;
+  private userMuted = false;
 
   // Audio graph: source → trackGain → masterGain → destination
   // masterGain: overall volume + audibility fades
@@ -164,6 +166,7 @@ export class MusicEngine {
     if (this.active && settingsEnabled && hasTracks && !this.audible) {
       if (this.startupTimer) pauseReason = "waiting for startup";
       else if (this.launchPauseActive) pauseReason = "game launched";
+      else if (this.userMuted) pauseReason = "muted";
       else if (this.settings.pauseOnFocusLoss !== false && !this.focused) pauseReason = "not focused";
       else if (this.settings.pauseOnSystemAudio !== false && this.systemAudioActive) pauseReason = "system audio detected";
       else pauseReason = "paused";
@@ -185,7 +188,8 @@ export class MusicEngine {
       currentTrackTitle: trackTitle(currentTrack),
       currentTrackArtist: currentTrack?.artist ?? null,
       currentTrackAlbum: currentTrack?.album ?? null,
-      currentTrackCopyright: currentTrack?.copyright ?? null
+      currentTrackCopyright: currentTrack?.copyright ?? null,
+      userMuted: this.userMuted
     };
   }
 
@@ -399,9 +403,16 @@ export class MusicEngine {
     return this.settings.enabled !== false && (this.settings.tracks?.length ?? 0) > 0;
   }
 
+  setUserMuted(muted: boolean): void {
+    if (this.userMuted === muted) return;
+    this.userMuted = muted;
+    this.onAudibilityChanged();
+  }
+
   private shouldBeAudible(): boolean {
     return this.canPlay()
       && !this.launchPauseActive
+      && !this.userMuted
       && (this.settings.pauseOnFocusLoss === false || this.focused)
       && (this.settings.pauseOnSystemAudio === false || !this.systemAudioActive);
   }

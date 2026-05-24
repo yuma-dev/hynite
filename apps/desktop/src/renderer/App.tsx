@@ -4440,6 +4440,7 @@ function CurrentTrackCredit({ status }: { status: MusicStatus }) {
   const album = status.currentTrackAlbum ?? "Unknown album";
   const chipLabel = status.currentTrackCopyright ?? status.currentTrackArtist ?? status.currentTrackTitle;
   const coverUrl = trackIndex === null || coverFailed ? undefined : window.hynite.music.coverUrl(trackIndex);
+  const muted = status.userMuted;
 
   useEffect(() => {
     setCoverFailed(false);
@@ -4451,15 +4452,16 @@ function CurrentTrackCredit({ status }: { status: MusicStatus }) {
 
   return (
     <span className="music-copyright-wrap">
-      <span
-        className="music-copyright-chip"
-        tabIndex={0}
+      <button
+        className={`music-copyright-chip${muted ? " music-copyright-chip--muted" : ""}`}
         aria-describedby="current-track-tooltip"
-        aria-label={`Music credit: ${chipLabel}. Currently playing ${title}, ${album}, ${artist}.`}
+        aria-label={`${muted ? "Unmute music" : "Mute music"}: ${chipLabel}. Currently playing ${title}, ${album}, ${artist}.`}
+        aria-pressed={muted}
+        onClick={() => musicEngine.setUserMuted(!muted)}
       >
-        <Music2 size={10} />
+        {muted ? <VolumeX size={10} /> : <Music2 size={10} />}
         {chipLabel}
-      </span>
+      </button>
       <span className="current-track-tooltip" id="current-track-tooltip" role="tooltip">
         <span className="current-track-cover">
           {coverUrl ? (
@@ -4469,7 +4471,7 @@ function CurrentTrackCredit({ status }: { status: MusicStatus }) {
           )}
         </span>
         <span className="current-track-details">
-          <span className="current-track-kicker">Currently playing</span>
+          <span className="current-track-kicker">{muted ? "Muted — click to unmute" : "Currently playing"}</span>
           <strong>{title}</strong>
           <span>{album}</span>
           <span>{artist}</span>
@@ -9198,7 +9200,7 @@ function LauncherShell() {
           <strong>{cardsPerRow}</strong>
         </label>
         <span>v0.1.0</span>
-        {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.active && musicStatus.pauseReason && (
+        {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.active && musicStatus.pauseReason && musicStatus.pauseReason !== "muted" && (
           <span className="music-pause-chip">
             <Music2 size={10} />
             {musicStatus.pauseReason}
