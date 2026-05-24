@@ -440,6 +440,103 @@ export type HomeModel = {
   cacheVersion?: number;
 };
 
+export type HomeModelRowKey =
+  | "continuePlaying"
+  | "mostPlayed"
+  | "popularNow"
+  | "recommended"
+  | "newAndNotable"
+  | "recentActivity";
+
+export type HomeModuleVisual = "hero" | "scroller" | "grid";
+
+export type HomeModuleSource =
+  | { kind: "homeModel"; row: HomeModelRowKey }
+  | { kind: "wishlist" }
+  | { kind: "wishlistUpcoming" }
+  | { kind: "neverPlayed" }
+  | { kind: "recentlyAdded" }
+  | { kind: "installed" }
+  | { kind: "random"; count?: number }
+  | { kind: "group"; groupId: string };
+
+export type HomeModuleSortField =
+  | "default"
+  | "title"
+  | "playtime"
+  | "lastPlayed"
+  | "releaseDate"
+  | "addedAt"
+  | "shuffle";
+
+export type HomeModuleSort = {
+  field: HomeModuleSortField;
+  direction: "asc" | "desc";
+};
+
+export type HomeModuleCardSize = "compact" | "default" | "large";
+
+export type HomeModule = {
+  id: string;
+  title: string;
+  visual: HomeModuleVisual;
+  source: HomeModuleSource;
+  gridRows?: 1 | 2 | 3 | 4;
+  /** Hide the section title above the module body. Hero modules ignore this. */
+  hideTitle?: boolean;
+  /** Soft cap on the number of items rendered. */
+  limit?: number;
+  /** Optional override of source ordering. */
+  sort?: HomeModuleSort;
+  /** Card sizing for scroller and grid visuals. */
+  cardSize?: HomeModuleCardSize;
+};
+
+export type HomeLayout = {
+  modules: HomeModule[];
+};
+
+export const defaultHomeLayout: HomeLayout = {
+  modules: [
+    { id: "default-hero", title: "Popular now", visual: "hero", source: { kind: "homeModel", row: "popularNow" }, hideTitle: true },
+    { id: "default-continue", title: "Recently played", visual: "scroller", source: { kind: "homeModel", row: "continuePlaying" } },
+    { id: "default-most-played", title: "Most played", visual: "scroller", source: { kind: "homeModel", row: "mostPlayed" } }
+  ]
+};
+
+export const HOME_MODULE_SOURCE_LABELS: Record<string, string> = {
+  "homeModel:continuePlaying": "Recently played",
+  "homeModel:mostPlayed": "Most played",
+  "homeModel:popularNow": "Popular now",
+  "homeModel:recommended": "Recommended",
+  "homeModel:newAndNotable": "New & notable",
+  "homeModel:recentActivity": "Recent activity",
+  "wishlist": "Wishlist",
+  "wishlistUpcoming": "Upcoming wishlist",
+  "neverPlayed": "Never played",
+  "recentlyAdded": "Recently added",
+  "installed": "Installed only",
+  "random": "Random picks",
+  "group": "Group"
+};
+
+export function homeModuleSourceKey(source: HomeModuleSource): string {
+  if (source.kind === "homeModel") return `homeModel:${source.row}`;
+  if (source.kind === "group") return `group:${source.groupId}`;
+  return source.kind;
+}
+
+export function defaultTitleForSource(
+  source: HomeModuleSource,
+  groups: ReadonlyArray<{ id: string; name: string }> = []
+): string {
+  if (source.kind === "group") {
+    const found = groups.find((g) => g.id === source.groupId);
+    return found?.name ?? "Group";
+  }
+  return HOME_MODULE_SOURCE_LABELS[homeModuleSourceKey(source)] ?? "Module";
+}
+
 export type SteamFamilySession = {
   accessToken: EncryptedSecret;
   steamId: string;
@@ -768,6 +865,8 @@ export type AppSettings = {
   bigPictureDefaultTabId?: string;
   /** Grayscale non-focused game covers in Big Picture shelf mode. */
   bigPictureGrayscaleCovers?: boolean;
+  /** User-defined modular layout for the home page. When absent, the default layout is used. */
+  home?: HomeLayout;
 };
 
 export type SettingsBackupInfo = {

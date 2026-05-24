@@ -56,7 +56,10 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeModel, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
+import { defaultHomeLayout, defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeLayout, type HomeModel, type HomeModule, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
+import { closestCenter, DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { adjustCardsPerRow, AddModuleButton, HomeEditBar, HomeEmptyState, HomeGridBlock, ModuleConfigPanel, ModuleEditChrome, SortableModule, newDraftModule, resolveLayout, resolveModuleGames, type HomeResolveContext } from "./homeModules";
 import { isProfileEnabled, profileImageError, profileImageStart, profilePoint, profileSpan, profileStartup } from "./startupProfile";
 import { profileReactRender, startRuntimeFrameProfiler, startRuntimeInteraction, updateRuntimeProfileContext } from "./runtimeFrameProfile";
 import { LocalGamesScreen } from "./LocalGamesScreen";
@@ -406,13 +409,30 @@ function isVerifiedVerticalCoverUrl(value: string | undefined): boolean {
   return Boolean(value && (/(?:\/|%2f)library_(?:600x900|capsule)(?:_2x)?\.(?:jpg|png|webp)(?:\?|$)/i.test(value) || /steamgriddb\.com\/grid\//i.test(value)));
 }
 
+function steamLibraryCapsuleGuess(game: Game): string | undefined {
+  const appId = game.sourceIds.find((s) => s.provider === "steam")?.externalId;
+  if (!appId) return undefined;
+  return `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`;
+}
+
 function primaryCover(game: Game, options: { allowDisplayFallback?: boolean } = {}): string | undefined {
   const verticalCover = game.libraryCapsuleUrl ?? (isVerifiedVerticalCoverUrl(game.coverUrl) ? game.coverUrl : undefined);
-  if (verticalCover || !options.allowDisplayFallback) {
+  if (verticalCover) {
     return verticalCover;
   }
 
-  return game.headerUrl ?? game.backgroundUrl ?? game.trailerPosterUrl ?? game.screenshots[0]?.thumbnailUrl ?? game.screenshots[0]?.fullUrl;
+  // Steam discovery results (popularNow/recommended/newAndNotable) often arrive with only headerUrl.
+  // Try the standard CDN path for a vertical capsule first — most popular games have it.
+  // If it 404s the gradient fallback shows, which still looks better than a stretched banner.
+  if (!options.allowDisplayFallback) {
+    return undefined;
+  }
+  return steamLibraryCapsuleGuess(game)
+    ?? game.headerUrl
+    ?? game.backgroundUrl
+    ?? game.trailerPosterUrl
+    ?? game.screenshots[0]?.thumbnailUrl
+    ?? game.screenshots[0]?.fullUrl;
 }
 
 function heroStill(game: Game): string | undefined {
@@ -2020,30 +2040,268 @@ function HomeHeroSkeleton() {
 function HomeScreen({
   home,
   settings,
+  libraryGames,
   libraryGameIds,
+  wishlistItems,
+  groups,
   onSelect,
   onOpenSettings,
   onGameContextMenu,
   onGameIntent,
+  onLayoutChange,
   discoveryLoading
 }: {
   home?: HomeModel;
   settings?: AppSettings;
+  libraryGames: Game[];
   libraryGameIds: Set<string>;
+  wishlistItems: SteamWishlistItem[];
+  groups: GameGroup[];
   onSelect: (game: Game) => void;
   onOpenSettings: () => void;
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
   onGameIntent?: (game: Game) => void;
+  onLayoutChange: (next: HomeLayout) => void;
   discoveryLoading: boolean;
 }) {
   const cardsPerRow = normalizeCardsPerRow(settings?.cardsPerRow);
+  const layout = useMemo(() => resolveLayout(settings?.home, defaultHomeLayout), [settings?.home]);
+  const [editing, setEditing] = useState(false);
+  const [configuringId, setConfiguringId] = useState<string | undefined>();
+  const [draftModule, setDraftModule] = useState<HomeModule | undefined>();
+  const randomSeed = useMemo(() => Math.floor(Math.random() * 0xffffffff), []);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  const ctx: HomeResolveContext = useMemo(() => ({
+    home,
+    libraryGames,
+    wishlistItems,
+    groups,
+    randomSeed
+  }), [home, libraryGames, wishlistItems, groups, randomSeed]);
+
+  // Resolve once per module per ctx change. Without this the resolver returns a fresh
+  // array on every render, which makes GameRow's `useEffect([games])` reset visibleCount
+  // and scroll position constantly.
+  const moduleGamesById = useMemo(() => {
+    const map = new Map<string, Game[]>();
+    const all = draftModule ? [...layout.modules, draftModule] : layout.modules;
+    for (const module of all) {
+      map.set(module.id, resolveModuleGames(module, ctx));
+    }
+    return map;
+  }, [layout.modules, draftModule, ctx]);
+
+  function update(next: HomeLayout) {
+    onLayoutChange(next);
+  }
+
+  function updateModule(moduleId: string, patch: HomeModule) {
+    if (draftModule && draftModule.id === moduleId) {
+      setDraftModule(patch);
+      return;
+    }
+    update({ ...layout, modules: layout.modules.map((m) => (m.id === moduleId ? patch : m)) });
+  }
+
+  function deleteModule(moduleId: string) {
+    update({ ...layout, modules: layout.modules.filter((m) => m.id !== moduleId) });
+    if (configuringId === moduleId) setConfiguringId(undefined);
+  }
+
+  function startDraft() {
+    const next = newDraftModule();
+    setDraftModule(next);
+    setConfiguringId(next.id);
+  }
+
+  function cancelDraft() {
+    setDraftModule(undefined);
+    setConfiguringId(undefined);
+  }
+
+  function confirmDraft() {
+    if (!draftModule) return;
+    update({ ...layout, modules: [...layout.modules, draftModule] });
+    setDraftModule(undefined);
+    setConfiguringId(undefined);
+  }
+
+  function onDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = layout.modules.findIndex((m) => m.id === active.id);
+    const newIndex = layout.modules.findIndex((m) => m.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    update({ ...layout, modules: arrayMove(layout.modules, oldIndex, newIndex) });
+  }
+
+  function renderModule(module: HomeModule) {
+    const games = moduleGamesById.get(module.id) ?? [];
+    if (module.visual === "hero") {
+      const heroModel = module.source.kind === "homeModel" && module.source.row === "popularNow"
+        ? home
+        : { ...(home ?? emptyHomeModel()), popularNow: games };
+      return (
+        <Hero
+          home={heroModel}
+          settings={settings}
+          libraryGameIds={libraryGameIds}
+          onSelect={onSelect}
+          onOpenSettings={onOpenSettings}
+          onGameIntent={onGameIntent}
+          discoveryLoading={discoveryLoading}
+        />
+      );
+    }
+    if (module.visual === "grid") {
+      return (
+        <HomeGridBlock
+          title={module.title}
+          hideTitle={module.hideTitle}
+          games={games}
+          gridRows={module.gridRows ?? 2}
+          cardsPerRow={cardsPerRow}
+          cardGridStyleFor={cardGridStyle}
+          cardSize={module.cardSize}
+          renderCard={(game) => {
+            const inLibrary = libraryGameIds.has(game.id);
+            return (
+              <GameCover
+                key={game.id}
+                game={game}
+                onSelect={onSelect}
+                onContextMenu={onGameContextMenu}
+                onIntent={onGameIntent}
+                inLibrary={inLibrary}
+                allowDisplayFallback={!inLibrary}
+              />
+            );
+          }}
+        />
+      );
+    }
+    const effectiveCardsPerRow = adjustCardsPerRow(cardsPerRow, module.cardSize);
+    return (
+      <div className={`home-scroller size-${module.cardSize ?? "default"}`}>
+        <GameRow
+          title={module.hideTitle ? "" : module.title}
+          games={games}
+          cardsPerRow={effectiveCardsPerRow}
+          onSelect={onSelect}
+          onGameContextMenu={onGameContextMenu}
+          onGameIntent={onGameIntent}
+          libraryGameIds={libraryGameIds}
+        />
+      </div>
+    );
+  }
+
+  const configuringIsDraft = draftModule?.id === configuringId;
+  const configuringModule = configuringIsDraft
+    ? draftModule
+    : (configuringId ? layout.modules.find((m) => m.id === configuringId) : undefined);
+
+  const moduleList: Array<{ module: HomeModule; isDraft: boolean }> = [
+    ...layout.modules.map((m) => ({ module: m, isDraft: false })),
+    ...(draftModule ? [{ module: draftModule, isDraft: true }] : [])
+  ];
+
   return (
-    <main className="page">
-      <Hero home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={onSelect} onOpenSettings={onOpenSettings} onGameIntent={onGameIntent} discoveryLoading={discoveryLoading} />
-      <GameRow title="Recently played" games={home?.continuePlaying ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} onGameIntent={onGameIntent} libraryGameIds={libraryGameIds} />
-      <GameRow title="Most played" games={home?.mostPlayed ?? []} cardsPerRow={cardsPerRow} onSelect={onSelect} onGameContextMenu={onGameContextMenu} onGameIntent={onGameIntent} libraryGameIds={libraryGameIds} />
+    <main className={editing ? "page home-editing" : "page"}>
+      <div className="home-page-toolbar">
+        <button
+          type="button"
+          className={editing ? "home-edit-toggle active" : "home-edit-toggle"}
+          onClick={() => {
+            if (editing) cancelDraft();
+            setEditing((v) => !v);
+          }}
+          aria-pressed={editing}
+          aria-label={editing ? "Finish editing home layout" : "Edit home layout"}
+          title={editing ? "Finish editing" : "Edit layout"}
+        >
+          {editing ? <Check size={16} /> : <Pencil size={16} />}
+        </button>
+      </div>
+
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={layout.modules.map((m) => m.id)} strategy={verticalListSortingStrategy}>
+          {moduleList.map(({ module, isDraft }) => (
+            <SortableModule key={module.id} id={module.id} editing={editing} isDraft={isDraft}>
+              {({ listeners }) => (
+                <>
+                  {editing ? (
+                    <ModuleEditChrome
+                      title={isDraft ? `${module.title} (preview)` : module.title}
+                      dragListeners={listeners}
+                      onConfigure={() => setConfiguringId(module.id)}
+                      onDelete={() => (isDraft ? cancelDraft() : deleteModule(module.id))}
+                    />
+                  ) : null}
+                  <div className={editing ? "home-module-body editing" : "home-module-body"}>
+                    {renderModule(module)}
+                  </div>
+                </>
+              )}
+            </SortableModule>
+          ))}
+        </SortableContext>
+      </DndContext>
+
+      {!editing && layout.modules.length === 0 ? (
+        <HomeEmptyState onAdd={() => { setEditing(true); startDraft(); }} />
+      ) : null}
+
+      {editing ? <AddModuleButton onClick={startDraft} disabled={Boolean(draftModule)} /> : null}
+
+      {editing ? (
+        <HomeEditBar
+          onDone={() => {
+            cancelDraft();
+            setEditing(false);
+          }}
+          onReset={() => {
+            cancelDraft();
+            update(defaultHomeLayout);
+          }}
+        />
+      ) : null}
+
+      {editing && configuringModule ? (
+        <div
+          className="home-module-config-overlay"
+          onClick={() => (configuringIsDraft ? cancelDraft() : setConfiguringId(undefined))}
+        >
+          <div onClick={(event) => event.stopPropagation()}>
+            <ModuleConfigPanel
+              module={configuringModule}
+              groups={groups}
+              draft={configuringIsDraft}
+              ctx={ctx}
+              onChange={(next) => updateModule(configuringModule.id, next)}
+              onCancel={cancelDraft}
+              onConfirmAdd={confirmDraft}
+              onClose={() => (configuringIsDraft ? cancelDraft() : setConfiguringId(undefined))}
+            />
+          </div>
+        </div>
+      ) : null}
     </main>
   );
+}
+
+function emptyHomeModel(): HomeModel {
+  return {
+    recentActivity: [],
+    continuePlaying: [],
+    mostPlayed: [],
+    popularNow: [],
+    recommended: [],
+    newAndNotable: [],
+    generatedAt: new Date().toISOString(),
+    stale: false
+  };
 }
 
 function SteamStoreScreen({
@@ -7247,6 +7505,7 @@ function LauncherShell() {
   const [allGames, setAllGames] = useState<Game[]>([]);
   const [libraryGameIds, setLibraryGameIds] = useState<Set<string>>(() => new Set());
   const [wishlistCount, setWishlistCount] = useState(0);
+  const [homeWishlistItems, setHomeWishlistItems] = useState<SteamWishlistItem[]>([]);
   const [selected, setSelected] = useState<GameDetail | undefined>();
   const [selectedPending, setSelectedPending] = useState<Game | undefined>();
   const detailFromSkeletonRef = useRef(false);
@@ -8639,9 +8898,36 @@ function LauncherShell() {
     setSettings(await window.hynite.settings.update({ cardsPerRow: normalizeCardsPerRow(value) }));
   }
 
+  const homeNeedsWishlist = useMemo(() => {
+    const layout = settings?.home ?? defaultHomeLayout;
+    return layout.modules.some((module) => module.source.kind === "wishlist" || module.source.kind === "wishlistUpcoming");
+  }, [settings?.home]);
+
+  useEffect(() => {
+    if (!homeNeedsWishlist) {
+      setHomeWishlistItems([]);
+      return;
+    }
+    let cancelled = false;
+    void window.hynite.wishlist.list({})
+      .then((items) => { if (!cancelled) setHomeWishlistItems(items); })
+      .catch((error) => console.error("Failed to load wishlist for home", error));
+    return () => { cancelled = true; };
+  }, [homeNeedsWishlist]);
+
+  async function persistHomeLayout(next: HomeLayout) {
+    setSettings((current) => current ? { ...current, home: next } : current);
+    try {
+      const updated = await window.hynite.settings.update({ home: next });
+      setSettings(updated);
+    } catch (error) {
+      console.error("Failed to persist home layout", error);
+    }
+  }
+
   const routeContent = useMemo(() => {
     if (route === "home") {
-      return <HomeScreen home={home} settings={settings} libraryGameIds={libraryGameIds} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} onGameIntent={scheduleHomeDetailPrefetch} discoveryLoading={homeDiscoveryLoading} />;
+      return <HomeScreen home={home} settings={settings} libraryGames={allGames} libraryGameIds={libraryGameIds} wishlistItems={homeWishlistItems} groups={settings?.gameGroups ?? []} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} onGameIntent={scheduleHomeDetailPrefetch} onLayoutChange={(next) => void persistHomeLayout(next)} discoveryLoading={homeDiscoveryLoading} />;
     }
     if (route === "steam") {
       return <SteamStoreScreen settings={settings} onSettingsChanged={setSettings} onOpenSettings={() => setRoute("settings")} />;
