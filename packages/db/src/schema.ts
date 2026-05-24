@@ -220,5 +220,26 @@ export const migrations = [
 
       CREATE INDEX IF NOT EXISTS idx_steam_tag_directory_name ON steam_tag_directory(name);
     `
+  },
+  {
+    id: 12,
+    sql: `
+      CREATE TABLE IF NOT EXISTS game_soundtracks (
+        game_id TEXT PRIMARY KEY,
+        video_id TEXT NOT NULL,
+        video_url TEXT NOT NULL,
+        video_title TEXT,
+        channel TEXT,
+        duration_seconds INTEGER,
+        local_file_path TEXT,
+        file_size_bytes INTEGER,
+        is_manual INTEGER NOT NULL DEFAULT 0,
+        picked_at TEXT NOT NULL,
+        last_played_at TEXT,
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_game_soundtracks_last_played ON game_soundtracks(last_played_at);
+    `
   }
 ] as const;

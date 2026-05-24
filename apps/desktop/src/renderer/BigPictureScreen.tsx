@@ -27,6 +27,8 @@ type Props = {
   onSelect: (game: Game) => void;
   onBack: () => boolean;
   onExit: () => void;
+  /** Fires when the shelf carousel's focused game changes. Undefined when not in shelf view. */
+  onShelfFocusChange?: (game: Game | undefined) => void;
   defaultTabId?: string;
   onSetDefaultTab?: (tabId: string | undefined) => void;
   detailOpen?: boolean;
@@ -326,6 +328,7 @@ export function BigPictureScreen({
   onSelect,
   onBack,
   onExit,
+  onShelfFocusChange,
   defaultTabId,
   onSetDefaultTab,
   detailOpen,
@@ -360,6 +363,17 @@ export function BigPictureScreen({
   const currentGameCount = currentTab?.games.length ?? 0;
   const clampedFocusedIndex = clampIndex(focusedIndex, currentGameCount);
   const focusedGame: Game | undefined = currentTab?.games[clampedFocusedIndex];
+
+  // Notify parent when the shelf-focused game changes (only in shelf view).
+  // Grid view selection is intentionally ignored — OST follow mode is shelf-only.
+  useEffect(() => {
+    if (!onShelfFocusChange) return;
+    if (viewMode === "shelf") {
+      onShelfFocusChange(focusedGame);
+    } else {
+      onShelfFocusChange(undefined);
+    }
+  }, [focusedGame?.id, viewMode, onShelfFocusChange]);
   currentTabIdRef.current = currentTab?.id;
   defaultTabIdRef.current = defaultTabId;
   const controller = useMemo<ControllerSettings>(() => normalizeControllerSettings(settings), [settings]);

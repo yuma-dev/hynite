@@ -2,7 +2,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import { controllerActionIds, defaultLibraryView, defaultWishlistView, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SpotlightSettings, type SteamAccountSettings, type WindowBounds, type WindowState, type WishlistView } from "@hynite/core";
+import { controllerActionIds, defaultLibraryView, defaultWishlistView, DEFAULT_OST_SETTINGS, soundEffectIds, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type EncryptedSecret, type GameGroup, type LibraryView, type MusicSettings, type MusicTrack, type OstSettings, type OstSourceMode, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundSettings, type SpotlightSettings, type SteamAccountSettings, type WindowBounds, type WindowState, type WishlistView } from "@hynite/core";
 import { readAudioMetadata } from "./audioMetadata";
 import { normalizeAcceleratorText } from "../shared/hotkey";
 
@@ -42,8 +42,54 @@ const DEFAULT_MUSIC_SETTINGS: MusicSettings = {
   pauseOnSystemAudio: true,
   continuousPlay: false,
   gapMinMs: 30_000,
-  gapMaxMs: 120_000
+  gapMaxMs: 120_000,
+  osts: { ...DEFAULT_OST_SETTINGS }
 };
+
+function sanitizeOstSettings(value: unknown): OstSettings {
+  const candidate = value && typeof value === "object" ? value as Partial<OstSettings> : {};
+  const source: OstSourceMode = candidate.source === "mostPlayed" || candidate.source === "random" || candidate.source === "favorites"
+    ? candidate.source
+    : "lastPlayed";
+  const favorites = Array.isArray(candidate.favorites)
+    ? [...new Set(candidate.favorites.filter((id): id is string => typeof id === "string" && id.length > 0))]
+    : [];
+  const template = typeof candidate.queryTemplate === "string" && candidate.queryTemplate.trim()
+    ? candidate.queryTemplate.trim().slice(0, 240)
+    : DEFAULT_OST_SETTINGS.queryTemplate;
+  const ytdlpPath = typeof candidate.ytdlpPath === "string" && candidate.ytdlpPath.trim()
+    ? candidate.ytdlpPath.trim()
+    : null;
+  const maxCacheBytes = typeof candidate.maxCacheBytes === "number" && Number.isFinite(candidate.maxCacheBytes) && candidate.maxCacheBytes > 0
+    ? Math.min(200 * 1024 * 1024 * 1024, Math.max(256 * 1024 * 1024, Math.round(candidate.maxCacheBytes)))
+    : DEFAULT_OST_SETTINGS.maxCacheBytes;
+  const clampInt = (v: unknown, fallback: number, min: number, max: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback;
+  return {
+    enabled: candidate.enabled === true,
+    source,
+    favorites,
+    queryTemplate: template,
+    rotateOnEachTrack: candidate.rotateOnEachTrack === true,
+    ytdlpPath,
+    maxCacheBytes,
+    filterRejectKeywords: candidate.filterRejectKeywords === true,
+    preferLongUploads: candidate.preferLongUploads === true,
+    preferOfficialChannels: candidate.preferOfficialChannels !== false,
+    requireTitleWordMatch: candidate.requireTitleWordMatch === true,
+    minDurationSeconds: clampInt(candidate.minDurationSeconds, DEFAULT_OST_SETTINGS.minDurationSeconds, 0, 86_400),
+    maxDurationSeconds: clampInt(candidate.maxDurationSeconds, DEFAULT_OST_SETTINGS.maxDurationSeconds, 0, 86_400),
+    customRejectKeywords: typeof candidate.customRejectKeywords === "string" ? candidate.customRejectKeywords.slice(0, 500) : "",
+    customBoostKeywords: typeof candidate.customBoostKeywords === "string" ? candidate.customBoostKeywords.slice(0, 500) : "",
+    searchResultLimit: clampInt(candidate.searchResultLimit, DEFAULT_OST_SETTINGS.searchResultLimit, 3, 30),
+    thoroughSearch: candidate.thoroughSearch === true,
+    audioQuality:
+      candidate.audioQuality === "best" || candidate.audioQuality === "standard" ||
+      candidate.audioQuality === "compact" || candidate.audioQuality === "low"
+        ? candidate.audioQuality : "compact",
+    bigPictureReactive: candidate.bigPictureReactive !== false
+  };
+}
 
 const DEFAULT_CONTROLLER_BINDINGS: Record<ControllerActionId, ControllerButtonBinding> = {
   focusBigPicture: { buttons: [8, 9] },
@@ -349,7 +395,8 @@ function sanitizeMusicSettings(value: unknown, bundledAudio: BundledAudioDefault
     pauseOnSystemAudio: candidate.pauseOnSystemAudio !== false,
     continuousPlay: candidate.continuousPlay === true,
     gapMinMs: Math.min(gapMinMs, gapMaxMs),
-    gapMaxMs: Math.max(gapMinMs, gapMaxMs)
+    gapMaxMs: Math.max(gapMinMs, gapMaxMs),
+    osts: sanitizeOstSettings(candidate.osts)
   };
 }
 

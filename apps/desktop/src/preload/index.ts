@@ -4,6 +4,10 @@ import type {
   AppSettings,
   DownloadSourceInfo,
   Game,
+  GameSoundtrack,
+  OstDownloadProgress,
+  OstResolveResult,
+  OstSearchPreview,
   GameAssetCandidateResult,
   GameAssetUpdate,
   GameDetail,
@@ -32,6 +36,7 @@ import type {
   SteamStoreEmbedInfo,
   SyncStatus,
   SyncResult,
+  YtdlpStatus,
   SteamWishlistItem,
   WishlistCalendarQuery,
   WishlistListQuery
@@ -265,6 +270,33 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, value: boolean) => callback(value);
       ipcRenderer.on("music:systemAudioChanged", listener);
       return () => ipcRenderer.removeListener("music:systemAudioChanged", listener);
+    }
+  },
+  ost: {
+    status: (): Promise<YtdlpStatus> => ipcRenderer.invoke("ost:status"),
+    installYtdlp: (): Promise<string> => ipcRenderer.invoke("ost:install-ytdlp"),
+    resolveNext: (excludeGameIds?: string[]): Promise<OstResolveResult> =>
+      ipcRenderer.invoke("ost:resolve-next", { excludeGameIds: excludeGameIds ?? [] }),
+    resolveForGame: (gameId: string): Promise<OstResolveResult> => ipcRenderer.invoke("ost:resolve-for-game", gameId),
+    repick: (gameId: string): Promise<OstResolveResult> => ipcRenderer.invoke("ost:repick", gameId),
+    setManualUrl: (gameId: string, url: string): Promise<GameSoundtrack> =>
+      ipcRenderer.invoke("ost:set-manual-url", { gameId, url }),
+    clear: (gameId: string): Promise<void> => ipcRenderer.invoke("ost:clear", gameId),
+    clearAll: (): Promise<{ removed: number }> => ipcRenderer.invoke("ost:clear-all"),
+    list: (): Promise<GameSoundtrack[]> => ipcRenderer.invoke("ost:list"),
+    cacheStats: (): Promise<{ totalBytes: number; entryCount: number }> => ipcRenderer.invoke("ost:cache-stats"),
+    markPlayed: (gameId: string): Promise<{ ok: true }> => ipcRenderer.invoke("ost:mark-played", gameId),
+    trackUrl: (videoId: string): string => `hynite-ost://track/${encodeURIComponent(videoId)}.m4a`,
+    previewSearch: (gameId: string): Promise<OstSearchPreview | undefined> => ipcRenderer.invoke("ost:preview-search", gameId),
+    onProgress: (callback: (progress: OstDownloadProgress) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: OstDownloadProgress) => callback(value);
+      ipcRenderer.on("ost:progress", listener);
+      return () => ipcRenderer.removeListener("ost:progress", listener);
+    },
+    onYtdlpInstallProgress: (callback: (progress: { phase: string; percent?: number; message?: string }) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: { phase: string; percent?: number; message?: string }) => callback(value);
+      ipcRenderer.on("ost:ytdlp-progress", listener);
+      return () => ipcRenderer.removeListener("ost:ytdlp-progress", listener);
     }
   },
   steam: {

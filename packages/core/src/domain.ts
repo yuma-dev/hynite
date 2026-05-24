@@ -713,6 +713,114 @@ export type MusicSettings = {
   continuousPlay?: boolean;
   gapMinMs?: number;
   gapMaxMs?: number;
+  osts?: OstSettings;
+};
+
+export type OstSourceMode = "lastPlayed" | "mostPlayed" | "random" | "favorites";
+
+export type OstSettings = {
+  enabled?: boolean;
+  source?: OstSourceMode;
+  favorites?: string[];
+  queryTemplate?: string;
+  rotateOnEachTrack?: boolean;
+  ytdlpPath?: string | null;
+  maxCacheBytes?: number;
+  // Filtering / ranking
+  filterRejectKeywords?: boolean;       // reject videos whose title contains gameplay/trailer/etc keywords
+  preferLongUploads?: boolean;          // bonus longer videos (full albums)
+  preferOfficialChannels?: boolean;     // bonus "Topic"/"Official" channels
+  requireTitleWordMatch?: boolean;      // require at least one game-title word in the video title
+  minDurationSeconds?: number;          // 0 = no minimum
+  maxDurationSeconds?: number;          // 0 = no maximum
+  customRejectKeywords?: string;        // comma-separated, lowercase substring match
+  customBoostKeywords?: string;         // comma-separated, lowercase substring match
+  searchResultLimit?: number;           // how many ytsearch results to fetch
+  thoroughSearch?: boolean;             // fetch full metadata for each result (slower, includes view counts)
+  audioQuality?: "best" | "standard" | "compact" | "low"; // download bitrate trade-off
+  bigPictureReactive?: boolean;         // in Big Picture shelf view, follow the focused game's OST and loop it
+};
+
+export const DEFAULT_OST_SETTINGS: Required<Omit<OstSettings, "ytdlpPath">> & { ytdlpPath: string | null } = {
+  enabled: false,
+  source: "lastPlayed",
+  favorites: [],
+  queryTemplate: "{title} Game Original Soundtrack",
+  rotateOnEachTrack: false,
+  ytdlpPath: null,
+  maxCacheBytes: 5 * 1024 * 1024 * 1024,
+  filterRejectKeywords: false,
+  preferLongUploads: false,
+  preferOfficialChannels: true,
+  requireTitleWordMatch: false,
+  minDurationSeconds: 0,
+  maxDurationSeconds: 0,
+  customRejectKeywords: "",
+  customBoostKeywords: "",
+  searchResultLimit: 8,
+  thoroughSearch: false,
+  audioQuality: "low",
+  bigPictureReactive: true
+};
+
+export type GameSoundtrack = {
+  gameId: string;
+  videoId: string;
+  videoUrl: string;
+  videoTitle?: string;
+  channel?: string;
+  durationSeconds?: number;
+  localFilePath?: string;
+  fileSizeBytes?: number;
+  isManual: boolean;
+  pickedAt: string;
+  lastPlayedAt?: string;
+};
+
+export type YoutubeSearchResult = {
+  videoId: string;
+  url: string;
+  title: string;
+  channel?: string;
+  durationSeconds?: number;
+  viewCount?: number;
+};
+
+export type OstDownloadProgress = {
+  gameId: string;
+  videoId: string;
+  phase: "searching" | "downloading" | "ready" | "error" | "diagnostic";
+  percent?: number;
+  bytesDownloaded?: number;
+  totalBytes?: number;
+  bytesPerSecond?: number;
+  etaSeconds?: number;
+  message?: string;
+};
+
+export type YtdlpStatus = {
+  installed: boolean;
+  path?: string;
+  version?: string;
+  installing?: boolean;
+  error?: string;
+};
+
+export type OstResolveResult =
+  | { kind: "ready"; gameId: string; gameTitle: string; soundtrack: GameSoundtrack }
+  | { kind: "no-game"; reason: string }
+  | { kind: "no-pick"; gameId: string; gameTitle: string; reason: string }
+  | { kind: "error"; gameId?: string; gameTitle?: string; reason: string };
+
+export type OstScoredResult = YoutubeSearchResult & {
+  score: number;
+  rejected: boolean;
+  rejectReason?: string;
+};
+
+export type OstSearchPreview = {
+  query: string;
+  results: OstScoredResult[];
 };
 
 export type OnboardingSettings = {

@@ -56,7 +56,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultHomeLayout, defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeLayout, type HomeModel, type HomeModule, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
+import { defaultHomeLayout, defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeLayout, type HomeModel, type HomeModule, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OstSettings, type OstSourceMode, type GameSoundtrack, type YtdlpStatus, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
 import { closestCenter, DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { adjustCardsPerRow, AddModuleButton, HomeEditBar, HomeEmptyState, HomeGridBlock, ModuleConfigPanel, ModuleEditChrome, SortableModule, newDraftModule, resolveLayout, resolveModuleGames, type HomeResolveContext } from "./homeModules";
@@ -67,6 +67,16 @@ import { BigPictureScreen } from "./BigPictureScreen";
 import { OnboardingExperience } from "./onboarding/OnboardingExperience";
 import { normalizeSoundSettings, soundEngine, SOUND_EFFECT_DEFINITIONS } from "./sound";
 import { musicEngine, normalizeMusicSettings, type MusicStatus } from "./music";
+import { ostMusicEngine, type OstStatus } from "./ostMusic";
+
+function applyMusicToEngines(settings: AppSettings | MusicSettings | undefined): void {
+  const music: MusicSettings = settings && "sound" in (settings as AppSettings)
+    ? (settings as AppSettings).music ?? {}
+    : (settings as MusicSettings | undefined) ?? {};
+  const ostsOn = music.osts?.enabled === true;
+  musicEngine.applySettings(ostsOn ? { ...music, enabled: false } : music);
+  ostMusicEngine.applySettings(music);
+}
 import { bindingLabel, bindingPressed, controllerBindingOrder, CONTROLLER_ACTION_HELP, CONTROLLER_ACTION_LABELS, firstPressedBinding, normalizeControllerSettings, pressedButtonIndexes, readGamepadState } from "./controllerInput";
 import { acceleratorFromHotkeyInput } from "../shared/hotkey";
 import type { LaunchOutcome, UpdaterStatus } from "../preload";
@@ -196,6 +206,7 @@ async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boo
   if (result.kind === "launched") {
     soundEngine.play("gameLaunch");
     musicEngine.onGameLaunch();
+    ostMusicEngine.onGameLaunch();
     return true;
   }
   if (result.kind === "launch-failed") {
@@ -229,6 +240,7 @@ async function runLaunchFlow(id: string, preferredSteamId?: string): Promise<boo
     if (switchResult.kind === "launched") {
       soundEngine.play("gameLaunch");
       musicEngine.onGameLaunch();
+    ostMusicEngine.onGameLaunch();
       return true;
     }
     if (switchResult.kind === "launch-failed") {
@@ -4457,7 +4469,7 @@ function CurrentTrackCredit({ status }: { status: MusicStatus }) {
         aria-describedby="current-track-tooltip"
         aria-label={`${muted ? "Unmute music" : "Mute music"}: ${chipLabel}. Currently playing ${title}, ${album}, ${artist}.`}
         aria-pressed={muted}
-        onClick={() => musicEngine.setUserMuted(!muted)}
+        onClick={() => { musicEngine.setUserMuted(!muted); ostMusicEngine.setUserMuted(!muted); }}
       >
         {muted ? <VolumeX size={10} /> : <Music2 size={10} />}
         {chipLabel}
@@ -4475,6 +4487,52 @@ function CurrentTrackCredit({ status }: { status: MusicStatus }) {
           <strong>{title}</strong>
           <span>{album}</span>
           <span>{artist}</span>
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function OstCurrentTrack({ status }: { status: OstStatus }) {
+  const [coverFailed, setCoverFailed] = useState(false);
+  const muted = status.userMuted;
+  const game = status.currentGameTitle ?? "";
+  const video = status.currentVideoTitle ?? "";
+  const channel = status.currentChannel ?? "";
+
+  if (!status.enabled || !status.currentVideoTitle) return null;
+
+  // YouTube thumbnail: build from videoId is awkward (we don't have it here); use placeholder unless we encode it.
+  // We do have videoId via the underlying soundtrack; expose through status via window query trick — fallback to icon.
+  const chipLabel = game || video;
+
+  return (
+    <span className="music-copyright-wrap">
+      <button
+        className={`music-copyright-chip${muted ? " music-copyright-chip--muted" : ""}`}
+        aria-describedby="current-ost-tooltip"
+        aria-label={`${muted ? "Unmute" : "Mute"} ${chipLabel}`}
+        aria-pressed={muted}
+        onClick={() => { musicEngine.setUserMuted(!muted); ostMusicEngine.setUserMuted(!muted); }}
+      >
+        {muted ? <VolumeX size={10} /> : <Music2 size={10} />}
+        {chipLabel}
+      </button>
+      <span className="current-track-tooltip" id="current-ost-tooltip" role="tooltip">
+        <span className="current-track-cover">
+          {coverFailed || !status.currentVideoId ? <Music2 size={24} /> : (
+            <img
+              src={`https://i.ytimg.com/vi/${encodeURIComponent(status.currentVideoId)}/mqdefault.jpg`}
+              alt=""
+              onError={() => setCoverFailed(true)}
+            />
+          )}
+        </span>
+        <span className="current-track-details">
+          <span className="current-track-kicker">{muted ? "Muted — click chip to unmute" : "Soundtrack from"}</span>
+          <strong>{game || "Unknown game"}</strong>
+          <span>{video || "Unknown track"}</span>
+          {channel ? <span>{channel}</span> : null}
         </span>
       </span>
     </span>
@@ -4533,6 +4591,678 @@ const MUSIC_FADE_CONTROLS: Array<{ label: string; key: MusicTimingKey; max: numb
 
 function musicTimingPatch(key: MusicTimingKey, value: string): Partial<MusicSettings> {
   return { [key]: secondsToMs(value) };
+}
+
+const OST_SOURCE_LABELS: Record<OstSourceMode, string> = {
+  lastPlayed: "Last played game",
+  mostPlayed: "Most played game",
+  random: "Random from library",
+  favorites: "From favorites list"
+};
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function formatDuration(seconds: number | undefined): string {
+  if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return "—";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function GameSoundtracksDisclosure({
+  musicSettings,
+  updateMusic,
+  scheduleMusicUpdate
+}: {
+  musicSettings: MusicSettings;
+  updateMusic: (music: MusicSettings) => Promise<void>;
+  scheduleMusicUpdate: (music: MusicSettings) => void;
+}) {
+  const [ostStatus, setOstStatus] = useState<OstStatus>(() => ostMusicEngine.getStatus());
+  useEffect(() => ostMusicEngine.subscribe(setOstStatus), []);
+  const osts: OstSettings = musicSettings.osts ?? {};
+  const [ytdlpStatus, setYtdlpStatus] = useState<YtdlpStatus | null>(null);
+  const [installProgress, setInstallProgress] = useState<{ phase: string; percent?: number; message?: string } | null>(null);
+  const [cached, setCached] = useState<GameSoundtrack[]>([]);
+  const [cacheStats, setCacheStats] = useState<{ totalBytes: number; entryCount: number }>({ totalBytes: 0, entryCount: 0 });
+  const [games, setGames] = useState<Game[]>([]);
+  const [favoritesQuery, setFavoritesQuery] = useState("");
+  const [tryQuery, setTryQuery] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ gameId: string; gameTitle: string; query: string; results: Array<{ videoId: string; url: string; title: string; channel?: string; durationSeconds?: number; viewCount?: number; score: number; rejected: boolean; rejectReason?: string }> } | null>(null);
+
+  const refreshAll = useCallback(async () => {
+    const [status, list, stats] = await Promise.all([
+      window.hynite.ost.status(),
+      window.hynite.ost.list(),
+      window.hynite.ost.cacheStats()
+    ]);
+    setYtdlpStatus(status);
+    setCached(list);
+    setCacheStats(stats);
+  }, []);
+
+  useEffect(() => { void refreshAll(); }, [refreshAll]);
+
+  useEffect(() => {
+    return window.hynite.ost.onYtdlpInstallProgress((progress) => {
+      setInstallProgress(progress);
+      if (progress.phase === "ready" || progress.phase === "error") {
+        void refreshAll();
+      }
+    });
+  }, [refreshAll]);
+
+  useEffect(() => {
+    if (games.length > 0) return;
+    void window.hynite.library.list({}).then(setGames).catch(() => undefined);
+  }, [games.length]);
+
+  const patch = (next: Partial<OstSettings>) => ({ ...musicSettings, osts: { ...osts, ...next } });
+
+  const gameById = useMemo(() => new Map(games.map((g) => [g.id, g])), [games]);
+  const favoriteIds = osts.favorites ?? [];
+  const filteredGames = useMemo(() => {
+    if (!favoritesQuery.trim()) return games.slice(0, 50);
+    const q = favoritesQuery.toLowerCase();
+    return games.filter((g) => g.title.toLowerCase().includes(q)).slice(0, 50);
+  }, [games, favoritesQuery]);
+
+  const installInstalled = ytdlpStatus?.installed === true;
+  const installing = installProgress?.phase === "downloading" || ytdlpStatus?.installing === true;
+
+  const installYtdlp = async () => {
+    setInstallProgress({ phase: "downloading", percent: 0 });
+    try {
+      await window.hynite.ost.installYtdlp();
+      setInstallProgress(null);
+    } catch (err) {
+      setInstallProgress({ phase: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+    await refreshAll();
+  };
+
+  const repick = async (gameId: string) => {
+    await window.hynite.ost.repick(gameId);
+    await refreshAll();
+  };
+
+  const clear = async (gameId: string) => {
+    await window.hynite.ost.clear(gameId);
+    await refreshAll();
+  };
+
+  const clearAll = async () => {
+    if (!confirm("Delete all cached soundtracks and picks? This cannot be undone.")) return;
+    await window.hynite.ost.clearAll();
+    await refreshAll();
+  };
+
+  const playNow = async (gameId: string) => {
+    await ostMusicEngine.playForGame(gameId);
+  };
+
+  const setManual = async (gameId: string, urlInput?: string) => {
+    const url = urlInput ?? prompt("Paste a YouTube URL to pin as this game's soundtrack:");
+    if (!url) return;
+    try {
+      await window.hynite.ost.setManualUrl(gameId, url);
+      await window.hynite.ost.resolveForGame(gameId);
+      await refreshAll();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const runPreview = async (game: Game) => {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreview({ gameId: game.id, gameTitle: game.title, query: "", results: [] });
+    try {
+      const result = await window.hynite.ost.previewSearch(game.id);
+      if (!result) {
+        setPreviewError("No results.");
+        setPreview(null);
+      } else {
+        setPreview({ gameId: game.id, gameTitle: game.title, query: result.query, results: result.results });
+      }
+    } catch (err) {
+      setPreviewError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const stopPlayback = () => ostMusicEngine.stopPlayback();
+  const skipTrack = () => ostMusicEngine.skipToNext();
+
+  return (
+    <details className="settings-disclosure audio-disclosure">
+      <summary>
+        <span>Game soundtracks <em style={{ marginLeft: 6, opacity: 0.7 }}>experimental</em></span>
+        <em>{osts.enabled ? `On · ${OST_SOURCE_LABELS[osts.source ?? "lastPlayed"]} · ${cached.length} cached (${formatBytes(cacheStats.totalBytes)})` : "Off"}</em>
+      </summary>
+      <div className="music-control-grid">
+        <label className="settings-toggle-row">
+          <input
+            type="checkbox"
+            checked={osts.enabled === true}
+            onChange={(event) => void updateMusic(patch({ enabled: event.currentTarget.checked }))}
+          />
+          <span className="settings-toggle-control" aria-hidden="true" />
+          <span>
+            <strong>Replace music with game soundtracks</strong>
+            <em>Searches YouTube for soundtracks of games in your library and plays them instead of your local tracks. Audio is cached on first play.</em>
+          </span>
+        </label>
+
+        <div className="settings-toggle-row" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span>
+            <strong>yt-dlp</strong>
+            <em>
+              {installInstalled
+                ? `Installed${ytdlpStatus?.version ? ` (${ytdlpStatus.version.split("\n")[0]})` : ""}`
+                : "Required to search and download soundtracks."}
+              {installProgress?.phase === "downloading" && typeof installProgress.percent === "number"
+                ? ` · downloading ${Math.round(installProgress.percent)}%`
+                : null}
+              {installProgress?.phase === "error" ? ` · ${installProgress.message}` : null}
+            </em>
+          </span>
+          <button
+            type="button"
+            className="secondary-action"
+            disabled={installing}
+            onClick={() => void installYtdlp()}
+          >
+            {installing ? <Loader2 size={13} /> : <Download size={13} />}
+            {installInstalled ? "Reinstall" : "Install yt-dlp"}
+          </button>
+        </div>
+
+        {osts.enabled === true ? (
+          <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 14 }}>
+        <label className="music-number-row" style={{ alignItems: "center" }}>
+          <span>Source</span>
+          <select
+            className="plain-input"
+            value={osts.source ?? "lastPlayed"}
+            onChange={(event) => void updateMusic(patch({ source: event.currentTarget.value as OstSourceMode }))}
+          >
+            {(Object.keys(OST_SOURCE_LABELS) as OstSourceMode[]).map((mode) => (
+              <option key={mode} value={mode}>{OST_SOURCE_LABELS[mode]}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="music-number-row" style={{ alignItems: "center" }}>
+          <span>Query</span>
+          <input
+            className="plain-input"
+            type="text"
+            placeholder="{title} Original Soundtrack"
+            value={osts.queryTemplate ?? ""}
+            onChange={(event) => scheduleMusicUpdate(patch({ queryTemplate: event.currentTarget.value }))}
+            onBlur={(event) => void updateMusic(patch({ queryTemplate: event.currentTarget.value }))}
+            style={{ flex: 1 }}
+          />
+        </label>
+        <p className="settings-hint" style={{ marginTop: -6 }}>
+          Tokens: <code>{"{title}"}</code> · <code>{"{year}"}</code>.
+        </p>
+
+        <label className="settings-toggle-row">
+          <input
+            type="checkbox"
+            checked={osts.rotateOnEachTrack === true}
+            onChange={(event) => void updateMusic(patch({ rotateOnEachTrack: event.currentTarget.checked }))}
+          />
+          <span className="settings-toggle-control" aria-hidden="true" />
+          <span>
+            <strong>Rotate game each track</strong>
+            <em>Pick a different game when one soundtrack ends. Off keeps you in the same game's OST.</em>
+          </span>
+        </label>
+
+        <label className="settings-toggle-row">
+          <input
+            type="checkbox"
+            checked={osts.bigPictureReactive !== false}
+            onChange={(event) => void updateMusic(patch({ bigPictureReactive: event.currentTarget.checked }))}
+          />
+          <span className="settings-toggle-control" aria-hidden="true" />
+          <span>
+            <strong>Big Picture: follow carousel</strong>
+            <em>In Big Picture's shelf view, switch to the focused game's OST and loop it. Ignores grid selection. Pauses other source-mode rotation while active.</em>
+          </span>
+        </label>
+
+        <details className="settings-disclosure" style={{ marginTop: 4 }}>
+          <summary>
+            <span>Filters &amp; ranking</span>
+            <em>Tune how results are scored. Defaults are lenient — like YouTube search.</em>
+          </summary>
+          <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+            <label className="settings-toggle-row">
+              <input
+                type="checkbox"
+
+                checked={osts.filterRejectKeywords === true}
+                onChange={(event) => void updateMusic(patch({ filterRejectKeywords: event.currentTarget.checked }))}
+              />
+              <span className="settings-toggle-control" aria-hidden="true" />
+              <span>
+                <strong>Reject gameplay/trailer/review videos</strong>
+                <em>Filters out titles containing "gameplay", "walkthrough", "trailer", "reaction", "review", "let's play", "tutorial", "guide", etc.</em>
+              </span>
+            </label>
+            <label className="settings-toggle-row">
+              <input
+                type="checkbox"
+
+                checked={osts.preferLongUploads !== false}
+                onChange={(event) => void updateMusic(patch({ preferLongUploads: event.currentTarget.checked }))}
+              />
+              <span className="settings-toggle-control" aria-hidden="true" />
+              <span>
+                <strong>Prefer long uploads</strong>
+                <em>Bonuses videos over 20 min (likely full albums).</em>
+              </span>
+            </label>
+            <label className="settings-toggle-row">
+              <input
+                type="checkbox"
+
+                checked={osts.preferOfficialChannels !== false}
+                onChange={(event) => void updateMusic(patch({ preferOfficialChannels: event.currentTarget.checked }))}
+              />
+              <span className="settings-toggle-control" aria-hidden="true" />
+              <span>
+                <strong>Prefer official / Topic channels</strong>
+                <em>Bonuses YouTube auto-generated artist channels (named "X - Topic") and "Official"-named channels.</em>
+              </span>
+            </label>
+            <label className="settings-toggle-row">
+              <input
+                type="checkbox"
+
+                checked={osts.requireTitleWordMatch === true}
+                onChange={(event) => void updateMusic(patch({ requireTitleWordMatch: event.currentTarget.checked }))}
+              />
+              <span className="settings-toggle-control" aria-hidden="true" />
+              <span>
+                <strong>Require game name in title</strong>
+                <em>Rejects results that don't contain at least one word from the game title.</em>
+              </span>
+            </label>
+            <div className="music-number-grid">
+              <label className="music-number-row compact-number-row">
+                <span>Min duration</span>
+                <input
+                  className="plain-input"
+                  type="number"
+                  min="0"
+                  max="7200"
+                  step="30"
+  
+                  value={osts.minDurationSeconds ?? 0}
+                  onChange={(event) => scheduleMusicUpdate(patch({ minDurationSeconds: Math.max(0, Number(event.currentTarget.value) || 0) }))}
+                  onBlur={(event) => void updateMusic(patch({ minDurationSeconds: Math.max(0, Number(event.currentTarget.value) || 0) }))}
+                />
+                <strong>s</strong>
+              </label>
+              <label className="music-number-row compact-number-row">
+                <span>Max duration</span>
+                <input
+                  className="plain-input"
+                  type="number"
+                  min="0"
+                  max="14400"
+                  step="60"
+  
+                  value={osts.maxDurationSeconds ?? 0}
+                  onChange={(event) => scheduleMusicUpdate(patch({ maxDurationSeconds: Math.max(0, Number(event.currentTarget.value) || 0) }))}
+                  onBlur={(event) => void updateMusic(patch({ maxDurationSeconds: Math.max(0, Number(event.currentTarget.value) || 0) }))}
+                />
+                <strong>s</strong>
+              </label>
+              <label className="music-number-row compact-number-row">
+                <span>Search count</span>
+                <input
+                  className="plain-input"
+                  type="number"
+                  min="3"
+                  max="30"
+                  step="1"
+  
+                  value={osts.searchResultLimit ?? 15}
+                  onChange={(event) => scheduleMusicUpdate(patch({ searchResultLimit: Math.max(3, Math.min(30, Number(event.currentTarget.value) || 15)) }))}
+                  onBlur={(event) => void updateMusic(patch({ searchResultLimit: Math.max(3, Math.min(30, Number(event.currentTarget.value) || 15)) }))}
+                />
+              </label>
+            </div>
+            <label className="settings-toggle-row">
+              <input
+                type="checkbox"
+                checked={osts.thoroughSearch === true}
+                onChange={(event) => void updateMusic(patch({ thoroughSearch: event.currentTarget.checked }))}
+              />
+              <span className="settings-toggle-control" aria-hidden="true" />
+              <span>
+                <strong>Thorough search (slower)</strong>
+                <em>Fetches full metadata for every result (including view counts). Adds several seconds per search.</em>
+              </span>
+            </label>
+            <label className="music-number-row" style={{ alignItems: "center" }}>
+              <span>Audio quality</span>
+              <select
+                className="plain-input"
+                value={osts.audioQuality ?? "compact"}
+                onChange={(event) => void updateMusic(patch({ audioQuality: event.currentTarget.value as "best" | "standard" | "compact" | "low" }))}
+              >
+                <option value="best">Best (~115 MB/h)</option>
+                <option value="standard">Standard (~57 MB/h)</option>
+                <option value="compact">Compact (~28 MB/h, recommended)</option>
+                <option value="low">Low (~22 MB/h)</option>
+              </select>
+            </label>
+            <p className="settings-hint" style={{ marginTop: -6 }}>
+              Lower quality means smaller cache files. At Compact, ~700 soundtracks fit in roughly 20 GB.
+            </p>
+            <label className="music-number-row" style={{ alignItems: "center" }}>
+              <span>Reject contains</span>
+              <input
+                className="plain-input"
+                type="text"
+
+                placeholder="comma-separated, e.g. live, cover"
+                value={osts.customRejectKeywords ?? ""}
+                onChange={(event) => scheduleMusicUpdate(patch({ customRejectKeywords: event.currentTarget.value }))}
+                onBlur={(event) => void updateMusic(patch({ customRejectKeywords: event.currentTarget.value }))}
+                style={{ flex: 1 }}
+              />
+            </label>
+            <label className="music-number-row" style={{ alignItems: "center" }}>
+              <span>Boost contains</span>
+              <input
+                className="plain-input"
+                type="text"
+
+                placeholder="comma-separated, e.g. extended, deluxe"
+                value={osts.customBoostKeywords ?? ""}
+                onChange={(event) => scheduleMusicUpdate(patch({ customBoostKeywords: event.currentTarget.value }))}
+                onBlur={(event) => void updateMusic(patch({ customBoostKeywords: event.currentTarget.value }))}
+                style={{ flex: 1 }}
+              />
+            </label>
+          </div>
+        </details>
+
+        {osts.source === "favorites" ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <strong style={{ fontSize: 12 }}>Favorites ({favoriteIds.length})</strong>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {favoriteIds.length === 0 ? (
+                <em style={{ opacity: 0.65 }}>No games added.</em>
+              ) : favoriteIds.map((id) => {
+                const game = gameById.get(id);
+                return (
+                  <span key={id} className="audio-source-pill" style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                    {game?.title ?? id}
+                    <button
+                      type="button"
+                      className="icon-only-action"
+                      style={{ padding: 0, marginLeft: 2 }}
+                      onClick={() => void updateMusic(patch({ favorites: favoriteIds.filter((x) => x !== id) }))}
+                      aria-label={`Remove ${game?.title ?? id}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+            <input
+              className="plain-input"
+              type="text"
+              placeholder="Search games to add…"
+              value={favoritesQuery}
+              onChange={(event) => setFavoritesQuery(event.currentTarget.value)}
+            />
+            {favoritesQuery.trim() && filteredGames.length > 0 ? (
+              <div style={{ maxHeight: 180, overflow: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+                {filteredGames.filter((g) => !favoriteIds.includes(g.id)).slice(0, 12).map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    className="secondary-action"
+                    style={{ justifyContent: "flex-start" }}
+                    onClick={() => {
+                      void updateMusic(patch({ favorites: [...favoriteIds, g.id] }));
+                      setFavoritesQuery("");
+                    }}
+                  >
+                    <Plus size={12} />
+                    {g.title}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <strong style={{ fontSize: 12 }}>Test &amp; preview</strong>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                className="secondary-action"
+                disabled={!ostStatus.enabled || (!ostStatus.currentVideoTitle && !ostStatus.loading)}
+                onClick={skipTrack}
+                title="Skip to next soundtrack"
+              >
+                <RefreshCw size={14} /> Skip
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                disabled={!ostStatus.currentVideoTitle && !ostStatus.loading}
+                onClick={stopPlayback}
+                title="Stop playback"
+              >
+                <X size={14} /> Stop
+              </button>
+            </div>
+          </div>
+
+          {ostStatus.currentVideoTitle || ostStatus.loading ? (
+            <div className="music-track-row" style={{ alignItems: "center" }}>
+              {ostStatus.currentVideoId ? (
+                <img
+                  src={`https://i.ytimg.com/vi/${encodeURIComponent(ostStatus.currentVideoId)}/mqdefault.jpg`}
+                  alt=""
+                  style={{ width: 72, height: 40, objectFit: "cover", borderRadius: 4, flex: "0 0 auto" }}
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                />
+              ) : (
+                <span style={{ width: 72, height: 40, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.05)", borderRadius: 4, flex: "0 0 auto" }}>
+                  {ostStatus.loading ? <Loader2 size={20} /> : <Music2 size={20} />}
+                </span>
+              )}
+              <div className="music-track-meta" style={{ minWidth: 0 }}>
+                <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {ostStatus.loading ? (ostStatus.loadingMessage ?? "Loading…") : (ostStatus.currentGameTitle ?? "")}
+                </strong>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {ostStatus.currentVideoTitle ?? ""}{ostStatus.currentChannel ? ` · ${ostStatus.currentChannel}` : ""}
+                </span>
+              </div>
+            </div>
+          ) : null}
+
+          <input
+            className="plain-input"
+            type="text"
+            placeholder="Search a game to preview/play its soundtrack…"
+            value={tryQuery}
+            onChange={(event) => setTryQuery(event.currentTarget.value)}
+          />
+          {tryQuery.trim() ? (
+            <div style={{ maxHeight: 220, overflow: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+              {games
+                .filter((g) => g.title.toLowerCase().includes(tryQuery.toLowerCase()))
+                .slice(0, 10)
+                .map((g) => (
+                  <div key={g.id} style={{ display: "flex", gap: 6 }}>
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      style={{ justifyContent: "flex-start", flex: 1 }}
+                      onClick={async () => {
+                        setTryQuery("");
+                        await ostMusicEngine.playForGame(g.id);
+                        await refreshAll();
+                      }}
+                      title="Play this game's soundtrack now"
+                    >
+                      <Play size={14} fill="currentColor" />
+                      {g.title}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-action icon-only-action"
+                      title="Preview top YouTube candidates"
+                      onClick={() => void runPreview(g)}
+                    >
+                      <Search size={14} />
+                    </button>
+                  </div>
+                ))}
+            </div>
+          ) : null}
+
+          {previewLoading ? (
+            <p className="settings-hint"><Loader2 size={12} /> Searching YouTube…</p>
+          ) : null}
+          {previewError ? (
+            <p className="settings-hint" style={{ color: "#f78e7e" }}>{previewError}</p>
+          ) : null}
+          {preview && !previewLoading ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <strong style={{ fontSize: 12 }}>
+                  Top candidates for "{preview.gameTitle}"
+                </strong>
+                <button
+                  type="button"
+                  className="secondary-action small"
+                  onClick={() => setPreview(null)}
+                  style={{ fontSize: 11 }}
+                >
+                  Close
+                </button>
+              </div>
+              <p className="settings-hint" style={{ marginTop: 0 }}>
+                Query: <code>{preview.query}</code>
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 320, overflow: "auto" }}>
+                {preview.results.slice(0, 12).map((r) => (
+                  <div key={r.videoId} className="music-track-row" style={{ alignItems: "center", opacity: r.rejected ? 0.5 : 1 }}>
+                    <img
+                      src={`https://i.ytimg.com/vi/${encodeURIComponent(r.videoId)}/mqdefault.jpg`}
+                      alt=""
+                      style={{ width: 64, height: 36, objectFit: "cover", borderRadius: 4, flex: "0 0 auto" }}
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    <div className="music-track-meta" style={{ minWidth: 0 }}>
+                      <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.title}>{r.title}</strong>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {r.channel ?? "—"} · {formatDuration(r.durationSeconds)} · score {r.score.toFixed(1)}
+                        {r.rejected && r.rejectReason ? ` · rejected: ${r.rejectReason}` : ""}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-action icon-only-action"
+                      title="Pin this URL and play"
+                      onClick={async () => {
+                        await setManual(preview.gameId, r.url);
+                        await ostMusicEngine.playForGame(preview.gameId);
+                      }}
+                    >
+                      <Play size={14} fill="currentColor" />
+                    </button>
+                  </div>
+                ))}
+                {preview.results.length === 0 ? (
+                  <p className="settings-hint">No results.</p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+          <strong style={{ fontSize: 12 }}>
+            Cached picks · {cached.length} entries · {formatBytes(cacheStats.totalBytes)}
+          </strong>
+          <button
+            type="button"
+            className="secondary-action"
+            disabled={cached.length === 0}
+            onClick={() => void clearAll()}
+          >
+            <Trash2 size={12} /> Clear all
+          </button>
+        </div>
+        {cached.length === 0 ? (
+          <p className="settings-hint">No soundtracks downloaded yet.</p>
+        ) : (
+          <div className="music-track-list compact-track-list">
+            {cached.slice(0, 30).map((entry) => (
+              <div key={entry.gameId} className="music-track-row">
+                <div className="music-track-meta" style={{ minWidth: 0 }}>
+                  <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.videoTitle ?? entry.videoId}>
+                    {entry.videoTitle ?? entry.videoId}
+                  </strong>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {entry.channel ?? "Unknown channel"} · {entry.fileSizeBytes ? formatBytes(entry.fileSizeBytes) : "not downloaded"}{entry.isManual ? " · pinned" : ""}
+                  </span>
+                </div>
+                <button type="button" className="secondary-action icon-only-action" title="Play now" aria-label="Play now" onClick={() => void playNow(entry.gameId)}>
+                  <Play size={14} fill="currentColor" />
+                </button>
+                <button type="button" className="secondary-action icon-only-action" title="Re-pick" aria-label="Re-pick" onClick={() => void repick(entry.gameId)}>
+                  <RefreshCw size={14} />
+                </button>
+                <button type="button" className="secondary-action icon-only-action" title="Pin URL" aria-label="Pin URL" onClick={() => void setManual(entry.gameId)}>
+                  <Link2 size={14} />
+                </button>
+                <button type="button" className="secondary-action icon-only-action" title="Remove" aria-label="Remove" onClick={() => void clear(entry.gameId)}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="settings-hint" style={{ marginTop: 4 }}>
+          Full soundtrack downloads are typically 50–200 MB each. Cache is limited; least recently played non-pinned entries are evicted automatically.
+        </p>
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
 }
 
 function SettingsScreen({
@@ -4869,16 +5599,16 @@ function SettingsScreen({
       musicSaveTimerRef.current = undefined;
     }
     setMusicDraft(music);
-    musicEngine.applySettings(music);
+    applyMusicToEngines(music);
     const next = await window.hynite.settings.update({ music });
-    musicEngine.applySettings(next);
+    applyMusicToEngines(next);
     setMusicDraft(normalizeMusicSettings(next.music));
     setSettings(next);
   }
 
   function previewMusic(music: MusicSettings) {
     setMusicDraft(music);
-    musicEngine.applySettings(music);
+    applyMusicToEngines(music);
   }
 
   function scheduleMusicUpdate(music: MusicSettings) {
@@ -5616,6 +6346,12 @@ function SettingsScreen({
                 </div>
                 </div>
               </details>
+
+              <GameSoundtracksDisclosure
+                musicSettings={musicSettings}
+                updateMusic={updateMusic}
+                scheduleMusicUpdate={scheduleMusicUpdate}
+              />
             </section>
           ) : null}
 
@@ -7663,15 +8399,15 @@ function LauncherShell() {
   useEffect(() => {
     void window.hynite.settings.get().then((nextSettings) => {
       soundEngine.applySettings(nextSettings);
-      musicEngine.applySettings(nextSettings);
+      applyMusicToEngines(nextSettings);
     }).catch((error: unknown) => {
       console.error("Failed to initialize sound settings", error);
     });
   }, []);
 
   useEffect(() => {
-    const onFocus = () => musicEngine.setFocused(true);
-    const onBlur = () => musicEngine.setFocused(false);
+    const onFocus = () => { musicEngine.setFocused(true); ostMusicEngine.setFocused(true); };
+    const onBlur = () => { musicEngine.setFocused(false); ostMusicEngine.setFocused(false); };
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
     return () => {
@@ -7681,17 +8417,33 @@ function LauncherShell() {
   }, []);
 
   useEffect(() => musicEngine.subscribe(setMusicStatus), []);
+  const [ostStatus, setOstStatus] = useState<OstStatus>(() => ostMusicEngine.getStatus());
+  useEffect(() => ostMusicEngine.subscribe(setOstStatus), []);
 
   useEffect(() => {
     const wasBigPicture = bigPictureRef.current;
     if (bigPicture && !wasBigPicture) {
       soundEngine.play("bigPictureOpen");
     }
-    musicEngine.setForcedOverrides({ forceEnabled: bigPicture, forceContinuous: bigPicture });
+    // BP "music always on" only applies to the local music engine — and only
+    // when OST mode isn't already producing audio. With OST on, the OST engine
+    // is the source of music and we must keep the local engine fully silent
+    // (otherwise it kicks in during the loading gap while the OST switches
+    // tracks).
+    const ostsOn = settings?.music?.osts?.enabled === true;
+    musicEngine.setForcedOverrides({
+      forceEnabled: bigPicture && !ostsOn,
+      forceContinuous: bigPicture && !ostsOn
+    });
+    if (!bigPicture) {
+      // Release any BP-reactive follow when leaving Big Picture so the engine
+      // resumes normal source-mode rotation.
+      ostMusicEngine.followGame(null);
+    }
     void window.hynite.window.setFullScreen(bigPicture).catch(() => undefined);
     bigPictureRef.current = bigPicture;
     document.body.classList.toggle("bp-active", bigPicture);
-  }, [bigPicture]);
+  }, [bigPicture, settings?.music?.osts?.enabled]);
 
   useEffect(() => {
     let raf = 0;
@@ -7782,6 +8534,7 @@ function LauncherShell() {
         return result;
       },
       skip() {
+        if (ostMusicEngine.getStatus().enabled) ostMusicEngine.skipToNext();
         musicEngine.skipToNext();
         console.log("[hynite music] skipped");
       }
@@ -8407,6 +9160,7 @@ function LauncherShell() {
     const t = setTimeout(() => {
       soundEngine.play("startup");
       musicEngine.onStartupComplete();
+      ostMusicEngine.onStartupComplete();
     }, 310);
     return () => clearTimeout(t);
   }, [startupDone]);
@@ -9209,6 +9963,21 @@ function LauncherShell() {
         {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.active && musicStatus.currentTrackTitle ? (
           <CurrentTrackCredit status={musicStatus} />
         ) : null}
+        {ostStatus.enabled && ostStatus.loading ? (
+          <span className="music-pause-chip">
+            <Loader2 size={10} className="spin" />
+            {ostStatus.loadingMessage ?? "Loading soundtrack…"}
+          </span>
+        ) : null}
+        {ostStatus.enabled && ostStatus.pauseReason && ostStatus.pauseReason !== "muted" ? (
+          <span className="music-pause-chip">
+            <Music2 size={10} />
+            {ostStatus.pauseReason}
+          </span>
+        ) : null}
+        {ostStatus.enabled && !ostStatus.loading && ostStatus.currentVideoTitle ? (
+          <OstCurrentTrack status={ostStatus} />
+        ) : null}
       </footer>
     </div>
     {!startupDone && (
@@ -9259,6 +10028,15 @@ function LauncherShell() {
                 return false;
               }}
               onExit={() => setBigPicture(false)}
+              onShelfFocusChange={(game) => {
+                const reactive = settings?.music?.osts?.bigPictureReactive !== false;
+                const ostsOn = settings?.music?.osts?.enabled === true;
+                if (!ostsOn || !reactive) {
+                  ostMusicEngine.followGame(null);
+                  return;
+                }
+                ostMusicEngine.followGame(game?.id ?? null);
+              }}
               defaultTabId={settings?.bigPictureDefaultTabId}
               onSetDefaultTab={(tabId) => {
                 void window.hynite.settings.update({ bigPictureDefaultTabId: tabId ?? undefined }).then(setSettings).catch(console.error);

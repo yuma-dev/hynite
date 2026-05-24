@@ -1,6 +1,6 @@
 import type { AppSettings, MusicSettings, MusicTrack } from "@hynite/core";
 
-const DEFAULT_MUSIC_SETTINGS: Required<Omit<MusicSettings, "tracks">> & { tracks: NonNullable<MusicSettings["tracks"]> } = {
+const DEFAULT_MUSIC_SETTINGS: Required<Omit<MusicSettings, "tracks" | "osts">> & { tracks: NonNullable<MusicSettings["tracks"]>; osts: NonNullable<MusicSettings["osts"]> } = {
   enabled: true,
   volume: 0.04,
   tracks: [],
@@ -18,7 +18,8 @@ const DEFAULT_MUSIC_SETTINGS: Required<Omit<MusicSettings, "tracks">> & { tracks
   pauseOnSystemAudio: true,
   continuousPlay: false,
   gapMinMs: 30_000,
-  gapMaxMs: 120_000
+  gapMaxMs: 120_000,
+  osts: {}
 };
 
 export type MusicStatus = {
@@ -85,7 +86,8 @@ function normalizeMusicSettings(settings?: MusicSettings): MusicSettings {
     pauseOnSystemAudio: settings?.pauseOnSystemAudio !== false,
     continuousPlay: settings?.continuousPlay === true,
     gapMinMs: Math.min(gapMinMs, gapMaxMs),
-    gapMaxMs: Math.max(gapMinMs, gapMaxMs)
+    gapMaxMs: Math.max(gapMinMs, gapMaxMs),
+    osts: settings?.osts ?? {}
   };
 }
 

@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, n
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { rm, stat } from "node:fs/promises";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
@@ -19,6 +19,8 @@ import { HomeService } from "./homeService";
 import { NativeBridge } from "./nativeBridge";
 import { SettingsService } from "./settingsService";
 import { SoundFileService } from "./soundFileService";
+import { SoundtrackService } from "./soundtrackService";
+import { YtdlpService } from "./ytdlpService";
 import { SourceService } from "./sourceService";
 import { searchSteamStore } from "./steamSearchService";
 import { SteamWishlistService } from "./steamWishlistService";
@@ -61,6 +63,8 @@ let syncStatusService: SyncStatusService;
 let updaterService: UpdaterService;
 let assetCacheService: AssetCacheService;
 let soundFileService: SoundFileService;
+let ytdlpService: YtdlpService;
+let soundtrackService: SoundtrackService;
 let diagnosticLogService: DiagnosticLogService;
 let localImportService: LocalImportService;
 let launchTracker: LaunchTracker;
@@ -184,7 +188,8 @@ const RESET_USER_DATA_ENTRIES = [
 protocol.registerSchemesAsPrivileged([
   { scheme: "hynite-asset", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "hynite-sound", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
-  { scheme: "hynite-music", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
+  { scheme: "hynite-music", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
+  { scheme: "hynite-ost", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ]);
 
 if (process.platform === "win32") {
@@ -276,6 +281,147 @@ while ($true) {
   Start-Sleep -Milliseconds 500
 }
 `.trim();
+}
+
+/**
+ * hynite-ost:// — serve a soundtrack's audio bytes.
+ * URL shape: hynite-ost://track/<videoId>.m4a
+ *
+ * Cache hit: stream the file from disk (fast, supports the audio element's
+ * usual buffering). Cache miss: spawn yt-dlp with `-o -` and tee its stdout
+ * to both the renderer's ReadableStream and a `.partial` cache file. On
+ * successful completion, atomically rename to the canonical filename and
+ * update the DB so future plays hit the disk path.
+ */
+function registerOstProtocol(cacheDir: string): void {
+  protocol.handle("hynite-ost", async (request) => {
+    const url = new URL(request.url);
+    const host = url.hostname.toLowerCase();
+    const file = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+    if (host !== "track" || !file || file.includes("..") || file.includes("\\") || file.includes("/")) {
+      return new Response("", { status: 400 });
+    }
+    const videoId = file.replace(/\.(m4a|webm)$/i, "");
+    const cachedPath = join(cacheDir, `${videoId}.m4a`);
+
+    // Cache hit: serve from disk.
+    if (existsSync(cachedPath)) {
+      try {
+        const fileStat = await stat(cachedPath);
+        const { createReadStream } = await import("node:fs");
+        const stream = createReadStream(cachedPath);
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            stream.on("data", (chunk) => controller.enqueue(chunk instanceof Buffer ? new Uint8Array(chunk) : chunk as Uint8Array));
+            stream.on("end", () => controller.close());
+            stream.on("error", (err) => controller.error(err));
+          },
+          cancel() { stream.destroy(); }
+        });
+        return new Response(body, {
+          status: 200,
+          headers: {
+            "content-type": "audio/mp4",
+            "content-length": String(fileStat.size),
+            "cache-control": "no-store",
+            "access-control-allow-origin": "*"
+          }
+        });
+      } catch {
+        return new Response("", { status: 404 });
+      }
+    }
+
+    // Cache miss: stream-and-tee via yt-dlp.
+    const entry = soundtrackService.lookupByVideoId(videoId);
+    if (!entry) {
+      return new Response("Unknown videoId — pick a soundtrack first.", { status: 404 });
+    }
+    const settings = (await settingsService.get()).music?.osts ?? {};
+    const quality = settings.audioQuality ?? "standard";
+
+    let handle: Awaited<ReturnType<typeof ytdlpService.streamAudio>>;
+    try {
+      handle = await ytdlpService.streamAudio(entry.videoUrl, quality);
+    } catch (error) {
+      console.error("[ost] streamAudio spawn failed", error);
+      return new Response("", { status: 502 });
+    }
+
+    await mkdir(cacheDir, { recursive: true });
+    const tempPath = `${cachedPath}.partial`;
+    // Truncate any leftover from a previous aborted stream so we start clean.
+    const { createWriteStream } = await import("node:fs");
+    const fileWriter = createWriteStream(tempPath);
+    let totalBytes = 0;
+    let cancelled = false;
+    let firstByteAt = 0;
+    const startedAt = Date.now();
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        handle.stream.on("data", (chunk: Buffer) => {
+          if (cancelled) return;
+          if (!firstByteAt) {
+            firstByteAt = Date.now();
+            console.log(`[ost] ${videoId} first byte at ${firstByteAt - startedAt}ms`);
+          }
+          totalBytes += chunk.byteLength;
+          try {
+            controller.enqueue(new Uint8Array(chunk));
+          } catch {
+            // Renderer already disconnected — keep teeing to disk only.
+          }
+          fileWriter.write(chunk);
+        });
+        handle.stream.on("end", () => {
+          if (cancelled) return;
+          fileWriter.end(async () => {
+            try {
+              await rename(tempPath, cachedPath);
+              const ms = Date.now() - startedAt;
+              console.log(`[ost] ${videoId} cached ${(totalBytes / 1024 / 1024).toFixed(1)}MB in ${ms}ms (${(totalBytes / 1024 / 1024 / (ms / 1000)).toFixed(2)}MB/s)`);
+              await soundtrackService.markFileCached(videoId, cachedPath, totalBytes);
+            } catch (err) {
+              console.error("[ost] failed to finalize cache file", err);
+              await rm(tempPath, { force: true }).catch(() => undefined);
+            }
+            try { controller.close(); } catch { /* ignore */ }
+          });
+        });
+        handle.stream.on("error", (err: Error) => {
+          cancelled = true;
+          fileWriter.destroy();
+          rm(tempPath, { force: true }).catch(() => undefined);
+          try { controller.error(err); } catch { /* ignore */ }
+        });
+        handle.done.catch((err: Error) => {
+          // yt-dlp exited non-zero — surface as a stream error if we haven't already.
+          if (!cancelled) {
+            cancelled = true;
+            fileWriter.destroy();
+            rm(tempPath, { force: true }).catch(() => undefined);
+            try { controller.error(err); } catch { /* ignore */ }
+          }
+        });
+      },
+      cancel() {
+        cancelled = true;
+        handle.cancel();
+        fileWriter.destroy();
+        rm(tempPath, { force: true }).catch(() => undefined);
+      }
+    });
+
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "content-type": "audio/mp4",
+        "cache-control": "no-store",
+        "access-control-allow-origin": "*"
+      }
+    });
+  });
 }
 
 function setSystemAudioState(value: boolean): void {
@@ -2604,6 +2750,7 @@ async function onSettingsChanged(settings: AppSettings): Promise<AppSettings> {
   if (!onboardingPreview) {
     await backgroundService?.refreshSettings();
   }
+  ytdlpService?.setOverridePath(settings.music?.osts?.ytdlpPath ?? null);
   return settings;
 }
 
@@ -4433,6 +4580,33 @@ function registerIpc(): void {
       return `error: ${err instanceof Error ? err.message : String(err)}`;
     }
   });
+  handleIpc("ost:status", () => ytdlpService.status());
+  handleIpc("ost:install-ytdlp", async (event) => {
+    const sender = event.sender;
+    return ytdlpService.install((progress) => {
+      if (!sender.isDestroyed()) sender.send("ost:ytdlp-progress", progress);
+    });
+  });
+  handleIpc("ost:resolve-next", async (_event, args?: { excludeGameIds?: string[] }) => {
+    return soundtrackService.resolveNext(args?.excludeGameIds ?? []);
+  });
+  handleIpc("ost:resolve-for-game", async (_event, gameId: string) => {
+    const game = repository.getGame(gameId);
+    if (!game) return { kind: "no-game", reason: `Game ${gameId} not found.` };
+    const settings = (await settingsService.get()).music?.osts ?? {};
+    return soundtrackService.resolveForGame(game, settings);
+  });
+  handleIpc("ost:repick", (_event, gameId: string) => soundtrackService.repick(gameId));
+  handleIpc("ost:set-manual-url", async (_event, args: { gameId: string; url: string }) => {
+    return soundtrackService.setManualUrl(args.gameId, args.url);
+  });
+  handleIpc("ost:clear", (_event, gameId: string) => soundtrackService.clearForGame(gameId));
+  handleIpc("ost:clear-all", () => soundtrackService.clearAll());
+  handleIpc("ost:list", () => repository.listGameSoundtracks());
+  handleIpc("ost:cache-stats", () => soundtrackService.cacheStats());
+  handleIpc("ost:mark-played", (_event, gameId: string) => { soundtrackService.markPlayed(gameId); return { ok: true }; });
+  handleIpc("ost:track-url", (_event, videoId: string) => `hynite-ost://track/${encodeURIComponent(videoId)}.m4a`);
+  handleIpc("ost:preview-search", (_event, gameId: string) => soundtrackService.previewSearchForGame(gameId));
   handleIpc("debug:seed", () => {
     if (onboardingPreview) {
       throw new Error("Debug seed is disabled in onboarding preview.");
@@ -4502,6 +4676,16 @@ app.whenReady().then(async () => {
   soundFileService = new SoundFileService(() => settingsService.get());
   soundFileService.registerProtocol(protocol);
   soundFileService.registerMusicProtocol(protocol);
+  const soundtrackCacheDir = transientUserDataPath(userData, "soundtrack-cache");
+  ytdlpService = new YtdlpService(transientUserDataPath(userData, "bin"));
+  soundtrackService = new SoundtrackService(soundtrackCacheDir, repository, ytdlpService, () => settingsService.get());
+  void settingsService.get().then((s) => ytdlpService.setOverridePath(s.music?.osts?.ytdlpPath ?? null)).catch(() => undefined);
+  registerOstProtocol(soundtrackCacheDir);
+  soundtrackService.subscribe((progress) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send("ost:progress", progress);
+    }
+  });
   nativeBridge = new NativeBridge();
   syncStatusService = new SyncStatusService(() => mainWindow, transientUserDataPath(userData, "sync-status.json"));
   updaterService = new UpdaterService(() => mainWindow, {

@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   type DownloadSourceInfo,
   type Game,
+  type GameSoundtrack,
   type GameAssetUpdate,
   type GameDiscovery,
   type GameMetadataPatch,
@@ -1511,4 +1512,96 @@ export class HyniteRepository {
     const row = this.db.prepare("SELECT metadata_version FROM games WHERE id = ?").get(gameId) as { metadata_version: number } | undefined;
     return row?.metadata_version ?? 0;
   }
+
+  getGameSoundtrackByVideoId(videoId: string): GameSoundtrack | undefined {
+    const row = this.db.prepare(`
+      SELECT game_id, video_id, video_url, video_title, channel, duration_seconds,
+             local_file_path, file_size_bytes, is_manual, picked_at, last_played_at
+      FROM game_soundtracks WHERE video_id = ? LIMIT 1
+    `).get(videoId) as Record<string, unknown> | undefined;
+    return row ? rowToSoundtrack(row) : undefined;
+  }
+
+  getGameSoundtrack(gameId: string): GameSoundtrack | undefined {
+    const row = this.db.prepare(`
+      SELECT game_id, video_id, video_url, video_title, channel, duration_seconds,
+             local_file_path, file_size_bytes, is_manual, picked_at, last_played_at
+      FROM game_soundtracks WHERE game_id = ?
+    `).get(gameId) as Record<string, unknown> | undefined;
+    return row ? rowToSoundtrack(row) : undefined;
+  }
+
+  listGameSoundtracks(): GameSoundtrack[] {
+    const rows = this.db.prepare(`
+      SELECT game_id, video_id, video_url, video_title, channel, duration_seconds,
+             local_file_path, file_size_bytes, is_manual, picked_at, last_played_at
+      FROM game_soundtracks ORDER BY picked_at DESC
+    `).all() as Record<string, unknown>[];
+    return rows.map(rowToSoundtrack);
+  }
+
+  upsertGameSoundtrack(entry: GameSoundtrack): void {
+    this.db.prepare(`
+      INSERT INTO game_soundtracks (
+        game_id, video_id, video_url, video_title, channel, duration_seconds,
+        local_file_path, file_size_bytes, is_manual, picked_at, last_played_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(game_id) DO UPDATE SET
+        video_id = excluded.video_id,
+        video_url = excluded.video_url,
+        video_title = excluded.video_title,
+        channel = excluded.channel,
+        duration_seconds = excluded.duration_seconds,
+        local_file_path = excluded.local_file_path,
+        file_size_bytes = excluded.file_size_bytes,
+        is_manual = excluded.is_manual,
+        picked_at = excluded.picked_at,
+        last_played_at = COALESCE(excluded.last_played_at, game_soundtracks.last_played_at)
+    `).run(
+      entry.gameId,
+      entry.videoId,
+      entry.videoUrl,
+      entry.videoTitle ?? null,
+      entry.channel ?? null,
+      entry.durationSeconds ?? null,
+      entry.localFilePath ?? null,
+      entry.fileSizeBytes ?? null,
+      entry.isManual ? 1 : 0,
+      entry.pickedAt,
+      entry.lastPlayedAt ?? null
+    );
+  }
+
+  updateGameSoundtrackPlayed(gameId: string, lastPlayedAt: string): void {
+    this.db.prepare("UPDATE game_soundtracks SET last_played_at = ? WHERE game_id = ?").run(lastPlayedAt, gameId);
+  }
+
+  updateGameSoundtrackLocalFile(gameId: string, filePath: string | null, fileSizeBytes: number | null): void {
+    this.db.prepare("UPDATE game_soundtracks SET local_file_path = ?, file_size_bytes = ? WHERE game_id = ?")
+      .run(filePath, fileSizeBytes, gameId);
+  }
+
+  deleteGameSoundtrack(gameId: string): void {
+    this.db.prepare("DELETE FROM game_soundtracks WHERE game_id = ?").run(gameId);
+  }
+
+  clearAllGameSoundtracks(): void {
+    this.db.prepare("DELETE FROM game_soundtracks").run();
+  }
+}
+
+function rowToSoundtrack(row: Record<string, unknown>): GameSoundtrack {
+  return {
+    gameId: row.game_id as string,
+    videoId: row.video_id as string,
+    videoUrl: row.video_url as string,
+    videoTitle: (row.video_title as string | null) ?? undefined,
+    channel: (row.channel as string | null) ?? undefined,
+    durationSeconds: (row.duration_seconds as number | null) ?? undefined,
+    localFilePath: (row.local_file_path as string | null) ?? undefined,
+    fileSizeBytes: (row.file_size_bytes as number | null) ?? undefined,
+    isManual: Number(row.is_manual) === 1,
+    pickedAt: row.picked_at as string,
+    lastPlayedAt: (row.last_played_at as string | null) ?? undefined
+  };
 }
