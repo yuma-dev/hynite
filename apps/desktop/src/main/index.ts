@@ -11,7 +11,7 @@ import { discoverInstalledSteamApps, hashFolderPath, readLoginUsers, SteamImport
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SteamStoreEmbedInfo, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery } from "@hynite/core";
+import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SpotlightCommand, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SteamStoreEmbedInfo, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -2330,6 +2330,12 @@ function createWindow(windowState: WindowState | undefined, options: { showWhenR
   mainWindow.on("leave-full-screen", () => {
     mainWindow?.webContents.send("window:fullScreenChanged", false);
   });
+  mainWindow.on("focus", () => {
+    mainWindow?.webContents.send("window:focusChanged", true);
+  });
+  mainWindow.on("blur", () => {
+    mainWindow?.webContents.send("window:focusChanged", false);
+  });
   mainWindow.on("close", (event) => {
     saveWindowStateNow();
     if (isQuitting) {
@@ -2447,7 +2453,9 @@ function createSpotlightWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: false
+      // Let Chromium throttle the hidden pre-warmed window so it costs almost no
+      // CPU at rest. show() wakes it back to full rate in <16ms.
+      backgroundThrottling: true
     }
   });
 
@@ -2489,6 +2497,7 @@ function showSpotlightWindow(): void {
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+  void refreshSpotlightCommandContext();
   win.webContents.send("spotlight:show");
 }
 
@@ -2505,6 +2514,31 @@ function toggleSpotlightWindow(): void {
     return;
   }
   showSpotlightWindow();
+}
+
+async function refreshSpotlightCommandContext(settings?: AppSettings): Promise<void> {
+  if (!spotlightService) return;
+  try {
+    const current = settings ?? (await settingsService.get());
+    let activeSteamId: string | undefined;
+    try {
+      activeSteamId = (await getActiveSteamUser()).steamId;
+    } catch {
+      activeSteamId = undefined;
+    }
+    spotlightService.setCommandContext({
+      activeSteamId,
+      steamAccounts: current.steamAccounts
+        .filter((account) => Boolean(account.localUsername))
+        .map((account) => ({
+          steamId: account.steamId,
+          accountName: account.localUsername!,
+          personaName: account.personaName
+        }))
+    });
+  } catch {
+    // best effort — leave previous context in place
+  }
 }
 
 function applySpotlightSettings(settings: AppSettings): SpotlightState {
@@ -2743,6 +2777,7 @@ async function onSettingsChanged(settings: AppSettings): Promise<AppSettings> {
   setObservabilityEnabled(settings.crashReportingEnabled !== false);
   applyLoginItemSettings(settings);
   applySpotlightSettings(settings);
+  void refreshSpotlightCommandContext(settings);
   rebuildTrayMenu(settings);
   void settingsService?.createPeriodicBackupIfDue().catch((error: unknown) => {
     console.warn("Failed to create periodic settings backup", error);
@@ -4380,6 +4415,28 @@ function registerIpc(): void {
     hideSpotlightWindow();
     await queueMainWindowAction({ kind: "details", gameId });
   });
+  handleIpc("spotlight:execute-command", async (_event, command: SpotlightCommand): Promise<{ ok: boolean; message?: string }> => {
+    if (!command || typeof command !== "object") return { ok: false, message: "Invalid command" };
+    if (command.type === "music-toggle-mute" || command.type === "music-play-pause" || command.type === "music-skip") {
+      hideSpotlightWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("spotlight:music-command", command);
+      }
+      return { ok: true };
+    }
+    if (command.type === "steam-switch") {
+      hideSpotlightWindow();
+      try {
+        await switchSteamAccount({ steamId: command.steamId, accountName: command.accountName });
+        void refreshSpotlightCommandContext();
+        return { ok: true };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, message };
+      }
+    }
+    return { ok: false, message: "Unknown command" };
+  });
   handleIpc("spotlight:hide", () => hideSpotlightWindow());
   handleIpc("spotlight:set-launch-handoff-active", (_event, active: boolean) => {
     spotlightLaunchHandoffActive = active === true;
@@ -4560,6 +4617,7 @@ function registerIpc(): void {
     mainWindow.setFullScreen(fullscreen);
   });
   handleIpc("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
+  handleIpc("window:isFocused", () => mainWindow?.isFocused() ?? false);
   handleIpc("window:focusBigPicture", () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (startupRevealPending()) return;
@@ -4671,6 +4729,7 @@ app.whenReady().then(async () => {
   sourceService = new SourceService(repository);
   spotlightService = new SpotlightService(repository);
   spotlightService.refresh();
+  void refreshSpotlightCommandContext();
   assetCacheService = new AssetCacheService(transientUserDataPath(userData, "asset-cache"), startupProfileService);
   assetCacheService.registerProtocol(protocol);
   soundFileService = new SoundFileService(() => settingsService.get());
@@ -4761,6 +4820,15 @@ app.whenReady().then(async () => {
   }
   if (!isBackgroundLaunch()) {
     await showMainWindow({ withSplash: true, focus: true });
+  }
+  // Pre-warm the spotlight window so the first hotkey press shows it instantly
+  // instead of paying for BrowserWindow creation + React bootstrap on activation.
+  if (!onboardingPreview && spotlightState.enabled) {
+    setTimeout(() => {
+      if (!spotlightWindow || spotlightWindow.isDestroyed()) {
+        createSpotlightWindow();
+      }
+    }, 1500);
   }
 });
 

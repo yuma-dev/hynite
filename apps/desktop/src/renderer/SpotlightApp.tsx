@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bug, Search } from "lucide-react";
-import type { SpotlightSearchResult } from "@hynite/core";
+import { Bug, Search, VolumeX, Pause, SkipForward, UserCircle2 } from "lucide-react";
+import type { SpotlightCommandIcon, SpotlightCommandResult, SpotlightGameResult, SpotlightSearchResult } from "@hynite/core";
 import type { LaunchOutcome } from "../preload";
 import { reportLaunchFailure } from "./observability";
 import { soundEngine } from "./sound";
@@ -12,7 +12,7 @@ type LaunchFailureState = LaunchFailureOutcome & {
   reportStatus?: "idle" | "sending" | "sent" | "failed";
 };
 
-function sourceText(result: SpotlightSearchResult): string {
+function gameSourceText(result: SpotlightGameResult): string {
   const source = result.sourceLabels.length ? result.sourceLabels.join(", ") : "library";
   const state = result.installState === "installed"
     ? "Installed"
@@ -21,6 +21,19 @@ function sourceText(result: SpotlightSearchResult): string {
       : "Unknown";
   const ownership = result.ownership === "family" ? " / Family shared" : "";
   return `${state}${ownership} / ${source}`;
+}
+
+function commandIcon(icon: SpotlightCommandIcon): JSX.Element {
+  switch (icon) {
+    case "mute":
+      return <VolumeX size={18} />;
+    case "play-pause":
+      return <Pause size={18} />;
+    case "skip":
+      return <SkipForward size={18} />;
+    case "steam":
+      return <UserCircle2 size={18} />;
+  }
 }
 
 export function SpotlightApp() {
@@ -34,7 +47,7 @@ export function SpotlightApp() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
-  const [launchHandoff, setLaunchHandoff] = useState<SpotlightSearchResult | undefined>();
+  const [launchHandoff, setLaunchHandoff] = useState<SpotlightGameResult | undefined>();
   const [launchFailure, setLaunchFailure] = useState<LaunchFailureState | undefined>();
   const [showKey, setShowKey] = useState(0);
   const [panelReady, setPanelReady] = useState(true);
@@ -127,10 +140,28 @@ export function SpotlightApp() {
     await window.hynite.spotlight.openDetails(gameId);
   }
 
+  async function executeCommand(result: SpotlightCommandResult): Promise<void> {
+    setLoading(true);
+    try {
+      const response = await window.hynite.spotlight.executeCommand(result.command);
+      if (!response.ok) {
+        setMessage(response.message ?? "Command failed.");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Command failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function activate(result: SpotlightSearchResult | undefined): Promise<void> {
     if (!result || loading) return;
     setMessage(undefined);
     setLaunchFailure(undefined);
+    if (result.kind === "command") {
+      await executeCommand(result);
+      return;
+    }
     setLoading(true);
     try {
       if (!result.launchable) {
@@ -254,30 +285,39 @@ export function SpotlightApp() {
               }
             }}
           >
-            {results.map((result, index) => (
-              <button
-                key={result.id}
-                ref={(node) => {
-                  if (node) rowRefs.current.set(result.id, node);
-                  else rowRefs.current.delete(result.id);
-                }}
-                type="button"
-                className={index === selectedIndex ? "spotlight-row active" : "spotlight-row"}
-                onPointerEnter={() => setSelectedIndex(index)}
-                onClick={() => void activate(result)}
-                role="option"
-                aria-selected={index === selectedIndex}
-              >
-                <span className={result.iconUrl ? "spotlight-icon has-image" : "spotlight-icon"}>
-                  {result.iconUrl ? <img src={result.iconUrl} alt="" draggable={false} /> : result.title.slice(0, 1)}
-                </span>
-                <span className="spotlight-copy">
-                  <strong>{result.title}</strong>
-                  <em>{sourceText(result)}</em>
-                </span>
-                <span className="spotlight-action">{result.launchable ? "Launch" : "Details"}</span>
-              </button>
-            ))}
+            {results.map((result, index) => {
+              const isCommand = result.kind === "command";
+              return (
+                <button
+                  key={result.id}
+                  ref={(node) => {
+                    if (node) rowRefs.current.set(result.id, node);
+                    else rowRefs.current.delete(result.id);
+                  }}
+                  type="button"
+                  className={index === selectedIndex ? "spotlight-row active" : "spotlight-row"}
+                  onPointerEnter={() => setSelectedIndex(index)}
+                  onClick={() => void activate(result)}
+                  role="option"
+                  aria-selected={index === selectedIndex}
+                >
+                  {isCommand ? (
+                    <span className="spotlight-icon spotlight-icon-command">{commandIcon(result.icon)}</span>
+                  ) : (
+                    <span className={result.iconUrl ? "spotlight-icon has-image" : "spotlight-icon"}>
+                      {result.iconUrl ? <img src={result.iconUrl} alt="" draggable={false} /> : result.title.slice(0, 1)}
+                    </span>
+                  )}
+                  <span className="spotlight-copy">
+                    <strong>{result.title}</strong>
+                    <em>{isCommand ? (result.subtitle ?? "Command") : gameSourceText(result)}</em>
+                  </span>
+                  <span className="spotlight-action">
+                    {isCommand ? "Run" : result.launchable ? "Launch" : "Details"}
+                  </span>
+                </button>
+              );
+            })}
             {emptyText ? <div className="spotlight-empty">{emptyText}</div> : null}
             {loadingMore ? <div className="spotlight-loading">Loading more...</div> : null}
           </div>

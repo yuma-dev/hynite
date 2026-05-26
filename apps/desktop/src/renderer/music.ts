@@ -134,6 +134,7 @@ export class MusicEngine {
 
   private focused = true;
   private systemAudioActive = false;
+  private localMediaActive = false;
   private active = false;
   private audible = false; // whether we're currently outputting sound (not paused)
   private playing = false; // whether a source node is alive
@@ -170,6 +171,7 @@ export class MusicEngine {
       else if (this.launchPauseActive) pauseReason = "game launched";
       else if (this.userMuted) pauseReason = "muted";
       else if (this.settings.pauseOnFocusLoss !== false && !this.focused) pauseReason = "not focused";
+      else if (this.settings.pauseOnSystemAudio !== false && this.localMediaActive) pauseReason = "trailer playing";
       else if (this.settings.pauseOnSystemAudio !== false && this.systemAudioActive) pauseReason = "system audio detected";
       else pauseReason = "paused";
     }
@@ -364,6 +366,18 @@ export class MusicEngine {
     this.onAudibilityChanged();
   }
 
+  /**
+   * Renderer-detected playback of an in-app HTMLMediaElement (e.g. a game
+   * trailer). SMTC doesn't reliably surface short in-window media — Chromium
+   * gates SMTC registration on duration and tab activity — so we track these
+   * elements ourselves and OR the signal into the SMTC one.
+   */
+  setLocalMediaActive(active: boolean): void {
+    if (this.localMediaActive === active) return;
+    this.localMediaActive = active;
+    this.onAudibilityChanged();
+  }
+
   // Debug: skip current track and immediately start the next one in the queue.
   skipToNext(): void {
     if (!this.canPlay()) return;
@@ -416,7 +430,7 @@ export class MusicEngine {
       && !this.launchPauseActive
       && !this.userMuted
       && (this.settings.pauseOnFocusLoss === false || this.focused)
-      && (this.settings.pauseOnSystemAudio === false || !this.systemAudioActive);
+      && (this.settings.pauseOnSystemAudio === false || (!this.systemAudioActive && !this.localMediaActive));
   }
 
   private releaseLaunchPause(): void {

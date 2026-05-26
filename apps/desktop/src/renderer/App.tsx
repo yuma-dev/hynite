@@ -8406,19 +8406,98 @@ function LauncherShell() {
   }, []);
 
   useEffect(() => {
-    const onFocus = () => { musicEngine.setFocused(true); ostMusicEngine.setFocused(true); };
-    const onBlur = () => { musicEngine.setFocused(false); ostMusicEngine.setFocused(false); };
+    // Authoritative signal: BrowserWindow focus/blur from the main process.
+    // The renderer's own window focus/blur events miss cases like DevTools
+    // taking focus or the spotlight overlay grabbing it, so we rely on IPC
+    // and only use the DOM events as a fallback for in-renderer focus shifts.
+    const apply = (focused: boolean) => {
+      musicEngine.setFocused(focused);
+      ostMusicEngine.setFocused(focused);
+    };
+    void window.hynite.window.isFocused().then(apply).catch(() => undefined);
+    const offFocusChanged = window.hynite.window.onFocusChanged(apply);
+    const onFocus = () => apply(true);
+    const onBlur = () => apply(false);
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
     return () => {
+      offFocusChanged();
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Watch for any in-app HTMLMediaElement (trailers, etc.) that starts
+    // producing audio, and tell both music engines to pause while it plays.
+    // SMTC misses these — Chromium gates SMTC registration on duration/tab
+    // activity, and even when it does register, the launcher's own session
+    // dedupes against our own audio. play/pause events don't bubble, so we
+    // use capture-phase listeners on document. Our OST audio element is
+    // never appended to the DOM, so it won't reach this listener.
+    const active = new Set<HTMLMediaElement>();
+    const push = () => {
+      const isActive = active.size > 0;
+      musicEngine.setLocalMediaActive(isActive);
+      ostMusicEngine.setLocalMediaActive(isActive);
+    };
+    const isAudible = (el: HTMLMediaElement) => !el.paused && !el.ended && !el.muted && el.volume > 0;
+    const onPlay = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLMediaElement)) return;
+      if (!isAudible(target)) return;
+      if (active.has(target)) return;
+      active.add(target);
+      push();
+    };
+    const drop = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLMediaElement)) return;
+      if (!active.delete(target)) return;
+      push();
+    };
+    const onVolumeChange = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLMediaElement)) return;
+      if (isAudible(target)) {
+        if (!target.paused && !target.ended && !active.has(target)) {
+          active.add(target);
+          push();
+        }
+      } else if (active.delete(target)) {
+        push();
+      }
+    };
+    document.addEventListener("play", onPlay, true);
+    document.addEventListener("pause", drop, true);
+    document.addEventListener("ended", drop, true);
+    document.addEventListener("emptied", drop, true);
+    document.addEventListener("volumechange", onVolumeChange, true);
+    return () => {
+      document.removeEventListener("play", onPlay, true);
+      document.removeEventListener("pause", drop, true);
+      document.removeEventListener("ended", drop, true);
+      document.removeEventListener("emptied", drop, true);
+      document.removeEventListener("volumechange", onVolumeChange, true);
     };
   }, []);
 
   useEffect(() => musicEngine.subscribe(setMusicStatus), []);
   const [ostStatus, setOstStatus] = useState<OstStatus>(() => ostMusicEngine.getStatus());
   useEffect(() => ostMusicEngine.subscribe(setOstStatus), []);
+
+  useEffect(() => {
+    return window.hynite.spotlight.onMusicCommand((command) => {
+      if (command.type === "music-toggle-mute" || command.type === "music-play-pause") {
+        const nextMuted = !musicEngine.getStatus().userMuted;
+        musicEngine.setUserMuted(nextMuted);
+        ostMusicEngine.setUserMuted(nextMuted);
+      } else if (command.type === "music-skip") {
+        if (ostMusicEngine.getStatus().enabled) ostMusicEngine.skipToNext();
+        musicEngine.skipToNext();
+      }
+    });
+  }, []);
 
   useEffect(() => {
     const wasBigPicture = bigPictureRef.current;

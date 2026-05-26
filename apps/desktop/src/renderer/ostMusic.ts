@@ -55,6 +55,7 @@ export class OstMusicEngine {
   private audible = false;
   private focused = true;
   private userMuted = false;
+  private localMediaActive = false;
   private launchPauseActive = false;
   private launchPauseSawBlur = false;
   private startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -99,6 +100,7 @@ export class OstMusicEngine {
       if (this.startupTimer) pauseReason = "waiting for startup";
       else if (this.launchPauseActive) pauseReason = "game launched";
       else if (this.userMuted) pauseReason = "muted";
+      else if (this.localMediaActive) pauseReason = "trailer playing";
       else if (this.settings.pauseOnFocusLoss !== false && !this.focused) pauseReason = "not focused";
       else pauseReason = "paused";
     }
@@ -174,6 +176,19 @@ export class OstMusicEngine {
 
   /** No-op — see class comment. We never pause on system audio. */
   setSystemAudioActive(_active: boolean): void { /* intentional */ }
+
+  /**
+   * In-app HTMLMediaElement playback (e.g. a trailer). Unlike SMTC — which we
+   * trigger ourselves and therefore ignore — a trailer is genuinely separate
+   * audio the user wants to hear, so we pause OST while it plays. Our own
+   * playback uses a detached `new Audio()` and won't reach a document-level
+   * capture listener, so this signal won't false-trigger on us.
+   */
+  setLocalMediaActive(active: boolean): void {
+    if (this.localMediaActive === active) return;
+    this.localMediaActive = active;
+    this.onAudibilityChanged();
+  }
 
   setUserMuted(muted: boolean): void {
     if (this.userMuted === muted) return;
@@ -335,6 +350,7 @@ export class OstMusicEngine {
   private shouldBeAudible(): boolean {
     if (!this.osts.enabled || !this.active) return false;
     if (this.launchPauseActive || this.userMuted) return false;
+    if (this.localMediaActive) return false;
     if (this.settings.pauseOnFocusLoss !== false && !this.focused) return false;
     return true;
   }
@@ -377,6 +393,11 @@ export class OstMusicEngine {
       if (!Ctor) return undefined;
       this.context = new Ctor({ latencyHint: "playback" });
       this.masterGain = this.context.createGain();
+      // GainNode defaults to 1.0; setValueAtTime(0, 0) alone doesn't reliably
+      // update the readable .value on a suspended context, so subsequent reads
+      // of gain.value return 1.0 and fadeIn ramps DOWN from 1.0 instead of UP
+      // from 0 — audible as a loud start that "adapts" to the target volume.
+      this.masterGain.gain.value = 0;
       this.masterGain.gain.setValueAtTime(0, 0);
       this.masterGain.connect(this.context.destination);
       const unlock = () => {

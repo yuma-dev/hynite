@@ -854,10 +854,32 @@ export type SpotlightGame = {
   sourceLabels: ProviderId[];
 };
 
-export type SpotlightSearchResult = SpotlightGame & {
+export type SpotlightGameResult = SpotlightGame & {
+  kind: "game";
   score: number;
   matchRanges?: Array<{ start: number; end: number }>;
 };
+
+export type SpotlightCommand =
+  | { type: "music-toggle-mute" }
+  | { type: "music-play-pause" }
+  | { type: "music-skip" }
+  | { type: "steam-switch"; steamId: string; accountName: string; personaName?: string };
+
+export type SpotlightCommandIcon = "mute" | "play-pause" | "skip" | "steam";
+
+export type SpotlightCommandResult = {
+  kind: "command";
+  id: string;
+  title: string;
+  subtitle?: string;
+  icon: SpotlightCommandIcon;
+  score: number;
+  matchRanges?: Array<{ start: number; end: number }>;
+  command: SpotlightCommand;
+};
+
+export type SpotlightSearchResult = SpotlightGameResult | SpotlightCommandResult;
 
 export type SpotlightSearchOptions = {
   limit?: number;

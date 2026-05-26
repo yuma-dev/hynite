@@ -24,6 +24,7 @@ import type {
   SourceImportResult,
   SourceMatch,
   SourceSearchOptions,
+  SpotlightCommand,
   SpotlightPendingAction,
   SpotlightSearchResult,
   SpotlightSearchOptions,
@@ -231,6 +232,13 @@ const api = {
     search: (query: string, options?: SpotlightSearchOptions): Promise<SpotlightSearchResult[]> =>
       ipcRenderer.invoke("spotlight:search", query, options),
     launch: (gameId: string): Promise<LaunchOutcome> => ipcRenderer.invoke("spotlight:launch", gameId),
+    executeCommand: (command: SpotlightCommand): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke("spotlight:execute-command", command),
+    onMusicCommand: (callback: (command: SpotlightCommand) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, command: SpotlightCommand) => callback(command);
+      ipcRenderer.on("spotlight:music-command", listener);
+      return () => ipcRenderer.removeListener("spotlight:music-command", listener);
+    },
     openDetails: (gameId: string): Promise<void> => ipcRenderer.invoke("spotlight:open-details", gameId),
     hide: (): Promise<void> => ipcRenderer.invoke("spotlight:hide"),
     setLaunchHandoffActive: (active: boolean): Promise<void> => ipcRenderer.invoke("spotlight:set-launch-handoff-active", active),
@@ -386,6 +394,12 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, value: boolean) => callback(value);
       ipcRenderer.on("window:fullScreenChanged", listener);
       return () => ipcRenderer.removeListener("window:fullScreenChanged", listener);
+    },
+    isFocused: (): Promise<boolean> => ipcRenderer.invoke("window:isFocused"),
+    onFocusChanged: (callback: (isFocused: boolean) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: boolean) => callback(value);
+      ipcRenderer.on("window:focusChanged", listener);
+      return () => ipcRenderer.removeListener("window:focusChanged", listener);
     }
   }
 };
