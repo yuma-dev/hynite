@@ -1,4 +1,4 @@
-import type { GameMetadataPatch, ImportedGame, SteamAccountSettings, SteamWishlistItem, SyncResult, WishlistCalendarQuery, WishlistListQuery, WishlistReleasePrecision } from "@hynite/core";
+import type { GameMetadataPatch, ImportedGame, SteamAccountSettings, SteamWishlistItem, SyncResult, WishlistCalendarQuery, WishlistDiagnostics, WishlistListQuery, WishlistManualEntry, WishlistManualEntryInput, WishlistReleasePrecision } from "@hynite/core";
 import { makeSortTitle } from "@hynite/core";
 import type { HyniteRepository, SteamWishlistUpsertItem } from "@hynite/db";
 import { fetchSteamWishlist, type ImportedSteamWishlistItem } from "@hynite/importers";
@@ -44,14 +44,27 @@ function releaseInfoFromMetadata(metadata: GameMetadataPatch): {
   releaseDateText?: string;
   releasePrecision: WishlistReleasePrecision;
 } {
-  if (metadata.releaseDate && /^\d{4}-\d{2}-\d{2}$/.test(metadata.releaseDate)) {
+  const isoDate = metadata.releaseDate && /^\d{4}-\d{2}-\d{2}$/.test(metadata.releaseDate) ? metadata.releaseDate : undefined;
+  const precision = metadata.releasePrecision ?? (isoDate ? "exact" : "unknown");
+  if (precision === "exact" && isoDate) {
     return {
-      releaseDate: metadata.releaseDate,
-      releaseDateText: metadata.releaseDate,
+      releaseDate: isoDate,
+      releaseDateText: metadata.releaseDateText ?? isoDate,
       releasePrecision: "exact"
     };
   }
-  return { releasePrecision: "unknown" };
+  if (precision === "month" || precision === "year") {
+    return {
+      releaseDate: undefined,
+      releaseDateText: metadata.releaseDateText,
+      releasePrecision: precision
+    };
+  }
+  return {
+    releaseDate: isoDate,
+    releaseDateText: metadata.releaseDateText,
+    releasePrecision: isoDate ? "exact" : "unknown"
+  };
 }
 
 function mergeWishlistMetadata(base: SteamWishlistUpsertItem, metadata: GameMetadataPatch): SteamWishlistUpsertItem {
@@ -66,8 +79,8 @@ function mergeWishlistMetadata(base: SteamWishlistUpsertItem, metadata: GameMeta
     backgroundUrl: metadata.backgroundUrl ?? base.backgroundUrl,
     logoUrl: metadata.logoUrl ?? base.logoUrl,
     communityIconUrl: metadata.communityIconUrl ?? base.communityIconUrl,
-    releaseDate: release.releaseDate ?? base.releaseDate,
-    releaseDateText: release.releaseDateText ?? base.releaseDateText,
+    releaseDate: release.releasePrecision !== "unknown" ? release.releaseDate : (release.releaseDate ?? base.releaseDate),
+    releaseDateText: release.releasePrecision !== "unknown" ? release.releaseDateText : (release.releaseDateText ?? base.releaseDateText),
     releasePrecision: release.releasePrecision !== "unknown" ? release.releasePrecision : base.releasePrecision,
     metadataStatus: metadata.metadataStatus ?? base.metadataStatus
   };
@@ -89,7 +102,13 @@ function withSourceMatches(sourceService: SourceService, item: SteamWishlistUpse
 }
 
 export class SteamWishlistService {
+  private lastDiagnostics: WishlistDiagnostics = { state: "unknown", accountsChecked: 0, itemsFound: 0 };
+
   constructor(private readonly options: WishlistServiceOptions) {}
+
+  diagnostics(): WishlistDiagnostics {
+    return this.lastDiagnostics;
+  }
 
   list(query: WishlistListQuery = {}): SteamWishlistItem[] {
     let items = this.options.repository.querySteamWishlist(query);
@@ -114,16 +133,30 @@ export class SteamWishlistService {
     return this.options.repository.querySteamWishlistCalendar(query).map((item) => withSourceMatches(this.options.sourceService, item));
   }
 
+  listManualEntries(): WishlistManualEntry[] {
+    return this.options.repository.listWishlistManualEntries();
+  }
+
+  upsertManualEntry(input: WishlistManualEntryInput): WishlistManualEntry {
+    return this.options.repository.upsertWishlistManualEntry(input);
+  }
+
+  removeManualEntry(id: string): void {
+    this.options.repository.removeWishlistManualEntry(id);
+  }
+
   async sync(options: SyncOptions = {}): Promise<SyncResult> {
     const settings = await this.options.settingsService.get();
     const accounts = settings.steamAccounts;
     const warnings: string[] = [];
     if (accounts.length === 0) {
+      this.lastDiagnostics = { state: "no-accounts", checkedAt: new Date().toISOString(), accountsChecked: 0, itemsFound: 0 };
       return { providerId: "steam", scanned: 0, upserted: 0, warnings: ["Wishlist sync skipped: no paired Steam accounts."] };
     }
 
     let scanned = 0;
     let upserted = 0;
+    const fetchErrors: string[] = [];
     const existingByAppid = new Map(this.options.repository.querySteamWishlist({}).map((item) => [item.appid, item]));
 
     for (const account of accounts) {
@@ -134,9 +167,11 @@ export class SteamWishlistService {
         fetched = await fetchSteamWishlist({ steamId: account.steamId, signal: options.signal });
       } catch (error) {
         const message = `Steam wishlist refresh failed for ${account.personaName ?? account.steamId}; preserving cached wishlist rows.`;
-        const details = { account: account.steamId, error: error instanceof Error ? error.message : String(error) };
+        const errorText = error instanceof Error ? error.message : String(error);
+        const details = { account: account.steamId, error: errorText };
         this.options.syncStatusService.log("warning", "steam:wishlist-fetch", message, details);
         warnings.push(message);
+        fetchErrors.push(errorText);
         continue;
       }
 
@@ -165,20 +200,23 @@ export class SteamWishlistService {
           refreshedAt
         };
 
-        const shouldRefreshMetadata = options.refreshStaleMetadata !== false || item.metadataStatus === "none";
+        // Always re-resolve items whose release date never parsed: those are exactly
+        // the upcoming games missing from the calendar, and the store provider (full
+        // mode) is the only source for "coming soon" dates.
+        const shouldRefreshMetadata = options.refreshStaleMetadata !== false || item.metadataStatus === "none" || item.releasePrecision === "unknown";
         if (shouldRefreshMetadata) {
           const label = existing?.title && existing.title !== `App ${fetchedItem.appid}` ? existing.title : fetchedItem.appid;
-          this.options.syncStatusService.progress("steam:wishlist-metadata", `Fetching SteamKit wishlist metadata for ${label}`, index + 1, fetched.length, {
+          this.options.syncStatusService.progress("steam:wishlist-metadata", `Fetching wishlist metadata for ${label}`, index + 1, fetched.length, {
             appid: item.appid,
             account: account.steamId
           });
           try {
-            const fastMetadata = await refreshFusedMetadata(importedGame(item.appid, item.title), {
-              mode: "fast",
+            const fetchedMetadata = await refreshFusedMetadata(importedGame(item.appid, item.title), {
+              mode: "full",
               steamAppInfoProvider: this.options.steamAppInfoProvider,
               logger: this.options.metadataLogger
             });
-            item = mergeWishlistMetadata(item, await this.options.cacheMetadataAssets(fastMetadata, options.refreshStaleMetadata !== false));
+            item = mergeWishlistMetadata(item, await this.options.cacheMetadataAssets(fetchedMetadata, options.refreshStaleMetadata !== false));
           } catch (error) {
             const message = `Wishlist metadata failed for ${item.title}`;
             warnings.push(message);
@@ -201,8 +239,28 @@ export class SteamWishlistService {
       upserted += accountItems.length;
     }
 
+    this.lastDiagnostics = classifyDiagnostics(accounts.length, scanned, fetchErrors);
     return { providerId: "steam", scanned, upserted, warnings };
   }
+}
+
+function classifyDiagnostics(accountsChecked: number, itemsFound: number, fetchErrors: string[]): WishlistDiagnostics {
+  const checkedAt = new Date().toISOString();
+  if (itemsFound > 0) {
+    return { state: "ok", checkedAt, accountsChecked, itemsFound };
+  }
+  if (fetchErrors.length > 0) {
+    // Steam returns an empty/non-parseable body for wishlists that aren't public.
+    const looksPrivate = fetchErrors.some((message) => /no parseable|403|401|private/i.test(message));
+    return {
+      state: looksPrivate ? "private-or-empty" : "error",
+      checkedAt,
+      accountsChecked,
+      itemsFound,
+      message: fetchErrors[0]
+    };
+  }
+  return { state: "empty", checkedAt, accountsChecked, itemsFound };
 }
 
 function accountRef(account: SteamAccountSettings, item: ImportedSteamWishlistItem) {

@@ -48,6 +48,8 @@ function mergePatch(base: GameMetadataPatch, next: GameMetadataPatch): GameMetad
     developers: base.developers?.length ? base.developers : next.developers,
     publishers: base.publishers?.length ? base.publishers : next.publishers,
     releaseDate: base.releaseDate ?? next.releaseDate,
+    releaseDateText: base.releaseDate || base.releaseDateText ? base.releaseDateText : next.releaseDateText,
+    releasePrecision: base.releaseDate || base.releasePrecision ? base.releasePrecision : next.releasePrecision,
     metadataStatus: base.metadataStatus === "complete" || next.metadataStatus === "complete" ? "complete" : (base.metadataStatus ?? next.metadataStatus)
   };
 

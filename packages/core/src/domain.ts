@@ -176,7 +176,10 @@ export type GameMetadataPatch = Partial<
     | "releaseDate"
     | "metadataStatus"
   >
->;
+> & {
+  releaseDateText?: string;
+  releasePrecision?: WishlistReleasePrecision;
+};
 
 export type GameAssetKind = "grid" | "hero" | "logo" | "icon" | "header" | "poster";
 export type GameAssetProvider = "current" | "steam" | "steamgriddb" | "igdb" | "custom";
@@ -390,6 +393,33 @@ export type SteamWishlistItem = {
   sourceMatches: SourceExactMatch[];
   refreshedAt: string;
   metadataStatus: MetadataStatus;
+  /** Set when this item is a standalone manual entry (no Steam wishlist backing). */
+  manualEntryId?: string;
+  /** True when release fields were overridden or supplied by a manual entry. */
+  manualReleaseOverride?: boolean;
+};
+
+export type WishlistManualEntry = {
+  id: string;
+  appid?: string;
+  title: string;
+  sortTitle: string;
+  coverUrl?: string;
+  releaseDate?: string;
+  releaseDateText?: string;
+  releasePrecision: WishlistReleasePrecision;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WishlistManualEntryInput = {
+  id?: string;
+  appid?: string;
+  title: string;
+  coverUrl?: string;
+  releaseDate?: string;
+  releaseDateText?: string;
+  releasePrecision: WishlistReleasePrecision;
 };
 
 export type WishlistViewMode = "list" | "calendar";
@@ -422,6 +452,16 @@ export type WishlistCalendarQuery = {
   startDate: string;
   months: number;
   accountSteamIds?: string[];
+};
+
+export type WishlistDiagnosticsState = "ok" | "empty" | "private-or-empty" | "error" | "no-accounts" | "unknown";
+
+export type WishlistDiagnostics = {
+  state: WishlistDiagnosticsState;
+  checkedAt?: string;
+  accountsChecked: number;
+  itemsFound: number;
+  message?: string;
 };
 
 export type GameDetail = Game & {

@@ -7,6 +7,7 @@ import {
   Bug,
   ChevronDown,
   CalendarDays,
+  CalendarPlus,
   ChevronLeft,
   ChevronRight,
   Clipboard,
@@ -56,7 +57,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultHomeLayout, defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeLayout, type HomeModel, type HomeModule, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OstSettings, type OstSourceMode, type GameSoundtrack, type YtdlpStatus, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
+import { defaultHomeLayout, defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeLayout, type HomeModel, type HomeModule, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OstSettings, type OstSourceMode, type GameSoundtrack, type YtdlpStatus, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistDiagnostics, type WishlistManualEntry, type WishlistManualEntryInput, type WishlistReleasePrecision, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
 import { closestCenter, DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { adjustCardsPerRow, AddModuleButton, HomeEditBar, HomeEmptyState, HomeGridBlock, ModuleConfigPanel, ModuleEditChrome, SortableModule, newDraftModule, resolveLayout, resolveModuleGames, type HomeResolveContext } from "./homeModules";
@@ -3307,18 +3308,6 @@ function LibraryScreen({
   );
 }
 
-function WishlistSourcePill({ item }: { item: SteamWishlistItem }) {
-  if (item.sourceMatches.length === 0) {
-    return null;
-  }
-  const sourceText = item.sourceMatches.map((match) => `${match.sourceName} (${match.count})`).join(", ");
-  return (
-    <span className="wishlist-source-pill available" title={sourceText}>
-      <Download size={12} />
-    </span>
-  );
-}
-
 function wishlistGame(item: SteamWishlistItem): Game {
   return {
     id: `steam:${item.appid}`,
@@ -3379,13 +3368,32 @@ function isPastTwoWeeks(item: SteamWishlistItem): boolean {
   return release < today && release >= today - 14 * 24 * 60 * 60 * 1000;
 }
 
-function wishlistBadges(item: SteamWishlistItem): ReactNode {
-  return (
-    <>
-      {isReleasingSoon(item) ? <span className="wishlist-cover-pill soon">Releasing soon</span> : null}
-      {item.sourceMatches.length > 0 ? <WishlistSourcePill item={item} /> : null}
-    </>
-  );
+type WishlistReleaseStatus = "out" | "soon" | "upcoming" | "tba";
+
+function wishlistReleaseStatus(item: SteamWishlistItem): WishlistReleaseStatus {
+  const release = wishlistReleaseTime(item);
+  if (release !== undefined) {
+    const today = todayStartMs();
+    if (release < today) return "out";
+    if (release <= today + 30 * 24 * 60 * 60 * 1000) return "soon";
+    return "upcoming";
+  }
+  if (item.releasePrecision === "month" || item.releasePrecision === "year") return "upcoming";
+  return "tba";
+}
+
+function wishlistStatusBadge(item: SteamWishlistItem): { label: string; cls: WishlistReleaseStatus } {
+  const status = wishlistReleaseStatus(item);
+  if (status === "out") return { label: "Out now", cls: "out" };
+  if (status === "soon") {
+    const release = wishlistReleaseTime(item);
+    const days = release !== undefined ? Math.round((release - todayStartMs()) / (24 * 60 * 60 * 1000)) : 0;
+    return { label: days <= 0 ? "Today" : days === 1 ? "Tomorrow" : `In ${days} days`, cls: "soon" };
+  }
+  if (status === "upcoming") {
+    return { label: formatDate(item.releaseDate) ?? item.releaseDateText ?? "Upcoming", cls: "upcoming" };
+  }
+  return { label: "TBA", cls: "tba" };
 }
 
 function wishlistWithSourceMatches(item: SteamWishlistItem, matchesByTitle: Map<string, SourceExactMatch[]>): SteamWishlistItem {
@@ -3426,12 +3434,18 @@ function WishlistScreen({
 }) {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState<WishlistViewMode>("list");
+  const [calendarLayout, setCalendarLayout] = useState<"agenda" | "grid">("agenda");
+  const [gridMonthOffset, setGridMonthOffset] = useState(0);
+  const [manualEntries, setManualEntries] = useState<WishlistManualEntry[]>([]);
+  const [manualDraft, setManualDraft] = useState<WishlistManualDraft | null>(null);
+  const [diagnostics, setDiagnostics] = useState<WishlistDiagnostics | undefined>();
   const [items, setItems] = useState<SteamWishlistItem[]>([]);
   const [calendarItems, setCalendarItems] = useState<SteamWishlistItem[]>([]);
   const [sourceMatchesByTitle, setSourceMatchesByTitle] = useState<Map<string, SourceExactMatch[]>>(() => new Map());
   const [visibleCount, setVisibleCount] = useState(LIBRARY_GRID_INITIAL_SIZE);
   const [query, setQuery] = useState("");
   const [sourceAvailability, setSourceAvailability] = useState<"all" | "available" | "missing">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | WishlistReleaseStatus>("all");
   const [sort, setSort] = useState<WishlistSortField>(defaultWishlistView.sort.field);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">(defaultWishlistView.sort.direction);
   const [accountSteamIds, setAccountSteamIds] = useState<string[]>([]);
@@ -3504,6 +3518,8 @@ function WishlistScreen({
           throw error;
         });
       const [nextItems, nextCalendar] = await Promise.all([listPromise, calendarPromise]);
+      window.hynite.wishlist.manualList().then(setManualEntries).catch(() => undefined);
+      window.hynite.wishlist.diagnostics().then(setDiagnostics).catch(() => undefined);
       const calendarSearch = query.trim().toLocaleLowerCase();
       const filteredCalendar = nextCalendar.filter((item) => {
         if (calendarSearch && !item.title.toLocaleLowerCase().includes(calendarSearch)) return false;
@@ -3562,12 +3578,35 @@ function WishlistScreen({
     }
   }
 
+  function openManualAdd() {
+    setManualDraft({ title: "", releasePrecision: "exact" });
+  }
+
+  function openManualForItem(item: SteamWishlistItem) {
+    const existing = item.manualEntryId
+      ? manualEntries.find((entry) => entry.id === item.manualEntryId)
+      : manualEntries.find((entry) => entry.appid === item.appid);
+    setManualDraft({
+      id: existing?.id,
+      appid: item.manualEntryId ? undefined : item.appid,
+      title: item.title,
+      coverUrl: item.coverUrl ?? item.libraryCapsuleUrl,
+      releaseDate: existing?.releaseDate ?? item.releaseDate,
+      releaseDateText: existing?.releaseDateText ?? item.releaseDateText,
+      releasePrecision: (existing?.releasePrecision ?? item.releasePrecision) === "unknown" ? "exact" : (existing?.releasePrecision ?? item.releasePrecision)
+    });
+  }
+
   function toggleAccount(steamId: string) {
     setAccountSteamIds((current) => current.includes(steamId) ? current.filter((id) => id !== steamId) : [...current, steamId]);
   }
 
-  const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
-  const hasMoreItems = visibleCount < items.length;
+  const filteredItems = useMemo(
+    () => statusFilter === "all" ? items : items.filter((item) => wishlistReleaseStatus(item) === statusFilter),
+    [items, statusFilter]
+  );
+  const visibleItems = useMemo(() => filteredItems.slice(0, visibleCount), [filteredItems, visibleCount]);
+  const hasMoreItems = visibleCount < filteredItems.length;
   const pastItems = useMemo(() => items.filter(isPastTwoWeeks), [items]);
   const visibleItemsWithSources = useMemo(
     () => visibleItems.map((item) => wishlistWithSourceMatches(item, sourceMatchesByTitle)),
@@ -3590,12 +3629,12 @@ function WishlistScreen({
       disconnected = true;
       observer.disconnect();
       setVisibleCount((current) => {
-        const next = Math.min(items.length, current + LIBRARY_GRID_BATCH_SIZE);
+        const next = Math.min(filteredItems.length, current + LIBRARY_GRID_BATCH_SIZE);
         if (next > current) {
           const span = startRuntimeInteraction("wishlist:load-more-batch", {
             fromVisibleItems: current,
             toVisibleItems: next,
-            totalItems: items.length
+            totalItems: filteredItems.length
           });
           requestAnimationFrame(() => {
             requestAnimationFrame(() => span.end("ok", { visibleItems: next }));
@@ -3609,7 +3648,7 @@ function WishlistScreen({
       disconnected = true;
       observer.disconnect();
     };
-  }, [hasMoreItems, items.length, mode, visibleCount]);
+  }, [hasMoreItems, filteredItems.length, mode, visibleCount]);
 
   useEffect(() => {
     profilePoint("wishlist", "wishlist:screen-state", {
@@ -3703,28 +3742,105 @@ function WishlistScreen({
     };
   }, [mode, pastItems, sourceAvailability, sourceMatchesByTitle, visibleItems]);
 
-  const dayRows = useMemo(() => {
-    const map = new Map<string, SteamWishlistItem[]>();
+  const calendarModel = useMemo(() => {
+    const now = new Date(`${today}T00:00:00`);
+    const currentYm = now.getFullYear() * 12 + now.getMonth();
+    const currentYear = now.getFullYear();
+
+    const exactByDay = new Map<string, SteamWishlistItem[]>();
+    const monthMap = new Map<string, { sort: number; label: string; items: SteamWishlistItem[] }>();
+    const yearMap = new Map<number, SteamWishlistItem[]>();
+
     for (const item of calendarItems) {
-      if (!item.releaseDate) continue;
-      const key = item.releaseDate;
-      map.set(key, [...(map.get(key) ?? []), item]);
+      if (item.releasePrecision === "exact" && item.releaseDate) {
+        exactByDay.set(item.releaseDate, [...(exactByDay.get(item.releaseDate) ?? []), item]);
+      } else if (item.releasePrecision === "month") {
+        const text = item.releaseDateText ?? "";
+        const parsed = Date.parse(text);
+        let sort: number;
+        let label: string;
+        if (Number.isFinite(parsed)) {
+          const date = new Date(parsed);
+          const ym = date.getFullYear() * 12 + date.getMonth();
+          if (ym < currentYm) continue;
+          sort = ym;
+          label = date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+        } else {
+          sort = Number.MAX_SAFE_INTEGER;
+          label = text || "Coming soon";
+        }
+        const entry = monthMap.get(label) ?? { sort, label, items: [] };
+        entry.items.push(item);
+        monthMap.set(label, entry);
+      } else if (item.releasePrecision === "year") {
+        const year = Number.parseInt(item.releaseDateText ?? "", 10);
+        if (Number.isFinite(year) && year < currentYear) continue;
+        const key = Number.isFinite(year) ? year : Number.MAX_SAFE_INTEGER;
+        yearMap.set(key, [...(yearMap.get(key) ?? []), item]);
+      }
     }
-    const start = new Date(`${today}T00:00:00`);
-    const rows: Array<{ key: string; label: string; month: string; items: SteamWishlistItem[]; monthStart: boolean }> = [];
-    for (let index = 0; index < 92; index += 1) {
-      const date = addDays(start, index);
-      const key = dayKey(date);
-      rows.push({
+
+    const agendaMonths: Array<{ label: string; days: Array<{ key: string; label: string; items: SteamWishlistItem[] }> }> = [];
+    for (const key of [...exactByDay.keys()].sort()) {
+      const date = new Date(`${key}T00:00:00`);
+      const monthLabel = date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+      let group = agendaMonths[agendaMonths.length - 1];
+      if (!group || group.label !== monthLabel) {
+        group = { label: monthLabel, days: [] };
+        agendaMonths.push(group);
+      }
+      group.days.push({
         key,
         label: date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }),
-        month: monthKey(key),
-        items: map.get(key) ?? [],
-        monthStart: index === 0 || date.getDate() === 1
+        items: exactByDay.get(key) ?? []
       });
     }
-    return rows;
+
+    const monthBuckets = [...monthMap.values()].sort((a, b) => a.sort - b.sort);
+    const yearBuckets = [...yearMap.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([year, items]) => ({ label: year === Number.MAX_SAFE_INTEGER ? "To be announced" : `Later in ${year}`, items }));
+
+    return { exactByDay, agendaMonths, monthBuckets, yearBuckets };
   }, [calendarItems, today]);
+
+  const gridMonth = useMemo(() => {
+    const now = new Date(`${today}T00:00:00`);
+    return new Date(now.getFullYear(), now.getMonth() + gridMonthOffset, 1);
+  }, [today, gridMonthOffset]);
+
+  // The month grid spans whole months (including past days in the current month),
+  // so it sources every exact-dated wishlist game — not just the forward-looking
+  // calendar window the agenda uses. Keeps a recently-released game visible.
+  const exactByDayAll = useMemo(() => {
+    const map = new Map<string, SteamWishlistItem[]>();
+    for (const item of items) {
+      if (item.releasePrecision === "exact" && item.releaseDate) {
+        map.set(item.releaseDate, [...(map.get(item.releaseDate) ?? []), item]);
+      }
+    }
+    return map;
+  }, [items]);
+
+  const gridWeeks = useMemo(() => {
+    const firstWeekday = (gridMonth.getDay() + 6) % 7;
+    const daysInMonth = new Date(gridMonth.getFullYear(), gridMonth.getMonth() + 1, 0).getDate();
+    const cells: Array<{ key: string; day: number; items: SteamWishlistItem[] } | null> = [];
+    for (let i = 0; i < firstWeekday; i += 1) cells.push(null);
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const key = dayKey(new Date(gridMonth.getFullYear(), gridMonth.getMonth(), day));
+      cells.push({ key, day, items: exactByDayAll.get(key) ?? [] });
+    }
+    while (cells.length % 7 !== 0) cells.push(null);
+    const weeks: Array<Array<{ key: string; day: number; items: SteamWishlistItem[] } | null>> = [];
+    for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+    return weeks;
+  }, [gridMonth, exactByDayAll]);
+
+  const undatedItems = useMemo(
+    () => [...calendarModel.monthBuckets.flatMap((bucket) => bucket.items), ...calendarModel.yearBuckets.flatMap((bucket) => bucket.items)],
+    [calendarModel]
+  );
 
   const handleWishlistCoverLoad = useCallback((details: Record<string, unknown>) => {
     if (firstCoverLoggedRef.current) return;
@@ -3763,6 +3879,76 @@ function WishlistScreen({
     );
   }
 
+  const renderCover = (item: SteamWishlistItem, surface: string) => {
+    const ribbon = wishlistStatusBadge(item);
+    const hasSource = item.sourceMatches.length > 0;
+    return (
+    <div key={item.appid} className="wishlist-cover-wrap">
+      <GameCover
+        game={wishlistGame(item)}
+        onSelect={() => item.manualEntryId ? openManualForItem(item) : onSelect(item)}
+        inLibrary={false}
+        profileDetails={wishlistCoverProfileDetails(item, surface)}
+        onCoverLoad={handleWishlistCoverLoad}
+      />
+      <div className={`wishlist-release-ribbon ${ribbon.cls}`}>
+        <span className="wishlist-release-ribbon-label">{ribbon.label}</span>
+        {hasSource ? <Download size={11} className="wishlist-release-ribbon-source" /> : null}
+      </div>
+      <button
+        type="button"
+        className={item.manualReleaseOverride ? "wishlist-set-date active" : "wishlist-set-date"}
+        title={item.manualReleaseOverride ? "Edit release date" : "Set release date"}
+        aria-label="Set release date"
+        onClick={(event) => {
+          event.stopPropagation();
+          openManualForItem(item);
+        }}
+      >
+        <CalendarPlus size={13} />
+      </button>
+    </div>
+    );
+  };
+
+  const wishlistEmptyState = () => {
+    const state = diagnostics?.state;
+    if (state === "private-or-empty") {
+      return (
+        <div className="empty-state">
+          <CalendarDays size={34} />
+          <h2>Your Steam wishlist is private or empty</h2>
+          <p>Steam only shares wishlists set to <b>Public</b>. Open Steam → Profile → Edit Profile → Privacy Settings and set <b>Game details</b> to Public, then retry. If it&apos;s already public, you may just have no games wishlisted yet.</p>
+          <button className="secondary-action" type="button" onClick={() => void refreshWishlist()} disabled={refreshing}>
+            <RefreshCw size={14} /> {refreshing ? "Retrying" : "Retry sync"}
+          </button>
+        </div>
+      );
+    }
+    if (state === "error") {
+      return (
+        <div className="empty-state">
+          <CalendarDays size={34} />
+          <h2>Couldn&apos;t reach Steam</h2>
+          <p>{diagnostics?.message ?? "The wishlist sync failed. Your cached games are preserved; try again in a moment."}</p>
+          <button className="secondary-action" type="button" onClick={() => void refreshWishlist()} disabled={refreshing}>
+            <RefreshCw size={14} /> {refreshing ? "Retrying" : "Retry sync"}
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="empty-state">
+        <BookOpen size={34} />
+        <h2>Your wishlist is empty</h2>
+        <p>Wishlist games on Steam and they&apos;ll show up here, or add one manually.</p>
+        <button className="secondary-action" type="button" onClick={openManualAdd}>
+          <CalendarPlus size={14} /> Add game
+        </button>
+      </div>
+    );
+  };
+
   return (
     <main className="page wishlist-page">
       <div className="library-head wishlist-head">
@@ -3775,6 +3961,16 @@ function WishlistScreen({
             <button type="button" className={mode === "list" ? "active" : ""} onClick={() => setMode("list")}>All games</button>
             <button type="button" className={mode === "calendar" ? "active" : ""} onClick={() => setMode("calendar")}>Calendar</button>
           </div>
+          {mode === "calendar" ? (
+            <div className="segmented-control">
+              <button type="button" className={calendarLayout === "agenda" ? "active" : ""} onClick={() => setCalendarLayout("agenda")}>Agenda</button>
+              <button type="button" className={calendarLayout === "grid" ? "active" : ""} onClick={() => setCalendarLayout("grid")}>Month grid</button>
+            </div>
+          ) : null}
+          <button type="button" className="secondary-action" onClick={openManualAdd}>
+            <CalendarPlus size={14} />
+            Add game
+          </button>
           <button type="button" className="secondary-action" onClick={() => void refreshWishlist()} disabled={refreshing}>
             <RefreshCw size={14} />
             {refreshing ? "Refreshing" : "Refresh"}
@@ -3788,6 +3984,13 @@ function WishlistScreen({
           <Search size={15} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search wishlist" />
         </label>
+        <select className="plain-select" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+          <option value="all">All releases</option>
+          <option value="out">Out now</option>
+          <option value="soon">Releasing soon</option>
+          <option value="upcoming">Upcoming</option>
+          <option value="tba">No date / TBA</option>
+        </select>
         <select className="plain-select" value={sourceAvailability} onChange={(event) => setSourceAvailability(event.target.value as typeof sourceAvailability)}>
           <option value="all">All sources</option>
           <option value="available">Available</option>
@@ -3824,29 +4027,22 @@ function WishlistScreen({
         <ProfileScope id="WishlistGrid">
         <div className="wishlist-grid-wrap" aria-busy={loading}>
           <div className="library-grid wishlist-grid" style={gridStyle}>
-            {visibleItemsWithSources.map((item) => (
-              <GameCover
-                key={item.appid}
-                game={wishlistGame(item)}
-                onSelect={() => onSelect(item)}
-                inLibrary={false}
-                badges={wishlistBadges(item)}
-                profileDetails={wishlistCoverProfileDetails(item, "list")}
-                onCoverLoad={handleWishlistCoverLoad}
-              />
-            ))}
+            {visibleItemsWithSources.map((item) => renderCover(item, "list"))}
           </div>
           {hasMoreItems ? <div ref={loadMoreRef} className="wishlist-load-more-sentinel" aria-hidden="true" /> : null}
-          {!loading && items.length === 0 ? (
-            <div className="empty-state">
-              <BookOpen size={34} />
-              <h2>No wishlist games match these filters</h2>
-            </div>
+          {!loading && filteredItems.length === 0 ? (
+            items.length > 0 ? (
+              <div className="empty-state">
+                <BookOpen size={34} />
+                <h2>No wishlist games match these filters</h2>
+              </div>
+            ) : wishlistEmptyState()
           ) : null}
         </div>
         </ProfileScope>
       ) : (
         <ProfileScope id="WishlistCalendar">
+        {calendarLayout === "agenda" ? (
         <div className="wishlist-calendar">
           {pastItems.length > 0 ? (
             <section className="wishlist-past-section">
@@ -3854,59 +4050,261 @@ function WishlistScreen({
                 <span>Past 2 weeks</span>
               </div>
               <div className="library-grid wishlist-grid wishlist-past-grid" style={gridStyle}>
-                {pastItemsWithSources.map((item) => (
-                  <GameCover
-                    key={item.appid}
-                    game={wishlistGame(item)}
-                    onSelect={() => onSelect(item)}
-                    inLibrary={false}
-                    badges={wishlistBadges(item)}
-                    profileDetails={wishlistCoverProfileDetails(item, "calendar-past")}
-                    onCoverLoad={handleWishlistCoverLoad}
-                  />
-                ))}
+                {pastItemsWithSources.map((item) => renderCover(item, "calendar-past"))}
               </div>
             </section>
           ) : null}
-          <div className="wishlist-day-list">
-            {dayRows.map((row) => (
-              <section key={row.key} className={row.items.length > 0 ? "wishlist-day-row has-items" : "wishlist-day-row"}>
-                {row.monthStart ? (
-                  <div className="wishlist-month-marker">
-                    <span>{row.month}</span>
-                  </div>
-                ) : null}
-                <div className="wishlist-day-heading">
-                  <span>{row.label}</span>
-                </div>
-                {row.items.length > 0 ? (
+          {calendarModel.agendaMonths.map((month) => (
+            <section key={`exact-${month.label}`} className="wishlist-agenda-month">
+              <div className="wishlist-month-marker"><span>{month.label}</span></div>
+              {month.days.map((day) => (
+                <div key={day.key} className="wishlist-day-row has-items">
+                  <div className="wishlist-day-heading"><span>{day.label}</span></div>
                   <div className="library-grid wishlist-grid wishlist-day-grid" style={gridStyle}>
-                    {row.items.map((item) => (
-                      <GameCover
-                        key={item.appid}
-                        game={wishlistGame(item)}
-                        onSelect={() => onSelect(item)}
-                        inLibrary={false}
-                        badges={wishlistBadges(item)}
-                        profileDetails={wishlistCoverProfileDetails(item, "calendar-day")}
-                        onCoverLoad={handleWishlistCoverLoad}
-                      />
-                    ))}
+                    {day.items.map((item) => renderCover(item, "calendar-day"))}
                   </div>
-                ) : null}
-              </section>
-            ))}
-          </div>
+                </div>
+              ))}
+            </section>
+          ))}
+          {calendarModel.monthBuckets.map((bucket) => (
+            <section key={`month-${bucket.label}`} className="wishlist-agenda-bucket">
+              <div className="wishlist-month-marker fuzzy"><span>Sometime in {bucket.label}</span></div>
+              <div className="library-grid wishlist-grid" style={gridStyle}>
+                {bucket.items.map((item) => renderCover(item, "calendar-month"))}
+              </div>
+            </section>
+          ))}
+          {calendarModel.yearBuckets.map((bucket) => (
+            <section key={`year-${bucket.label}`} className="wishlist-agenda-bucket">
+              <div className="wishlist-month-marker fuzzy"><span>{bucket.label}</span></div>
+              <div className="library-grid wishlist-grid" style={gridStyle}>
+                {bucket.items.map((item) => renderCover(item, "calendar-year"))}
+              </div>
+            </section>
+          ))}
           {!loading && calendarItems.length === 0 && pastItems.length === 0 ? (
-            <div className="empty-state">
-              <CalendarDays size={34} />
-              <h2>No exact-dated wishlist releases in the next 3 months.</h2>
-            </div>
+            items.length > 0 ? (
+              <div className="empty-state">
+                <CalendarDays size={34} />
+                <h2>No upcoming wishlist releases.</h2>
+                <p>Games with a known release date or window will appear here. Use “Set release date” on a game to add one manually.</p>
+              </div>
+            ) : wishlistEmptyState()
           ) : null}
         </div>
+        ) : (
+        <div className="wishlist-calendar wishlist-month-grid-wrap">
+          <div className="wishlist-month-grid-head">
+            <button type="button" className="secondary-action" onClick={() => setGridMonthOffset((offset) => offset - 1)} aria-label="Previous month"><ChevronLeft size={16} /></button>
+            <span className="wishlist-month-grid-title">{gridMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</span>
+            <button type="button" className="secondary-action" onClick={() => setGridMonthOffset((offset) => offset + 1)} aria-label="Next month"><ChevronRight size={16} /></button>
+          </div>
+          <div className="wishlist-month-grid">
+            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
+              <div key={label} className="wishlist-month-grid-weekday">{label}</div>
+            ))}
+            {gridWeeks.flat().map((cell, index) => (
+              cell ? (
+                <div key={cell.key} className={cell.items.length > 0 ? "wishlist-month-grid-cell has-items" : "wishlist-month-grid-cell"}>
+                  <span className="wishlist-month-grid-day">{cell.day}</span>
+                  <div className="wishlist-month-grid-covers" style={{ "--cover-cols": Math.min(2, cell.items.length) } as CSSProperties}>
+                    {cell.items.slice(0, 4).map((item) => (
+                      <button key={item.appid} type="button" className="wishlist-month-grid-cover" onClick={() => onSelect(item)} title={`${item.title} — ${wishlistReleaseLabel(item)}`} style={fallbackArt(wishlistGame(item))}>
+                        {(item.coverUrl ?? item.libraryCapsuleUrl) ? <img src={item.coverUrl ?? item.libraryCapsuleUrl} alt="" loading="lazy" /> : <span>{item.title}</span>}
+                      </button>
+                    ))}
+                    {cell.items.length > 4 ? <span className="wishlist-month-grid-more">+{cell.items.length - 4}</span> : null}
+                  </div>
+                </div>
+              ) : <div key={`blank-${index}`} className="wishlist-month-grid-cell empty" aria-hidden="true" />
+            ))}
+          </div>
+          {undatedItems.length > 0 ? (
+            <aside className="wishlist-month-grid-undated">
+              <div className="wishlist-month-marker fuzzy"><span>No exact date ({undatedItems.length})</span></div>
+              <div className="library-grid wishlist-grid" style={gridStyle}>
+                {undatedItems.map((item) => renderCover(item, "calendar-undated"))}
+              </div>
+            </aside>
+          ) : null}
+        </div>
+        )}
         </ProfileScope>
       )}
+      <AnimatePresence>
+        {manualDraft ? (
+          <WishlistManualDialog
+            draft={manualDraft}
+            onClose={() => setManualDraft(null)}
+            onSaved={() => {
+              setManualDraft(null);
+              void loadWishlist();
+            }}
+          />
+        ) : null}
+      </AnimatePresence>
     </main>
+  );
+}
+
+type WishlistManualDraft = {
+  id?: string;
+  appid?: string;
+  title: string;
+  coverUrl?: string;
+  releaseDate?: string;
+  releaseDateText?: string;
+  releasePrecision: WishlistReleasePrecision;
+};
+
+function deriveMonthInput(draft: WishlistManualDraft): string {
+  if (draft.releaseDate) return draft.releaseDate.slice(0, 7);
+  const parsed = draft.releaseDateText ? Date.parse(draft.releaseDateText) : NaN;
+  if (Number.isFinite(parsed)) {
+    const date = new Date(parsed);
+    return `${date.getFullYear()}-${twoDigit(date.getMonth() + 1)}`;
+  }
+  return "";
+}
+
+function deriveYearInput(draft: WishlistManualDraft): string {
+  if (draft.releaseDate) return draft.releaseDate.slice(0, 4);
+  const year = Number.parseInt(draft.releaseDateText ?? "", 10);
+  if (Number.isFinite(year)) return String(year);
+  const parsed = draft.releaseDateText ? Date.parse(draft.releaseDateText) : NaN;
+  return Number.isFinite(parsed) ? String(new Date(parsed).getFullYear()) : "";
+}
+
+function WishlistManualDialog({ draft, onClose, onSaved }: { draft: WishlistManualDraft; onClose: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState(draft.title);
+  const [precision, setPrecision] = useState<"exact" | "month" | "year">(
+    draft.releasePrecision === "month" || draft.releasePrecision === "year" ? draft.releasePrecision : "exact"
+  );
+  const [dateValue, setDateValue] = useState(draft.releaseDate ?? "");
+  const [monthValue, setMonthValue] = useState(() => deriveMonthInput(draft));
+  const [yearValue, setYearValue] = useState(() => deriveYearInput(draft));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+
+  const isOverride = Boolean(draft.appid);
+  const heading = draft.id ? "Edit manual entry" : isOverride ? "Set release date" : "Add game to calendar";
+
+  async function submit() {
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
+      setError("Enter a game title.");
+      return;
+    }
+    let input: WishlistManualEntryInput;
+    if (precision === "exact") {
+      if (!dateValue) {
+        setError("Pick a release date.");
+        return;
+      }
+      const text = new Date(`${dateValue}T00:00:00`).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+      input = { id: draft.id, appid: draft.appid, title: trimmedTitle, coverUrl: draft.coverUrl, releaseDate: dateValue, releaseDateText: text, releasePrecision: "exact" };
+    } else if (precision === "month") {
+      if (!monthValue) {
+        setError("Pick a month.");
+        return;
+      }
+      const parts = monthValue.split("-");
+      const year = Number(parts[0]);
+      const month = Number(parts[1] ?? "1");
+      const text = new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+      input = { id: draft.id, appid: draft.appid, title: trimmedTitle, coverUrl: draft.coverUrl, releaseDateText: text, releasePrecision: "month" };
+    } else {
+      const year = Number.parseInt(yearValue, 10);
+      if (!Number.isFinite(year)) {
+        setError("Enter a year.");
+        return;
+      }
+      input = { id: draft.id, appid: draft.appid, title: trimmedTitle, coverUrl: draft.coverUrl, releaseDateText: String(year), releasePrecision: "year" };
+    }
+    setSaving(true);
+    setError(undefined);
+    try {
+      await window.hynite.wishlist.manualUpsert(input);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save entry.");
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!draft.id) return;
+    setSaving(true);
+    try {
+      await window.hynite.wishlist.manualRemove(draft.id);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove entry.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <motion.div className="modal-backdrop name-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <button className="image-viewer-scrim" type="button" aria-label="Close dialog" onClick={onClose} />
+      <motion.form
+        className="name-dialog wishlist-manual-dialog"
+        initial={{ opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 8 }}
+        transition={{ duration: 0.14 }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onClose();
+          }
+        }}
+      >
+        <div className="modal-head">
+          <h2>{heading}</h2>
+          <button className="close-button inline-close" type="button" onClick={onClose} aria-label="Close dialog">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="name-dialog-body">
+          <label className="wishlist-manual-label">Game title</label>
+          <input className="plain-input" value={title} autoFocus disabled={isOverride} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Grand Theft Auto VI" />
+
+          <label className="wishlist-manual-label">Release date</label>
+          <div className="segmented-control">
+            <button type="button" className={precision === "exact" ? "active" : ""} onClick={() => setPrecision("exact")}>Exact day</button>
+            <button type="button" className={precision === "month" ? "active" : ""} onClick={() => setPrecision("month")}>Month</button>
+            <button type="button" className={precision === "year" ? "active" : ""} onClick={() => setPrecision("year")}>Year</button>
+          </div>
+          {precision === "exact" ? (
+            <input className="plain-input" type="date" value={dateValue} onChange={(event) => setDateValue(event.target.value)} />
+          ) : precision === "month" ? (
+            <input className="plain-input" type="month" value={monthValue} onChange={(event) => setMonthValue(event.target.value)} />
+          ) : (
+            <input className="plain-input" type="number" min={1970} max={2100} value={yearValue} placeholder="2026" onChange={(event) => setYearValue(event.target.value)} />
+          )}
+
+          {error ? <p className="form-error">{error}</p> : null}
+          <div className="settings-actions">
+            <button className="primary-action" type="submit" disabled={saving}>
+              {saving ? "Saving" : draft.id ? "Save" : isOverride ? "Set date" : "Add game"}
+            </button>
+            {draft.id ? (
+              <button className="secondary-action danger" type="button" onClick={() => void remove()} disabled={saving}>
+                <Trash2 size={14} /> Remove
+              </button>
+            ) : null}
+            <button className="secondary-action" type="button" onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      </motion.form>
+    </motion.div>
   );
 }
 
@@ -9518,9 +9916,12 @@ function LauncherShell() {
 
     const startedAt = performance.now();
     const promise = (async () => {
-      const detail = libraryGameIds.has(game.id)
+      const fetched = libraryGameIds.has(game.id)
         ? await window.hynite.games.get(game.id)
         : await window.hynite.games.hydrateDiscovery(game);
+      // Steam's discovery endpoint can return an empty release date even when the
+      // wishlist sync resolved one from a different source — keep the cached value.
+      const detail = fetched.releaseDate || !game.releaseDate ? fetched : { ...fetched, releaseDate: game.releaseDate };
       homeDetailCacheRef.current.set(game.id, detail);
       homeDebug("detail prefetch loaded", {
         id: game.id,

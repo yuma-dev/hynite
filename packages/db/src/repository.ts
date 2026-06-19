@@ -25,6 +25,8 @@ import {
   type SteamWishlistItem,
   type WishlistCalendarQuery,
   type WishlistListQuery,
+  type WishlistManualEntry,
+  type WishlistManualEntryInput,
   type WishlistReleasePrecision
 } from "@hynite/core";
 import { migrations } from "./schema";
@@ -109,6 +111,19 @@ type SteamWishlistAccountRow = {
 
 export type SteamWishlistUpsertItem = Omit<SteamWishlistItem, "sourceMatches">;
 
+type WishlistManualEntryRow = {
+  id: string;
+  appid: string | null;
+  title: string;
+  sort_title: string;
+  cover_url: string | null;
+  release_date: string | null;
+  release_date_text: string | null;
+  release_precision: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type PersistedDownloadEntry = {
   id: string;
   sourceId: string;
@@ -172,6 +187,34 @@ function serializeJson<T>(value: T | undefined): string | null {
 
 function isoTimestampFromMs(value: number): string | undefined {
   return value > 0 && Number.isFinite(value) ? new Date(value).toISOString() : undefined;
+}
+
+function applyManualOverride(item: SteamWishlistUpsertItem, override: WishlistManualEntry): SteamWishlistUpsertItem {
+  return {
+    ...item,
+    coverUrl: override.coverUrl ?? item.coverUrl,
+    releaseDate: override.releaseDate,
+    releaseDateText: override.releaseDateText,
+    releasePrecision: override.releasePrecision,
+    manualReleaseOverride: true
+  };
+}
+
+function manualEntryToItem(entry: WishlistManualEntry): SteamWishlistUpsertItem {
+  return {
+    appid: `manual:${entry.id}`,
+    title: entry.title,
+    sortTitle: entry.sortTitle,
+    accounts: [],
+    coverUrl: entry.coverUrl,
+    releaseDate: entry.releaseDate,
+    releaseDateText: entry.releaseDateText,
+    releasePrecision: entry.releasePrecision,
+    metadataStatus: "none",
+    refreshedAt: entry.updatedAt,
+    manualEntryId: entry.id,
+    manualReleaseOverride: true
+  };
 }
 
 function playerModesFromSteamRaw(rawJson: string): PlayerMode[] {
@@ -1049,10 +1092,23 @@ export class HyniteRepository {
 
   querySteamWishlist(query: WishlistListQuery = {}): SteamWishlistUpsertItem[] {
     let items = this.mapSteamWishlistRows(this.listSteamWishlistItemRows());
+    const manualEntries = this.listWishlistManualEntries();
+    const overrides = new Map(manualEntries.filter((entry) => entry.appid).map((entry) => [entry.appid as string, entry]));
+    if (overrides.size > 0) {
+      items = items.map((item) => {
+        const override = overrides.get(item.appid);
+        return override ? applyManualOverride(item, override) : item;
+      });
+    }
+
     const accountIds = new Set((query.accountSteamIds ?? []).map((id) => id.trim()).filter(Boolean));
     if (accountIds.size > 0) {
       items = items.filter((item) => item.accounts.some((account) => accountIds.has(account.steamId)));
     }
+
+    // Standalone manual entries (no Steam backing) are user-owned and not account-bound,
+    // so they appear regardless of the account filter.
+    items = [...items, ...manualEntries.filter((entry) => !entry.appid).map(manualEntryToItem)];
 
     const normalizedSearch = (query.search ?? "").trim().toLocaleLowerCase();
     if (normalizedSearch) {
@@ -1090,10 +1146,75 @@ export class HyniteRepository {
     const end = new Date(Date.UTC(safeStart.getUTCFullYear(), safeStart.getUTCMonth() + months, safeStart.getUTCDate()));
     return this.querySteamWishlist({ accountSteamIds: query.accountSteamIds, sort: "release", sortDirection: "asc" })
       .filter((item) => {
+        // Fuzzy-dated upcoming games (month/year precision) carry no exact day; the
+        // renderer buckets them. Pass them through here so the calendar isn't limited
+        // to the minority of games with a full release date.
+        if (item.releasePrecision === "month" || item.releasePrecision === "year") return true;
         if (item.releasePrecision !== "exact" || !item.releaseDate) return false;
         const releaseMs = Date.parse(`${item.releaseDate}T00:00:00.000Z`);
         return Number.isFinite(releaseMs) && releaseMs >= safeStart.getTime() && releaseMs < end.getTime();
       });
+  }
+
+  listWishlistManualEntries(): WishlistManualEntry[] {
+    const rows = this.db
+      .prepare("SELECT * FROM wishlist_manual_entries ORDER BY sort_title ASC")
+      .all() as WishlistManualEntryRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      appid: row.appid ?? undefined,
+      title: row.title,
+      sortTitle: row.sort_title,
+      coverUrl: row.cover_url ?? undefined,
+      releaseDate: row.release_date ?? undefined,
+      releaseDateText: row.release_date_text ?? undefined,
+      releasePrecision: ["exact", "month", "year"].includes(row.release_precision) ? (row.release_precision as WishlistReleasePrecision) : "unknown",
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  }
+
+  upsertWishlistManualEntry(input: WishlistManualEntryInput): WishlistManualEntry {
+    const now = new Date().toISOString();
+    const id = input.id?.trim() || makeGameId("manual", `${input.appid ?? input.title}-${now}`);
+    const appid = input.appid?.trim() || null;
+    const title = input.title.trim() || "Untitled";
+    const existing = this.db.prepare("SELECT created_at FROM wishlist_manual_entries WHERE id = ?").get(id) as { created_at: string } | undefined;
+    const createdAt = existing?.created_at ?? now;
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO wishlist_manual_entries (
+          id, appid, title, sort_title, cover_url, release_date, release_date_text, release_precision, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        appid,
+        title,
+        makeSortTitle(title),
+        input.coverUrl ?? null,
+        input.releaseDate ?? null,
+        input.releaseDateText ?? null,
+        input.releasePrecision,
+        createdAt,
+        now
+      );
+    return {
+      id,
+      appid: appid ?? undefined,
+      title,
+      sortTitle: makeSortTitle(title),
+      coverUrl: input.coverUrl,
+      releaseDate: input.releaseDate,
+      releaseDateText: input.releaseDateText,
+      releasePrecision: input.releasePrecision,
+      createdAt,
+      updatedAt: now
+    };
+  }
+
+  removeWishlistManualEntry(id: string): void {
+    this.db.prepare("DELETE FROM wishlist_manual_entries WHERE id = ?").run(id.trim());
   }
 
   private deleteUnreferencedSteamWishlistItems(): void {

@@ -155,13 +155,18 @@ export function parseSteamStoreReleaseDate(value: string | undefined): SteamRele
   const trimmed = value.trim();
   if (!trimmed) return { precision: "unknown" };
 
-  const exactEnglishDate = /^(?<month>[A-Za-z]+)\s+(?<day>\d{1,2}),\s+(?<year>\d{4})$/.exec(trimmed);
-  if (exactEnglishDate?.groups?.month && exactEnglishDate.groups.day && exactEnglishDate.groups.year) {
+  // Steam returns English month names in two orders depending on cc/l:
+  // month-first ("Jul 17, 2026", common with cc=us) and day-first
+  // ("17 Jul, 2026" / "4 Aug, 2026", returned with cc=de&l=english).
+  const monthFirst = /^(?<month>[A-Za-z]+)\s+(?<day>\d{1,2}),\s+(?<year>\d{4})$/.exec(trimmed);
+  const dayFirst = /^(?<day>\d{1,2})\.?\s+(?<month>[A-Za-z]+),?\s+(?<year>\d{4})$/.exec(trimmed);
+  const exactGroups = monthFirst?.groups ?? dayFirst?.groups;
+  if (exactGroups?.month && exactGroups.day && exactGroups.year) {
     const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-    const monthIndex = months.indexOf(exactEnglishDate.groups.month.slice(0, 3).toLocaleLowerCase());
+    const monthIndex = months.indexOf(exactGroups.month.slice(0, 3).toLocaleLowerCase());
     if (monthIndex >= 0) {
-      const day = Number(exactEnglishDate.groups.day);
-      const year = Number(exactEnglishDate.groups.year);
+      const day = Number(exactGroups.day);
+      const year = Number(exactGroups.year);
       return {
         date: new Date(Date.UTC(year, monthIndex, day)).toISOString().slice(0, 10),
         text: trimmed,
@@ -191,6 +196,18 @@ export function parseSteamStoreReleaseDate(value: string | undefined): SteamRele
 
 function parseSteamDate(value: string | undefined): string | undefined {
   return parseSteamStoreReleaseDate(value).date;
+}
+
+function releasePatchFromInfo(info: SteamReleaseDateInfo): {
+  releaseDate?: string;
+  releaseDateText?: string;
+  releasePrecision?: "exact" | "month" | "year" | "unknown";
+} {
+  return {
+    releaseDate: info.date,
+    releaseDateText: info.text,
+    releasePrecision: info.precision
+  };
 }
 
 function stripHtml(value: string | undefined): string | undefined {
@@ -266,7 +283,7 @@ export function metadataFromSteamAppDetailsResponse(
     playerModes: playerModesFromSteamCategories(data.categories),
     developers: data.developers ?? [],
     publishers: data.publishers ?? [],
-    releaseDate: parseSteamDate(data.release_date?.date),
+    ...releasePatchFromInfo(parseSteamStoreReleaseDate(data.release_date?.date)),
     metadataStatus: "complete"
   };
 }
@@ -409,19 +426,20 @@ function assetUrl(appid: string, path: string | undefined): string | undefined {
   return path ? `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${encodeURIComponent(appid)}/${path}` : undefined;
 }
 
-function parseSteamReleaseTimestamp(value: string | undefined): string | undefined {
+function parseSteamReleaseTimestamp(value: string | undefined): SteamReleaseDateInfo {
   if (!value) {
-    return undefined;
+    return { precision: "unknown" };
   }
 
   if (/^\d+$/.test(value)) {
     const timestamp = Number(value);
     if (Number.isFinite(timestamp) && timestamp > 0) {
-      return new Date(timestamp * 1000).toISOString().slice(0, 10);
+      const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
+      return { date, text: date, precision: "exact" };
     }
   }
 
-  return parseSteamDate(value);
+  return parseSteamStoreReleaseDate(value);
 }
 
 function splitAppInfoNames(value: string | undefined): string[] {
@@ -541,7 +559,7 @@ export function metadataFromSteamAppInfo(
     tags: appInfoStoreTags(common),
     developers: developers.length ? developers : extendedDevelopers.length ? extendedDevelopers : undefined,
     publishers: publishers.length ? publishers : extendedPublishers.length ? extendedPublishers : undefined,
-    releaseDate: parseSteamReleaseTimestamp(common.steam_release_date ?? common.steamReleaseDate),
+    ...releasePatchFromInfo(parseSteamReleaseTimestamp(common.steam_release_date ?? common.steamReleaseDate)),
     websiteUrl: common.extended?.homepage,
     metadataStatus: fallbackCoverUrl || fallbackBackgroundUrl || logoUrl || common.name ? "partial" : undefined
   };

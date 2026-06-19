@@ -726,4 +726,64 @@ describe("HyniteRepository", () => {
 
     repository.close();
   });
+
+  it("includes fuzzy month/year precision releases in calendar queries", () => {
+    const repository = createRepository();
+    const base = {
+      title: "Wish",
+      sortTitle: "wish",
+      refreshedAt: "2026-05-13T00:00:00.000Z",
+      metadataStatus: "partial" as const,
+      accounts: [{ steamId: "owner-a" }]
+    };
+    repository.replaceSteamWishlistForAccount("owner-a", [
+      { ...base, appid: "1", releaseDate: "2026-05-20", releaseDateText: "May 20, 2026", releasePrecision: "exact" },
+      { ...base, appid: "2", releaseDateText: "August 2026", releasePrecision: "month" },
+      { ...base, appid: "3", releaseDateText: "2027", releasePrecision: "year" },
+      { ...base, appid: "4", releaseDateText: "Coming soon", releasePrecision: "unknown" }
+    ]);
+
+    const calendar = repository.querySteamWishlistCalendar({ startDate: "2026-05-13", months: 3 }).map((item) => item.appid);
+    expect(calendar).toContain("1");
+    expect(calendar).toContain("2");
+    expect(calendar).toContain("3");
+    expect(calendar).not.toContain("4");
+
+    repository.close();
+  });
+
+  it("applies manual release overrides and standalone manual entries to wishlist queries", () => {
+    const repository = createRepository();
+    repository.replaceSteamWishlistForAccount("owner-a", [
+      {
+        appid: "1",
+        title: "TBA Game",
+        sortTitle: "tba game",
+        refreshedAt: "2026-05-13T00:00:00.000Z",
+        metadataStatus: "partial",
+        accounts: [{ steamId: "owner-a" }],
+        releaseDateText: "Coming soon",
+        releasePrecision: "unknown"
+      }
+    ]);
+
+    repository.upsertWishlistManualEntry({ appid: "1", title: "TBA Game", releaseDate: "2026-12-25", releaseDateText: "Dec 25, 2026", releasePrecision: "exact" });
+    repository.upsertWishlistManualEntry({ title: "GTA VI", releaseDate: "2026-11-19", releaseDateText: "Nov 19, 2026", releasePrecision: "exact" });
+
+    const items = repository.querySteamWishlist({});
+    const overridden = items.find((item) => item.appid === "1");
+    expect(overridden?.releaseDate).toBe("2026-12-25");
+    expect(overridden?.releasePrecision).toBe("exact");
+    expect(overridden?.manualReleaseOverride).toBe(true);
+
+    const standalone = items.find((item) => item.title === "GTA VI");
+    expect(standalone?.manualEntryId).toBeTruthy();
+    expect(standalone?.releaseDate).toBe("2026-11-19");
+
+    const standaloneId = standalone?.manualEntryId as string;
+    repository.removeWishlistManualEntry(standaloneId);
+    expect(repository.querySteamWishlist({}).some((item) => item.title === "GTA VI")).toBe(false);
+
+    repository.close();
+  });
 });

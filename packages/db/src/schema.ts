@@ -241,5 +241,24 @@ export const migrations = [
 
       CREATE INDEX IF NOT EXISTS idx_game_soundtracks_last_played ON game_soundtracks(last_played_at);
     `
+  },
+  {
+    id: 13,
+    sql: `
+      CREATE TABLE IF NOT EXISTS wishlist_manual_entries (
+        id TEXT PRIMARY KEY,
+        appid TEXT,
+        title TEXT NOT NULL,
+        sort_title TEXT NOT NULL,
+        cover_url TEXT,
+        release_date TEXT,
+        release_date_text TEXT,
+        release_precision TEXT NOT NULL DEFAULT 'unknown',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_wishlist_manual_appid ON wishlist_manual_entries(appid) WHERE appid IS NOT NULL;
+    `
   }
 ] as const;

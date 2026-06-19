@@ -77,7 +77,9 @@ describe("fetchSteamMetadata", () => {
       contentDescriptors: ["Violence"],
       genres: ["Action"],
       tags: ["Multiplayer"],
-      releaseDate: "2012-08-21"
+      releaseDate: "2012-08-21",
+      releaseDateText: "Aug 21, 2012",
+      releasePrecision: "exact"
     });
     expect(requestedUrls[0]).toContain("cc=de");
   });
@@ -137,8 +139,25 @@ describe("fetchSteamMetadata", () => {
       developers: ["Studio A"],
       publishers: ["Publisher B"],
       releaseDate: "2025-12-01",
+      releasePrecision: "exact",
       websiteUrl: "https://example.test"
     });
+  });
+
+  it("carries fuzzy month/year release precision through the app details patch", () => {
+    const monthPatch = metadataFromSteamAppDetailsResponse("1", {
+      "1": { success: true, data: { name: "Fuzzy Month", release_date: { date: "May 2026" } } }
+    } as never);
+    expect(monthPatch.releaseDate).toBeUndefined();
+    expect(monthPatch.releaseDateText).toBe("May 2026");
+    expect(monthPatch.releasePrecision).toBe("month");
+
+    const yearPatch = metadataFromSteamAppDetailsResponse("2", {
+      "2": { success: true, data: { name: "Fuzzy Year", release_date: { date: "2027" } } }
+    } as never);
+    expect(yearPatch.releaseDate).toBeUndefined();
+    expect(yearPatch.releaseDateText).toBe("2027");
+    expect(yearPatch.releasePrecision).toBe("year");
   });
 
   it("falls back to reachable non-2x appinfo library capsule assets", async () => {
@@ -208,5 +227,23 @@ describe("fetchSteamMetadata", () => {
     expect(parseSteamStoreReleaseDate("May 2026")).toEqual({ text: "May 2026", precision: "month" });
     expect(parseSteamStoreReleaseDate("2027")).toEqual({ text: "2027", precision: "year" });
     expect(parseSteamStoreReleaseDate("Coming soon")).toEqual({ text: "Coming soon", precision: "unknown" });
+  });
+
+  it("parses day-first English release dates (cc=de&l=english format)", () => {
+    expect(parseSteamStoreReleaseDate("17 Jul, 2026")).toEqual({
+      date: "2026-07-17",
+      text: "17 Jul, 2026",
+      precision: "exact"
+    });
+    expect(parseSteamStoreReleaseDate("4 Aug, 2026")).toEqual({
+      date: "2026-08-04",
+      text: "4 Aug, 2026",
+      precision: "exact"
+    });
+    expect(parseSteamStoreReleaseDate("21 August 2012")).toEqual({
+      date: "2012-08-21",
+      text: "21 August 2012",
+      precision: "exact"
+    });
   });
 });

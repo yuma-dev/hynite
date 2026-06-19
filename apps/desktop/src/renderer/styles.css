@@ -7956,6 +7956,242 @@ dd {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.04));
 }
 
+.wishlist-month-marker.fuzzy {
+  color: rgba(154, 184, 255, 0.92);
+}
+
+.wishlist-agenda-month,
+.wishlist-agenda-bucket {
+  display: grid;
+  gap: 8px;
+}
+
+.wishlist-agenda-bucket .library-grid {
+  margin-top: 8px;
+}
+
+/* Month-grid calendar */
+.wishlist-month-grid-wrap {
+  gap: 14px;
+}
+
+.wishlist-month-grid-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.wishlist-month-grid-title {
+  font-size: 15px;
+  font-weight: 700;
+  min-width: 180px;
+  text-align: center;
+}
+
+.wishlist-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.wishlist-month-grid-weekday {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  padding-bottom: 2px;
+}
+
+.wishlist-month-grid-cell {
+  min-height: 92px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.wishlist-month-grid-cell.empty {
+  background: transparent;
+}
+
+.wishlist-month-grid-cell.has-items {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.wishlist-month-grid-day {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.wishlist-month-grid-covers {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--cover-cols, 1), 1fr);
+  gap: 4px;
+  align-content: start;
+}
+
+.wishlist-month-grid-cover {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border-radius: 5px;
+  border: none;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  background-size: cover;
+  background-position: center;
+}
+
+.wishlist-month-grid-cover:hover {
+  outline: 2px solid rgba(120, 150, 255, 0.6);
+  outline-offset: -1px;
+}
+
+.wishlist-month-grid-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wishlist-month-grid-cover span {
+  display: none;
+}
+
+.wishlist-month-grid-more {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  text-align: center;
+}
+
+.wishlist-month-grid-undated {
+  margin-top: 6px;
+  display: grid;
+  gap: 8px;
+}
+
+/* Release-status ribbon (bottom strip on grid + calendar covers) */
+.wishlist-release-ribbon {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+  pointer-events: none;
+}
+
+.wishlist-release-ribbon-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wishlist-release-ribbon-source {
+  flex: none;
+  opacity: 0.85;
+}
+
+.wishlist-release-ribbon.out {
+  background: #1d9e75;
+  color: #04342c;
+}
+
+.wishlist-release-ribbon.soon {
+  background: #ef9f27;
+  color: #412402;
+}
+
+.wishlist-release-ribbon.upcoming {
+  background: rgba(120, 150, 255, 0.92);
+  color: #0c2150;
+  text-transform: none;
+}
+
+.wishlist-release-ribbon.tba {
+  background: rgba(120, 120, 130, 0.85);
+  color: #16161a;
+}
+
+/* Manual entry: set-date affordance on covers */
+.wishlist-cover-wrap {
+  position: relative;
+}
+
+.wishlist-set-date {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(15, 16, 19, 0.72);
+  color: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.wishlist-cover-wrap:hover .wishlist-set-date,
+.wishlist-set-date:focus-visible {
+  opacity: 1;
+}
+
+.wishlist-set-date:hover {
+  background: rgba(120, 150, 255, 0.32);
+}
+
+.wishlist-set-date.active {
+  opacity: 1;
+  border-color: rgba(120, 150, 255, 0.5);
+  color: rgb(205, 217, 255);
+}
+
+.wishlist-manual-dialog .wishlist-manual-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 12px 0 6px;
+}
+
+.wishlist-manual-dialog .wishlist-manual-label:first-child {
+  margin-top: 0;
+}
+
+.wishlist-manual-dialog .segmented-control {
+  margin-bottom: 10px;
+}
+
+.secondary-action.danger {
+  color: rgb(255, 168, 168);
+  border-color: rgba(255, 120, 120, 0.32);
+}
+
 .settings-hotkey-row {
   min-height: 42px;
   display: grid;
