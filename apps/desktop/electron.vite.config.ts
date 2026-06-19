@@ -1,6 +1,9 @@
+import { createRequire } from "node:module";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import { fileURLToPath, URL } from "node:url";
+
+const appVersion = (createRequire(import.meta.url)("./package.json") as { version: string }).version;
 
 const alias = {
   "@hynite/core": fileURLToPath(new URL("../../packages/core/src/index.ts", import.meta.url)),
@@ -47,6 +50,9 @@ export default defineConfig({
     root: fileURLToPath(new URL(".", import.meta.url)),
     publicDir: fileURLToPath(new URL("../../assets/icons", import.meta.url)),
     resolve: { alias },
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion)
+    },
     build: {
       sourcemap: true,
       rollupOptions: {

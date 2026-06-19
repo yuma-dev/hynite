@@ -2,6 +2,9 @@ import type { HyniteApi } from "../preload";
 import type { AppSettings, SettingsBackupInfo } from "@hynite/core";
 
 declare global {
+  /** Injected at build time by electron.vite.config.ts from apps/desktop package.json. */
+  const __APP_VERSION__: string;
+
   interface Window {
     hynite: HyniteApi;
     hyniteDebugSplash?: (durationMs?: number) => void;

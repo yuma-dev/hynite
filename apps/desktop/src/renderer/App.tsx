@@ -4176,8 +4176,36 @@ function deriveYearInput(draft: WishlistManualDraft): string {
   return Number.isFinite(parsed) ? String(new Date(parsed).getFullYear()) : "";
 }
 
+function prefillDateFromSteam(
+  releaseDate: string | undefined,
+  setPrecision: (value: "exact" | "month" | "year") => void,
+  setDateValue: (value: string) => void,
+  setMonthValue: (value: string) => void,
+  setYearValue: (value: string) => void
+): void {
+  const raw = releaseDate?.trim();
+  if (!raw) return;
+  const ms = Date.parse(raw);
+  if (/^\d{4}$/.test(raw)) {
+    setPrecision("year");
+    setYearValue(raw);
+  } else if (/^[A-Za-z]+\s+\d{4}$/.test(raw)) {
+    const monthMs = Date.parse(`1 ${raw}`);
+    if (Number.isFinite(monthMs)) {
+      const date = new Date(monthMs);
+      setPrecision("month");
+      setMonthValue(`${date.getFullYear()}-${twoDigit(date.getMonth() + 1)}`);
+    }
+  } else if (Number.isFinite(ms)) {
+    setPrecision("exact");
+    setDateValue(new Date(ms).toISOString().slice(0, 10));
+  }
+}
+
 function WishlistManualDialog({ draft, onClose, onSaved }: { draft: WishlistManualDraft; onClose: () => void; onSaved: () => void }) {
   const [title, setTitle] = useState(draft.title);
+  const [appId, setAppId] = useState(draft.appid);
+  const [coverUrl, setCoverUrl] = useState(draft.coverUrl);
   const [precision, setPrecision] = useState<"exact" | "month" | "year">(
     draft.releasePrecision === "month" || draft.releasePrecision === "year" ? draft.releasePrecision : "exact"
   );
@@ -4186,9 +4214,65 @@ function WishlistManualDialog({ draft, onClose, onSaved }: { draft: WishlistManu
   const [yearValue, setYearValue] = useState(() => deriveYearInput(draft));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [searchResults, setSearchResults] = useState<SteamSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const [assetOpen, setAssetOpen] = useState(false);
+  const [assetCandidates, setAssetCandidates] = useState<GameAssetCandidate[]>([]);
+  const [assetLoading, setAssetLoading] = useState(false);
+  const pickedTitleRef = useRef(draft.appid ? draft.title : "");
 
-  const isOverride = Boolean(draft.appid);
-  const heading = draft.id ? "Edit manual entry" : isOverride ? "Set release date" : "Add game to calendar";
+  // An override edits the release date of an existing wishlist game, so the
+  // title/Steam link stay fixed; standalone and new entries get full search.
+  const lockTitle = Boolean(draft.appid) && Boolean(draft.id);
+  const heading = draft.id ? "Edit calendar entry" : draft.appid ? "Set release date" : "Add game to calendar";
+
+  useEffect(() => {
+    if (lockTitle) return undefined;
+    const query = title.trim();
+    if (query.length < 2 || query === pickedTitleRef.current) {
+      setSearchResults([]);
+      return undefined;
+    }
+    setSearching(true);
+    const handle = setTimeout(() => {
+      window.hynite.steam.search(query)
+        .then((found) => { setSearchResults(found.slice(0, 6)); setShowResults(true); })
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false));
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [title, lockTitle]);
+
+  function applyResult(result: SteamSearchResult) {
+    pickedTitleRef.current = result.title;
+    setTitle(result.title);
+    setAppId(result.appId);
+    if (result.capsuleUrl) setCoverUrl(result.capsuleUrl);
+    setSearchResults([]);
+    setShowResults(false);
+    prefillDateFromSteam(result.releaseDate, setPrecision, setDateValue, setMonthValue, setYearValue);
+    void loadArtwork(result.title, result.appId, true);
+  }
+
+  async function loadArtwork(forTitle: string, forAppId: string | undefined, autoPickCover: boolean) {
+    setAssetLoading(true);
+    try {
+      const result = await window.hynite.wishlist.assetCandidates({ title: forTitle, appId: forAppId, coverUrl });
+      const covers = result.candidates.filter((candidate) => candidate.kind === "grid");
+      setAssetCandidates(covers);
+      if (autoPickCover && covers[0]) setCoverUrl(covers[0].url);
+    } catch {
+      setAssetCandidates([]);
+    } finally {
+      setAssetLoading(false);
+    }
+  }
+
+  function openArtwork() {
+    setAssetOpen(true);
+    if (assetCandidates.length === 0) void loadArtwork(title, appId, false);
+  }
 
   async function submit() {
     const trimmedTitle = title.trim();
@@ -4197,13 +4281,14 @@ function WishlistManualDialog({ draft, onClose, onSaved }: { draft: WishlistManu
       return;
     }
     let input: WishlistManualEntryInput;
+    const common = { id: draft.id, appid: appId, title: trimmedTitle, coverUrl };
     if (precision === "exact") {
       if (!dateValue) {
         setError("Pick a release date.");
         return;
       }
       const text = new Date(`${dateValue}T00:00:00`).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
-      input = { id: draft.id, appid: draft.appid, title: trimmedTitle, coverUrl: draft.coverUrl, releaseDate: dateValue, releaseDateText: text, releasePrecision: "exact" };
+      input = { ...common, releaseDate: dateValue, releaseDateText: text, releasePrecision: "exact" };
     } else if (precision === "month") {
       if (!monthValue) {
         setError("Pick a month.");
@@ -4213,14 +4298,14 @@ function WishlistManualDialog({ draft, onClose, onSaved }: { draft: WishlistManu
       const year = Number(parts[0]);
       const month = Number(parts[1] ?? "1");
       const text = new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
-      input = { id: draft.id, appid: draft.appid, title: trimmedTitle, coverUrl: draft.coverUrl, releaseDateText: text, releasePrecision: "month" };
+      input = { ...common, releaseDateText: text, releasePrecision: "month" };
     } else {
       const year = Number.parseInt(yearValue, 10);
       if (!Number.isFinite(year)) {
         setError("Enter a year.");
         return;
       }
-      input = { id: draft.id, appid: draft.appid, title: trimmedTitle, coverUrl: draft.coverUrl, releaseDateText: String(year), releasePrecision: "year" };
+      input = { ...common, releaseDateText: String(year), releasePrecision: "year" };
     }
     setSaving(true);
     setError(undefined);
@@ -4273,8 +4358,65 @@ function WishlistManualDialog({ draft, onClose, onSaved }: { draft: WishlistManu
           </button>
         </div>
         <div className="name-dialog-body">
-          <label className="wishlist-manual-label">Game title</label>
-          <input className="plain-input" value={title} autoFocus disabled={isOverride} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Grand Theft Auto VI" />
+          <div className="wishlist-manual-top">
+            <button type="button" className="wishlist-manual-cover" onClick={openArtwork} title="Find artwork">
+              {coverUrl ? <img src={coverUrl} alt="" /> : <span><Images size={18} />Cover</span>}
+            </button>
+            <div className="wishlist-manual-top-fields">
+              <label className="wishlist-manual-label">Game title{appId ? <span className="wishlist-manual-linked"><BootstrapSteamIcon size={11} /> Steam</span> : null}</label>
+              <div className="wishlist-manual-search">
+                <input
+                  className="plain-input"
+                  value={title}
+                  autoFocus
+                  disabled={lockTitle}
+                  onChange={(event) => { setTitle(event.target.value); setAppId(undefined); setShowResults(true); }}
+                  onFocus={() => { if (searchResults.length) setShowResults(true); }}
+                  placeholder="Search Steam, or type any game…"
+                />
+                {showResults && searchResults.length > 0 ? (
+                  <div className="wishlist-search-results">
+                    {searchResults.map((result) => (
+                      <button key={result.appId} type="button" className="wishlist-search-result" onClick={() => applyResult(result)}>
+                        <img src={result.capsuleUrl} alt="" loading="lazy" />
+                        <span className="wishlist-search-result-info">
+                          <strong>{result.title}</strong>
+                          {result.releaseDate ? <em>{result.releaseDate}</em> : null}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <button type="button" className="wishlist-manual-artwork-link" onClick={openArtwork}>
+                {searching ? "Searching Steam…" : "Find artwork"}
+              </button>
+            </div>
+          </div>
+
+          {assetOpen ? (
+            <div className="wishlist-manual-assets">
+              {assetLoading ? (
+                <div className="asset-loading"><RefreshCw size={16} /> Loading artwork</div>
+              ) : assetCandidates.length ? (
+                <div className="asset-candidate-grid"><div className="asset-candidate-columns">
+                  {assetCandidates.slice(0, 18).map((candidate) => (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      className={coverUrl === candidate.url ? "selected" : undefined}
+                      onClick={() => { setCoverUrl(candidate.url); setAssetOpen(false); }}
+                    >
+                      <span className="asset-candidate-image"><img src={candidate.thumbnailUrl ?? candidate.url} alt="" loading="lazy" /></span>
+                      <span className="asset-candidate-meta"><strong>{providerLabel(candidate.provider)}</strong></span>
+                    </button>
+                  ))}
+                </div></div>
+              ) : (
+                <p className="muted">No artwork found{appId ? "" : " — add a SteamGridDB key in settings for non-Steam covers"}.</p>
+              )}
+            </div>
+          ) : null}
 
           <label className="wishlist-manual-label">Release date</label>
           <div className="segmented-control">
@@ -4293,7 +4435,7 @@ function WishlistManualDialog({ draft, onClose, onSaved }: { draft: WishlistManu
           {error ? <p className="form-error">{error}</p> : null}
           <div className="settings-actions">
             <button className="primary-action" type="submit" disabled={saving}>
-              {saving ? "Saving" : draft.id ? "Save" : isOverride ? "Set date" : "Add game"}
+              {saving ? "Saving" : draft.id ? "Save" : draft.appid ? "Set date" : "Add game"}
             </button>
             {draft.id ? (
               <button className="secondary-action danger" type="button" onClick={() => void remove()} disabled={saving}>
@@ -10433,7 +10575,7 @@ function LauncherShell() {
           />
           <strong>{cardsPerRow}</strong>
         </label>
-        <span>v0.1.0</span>
+        <span>v{__APP_VERSION__}</span>
         {musicStatus.settingsEnabled && musicStatus.hasTracks && musicStatus.active && musicStatus.pauseReason && musicStatus.pauseReason !== "muted" && (
           <span className="music-pause-chip">
             <Music2 size={10} />

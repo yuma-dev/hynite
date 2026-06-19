@@ -11,7 +11,7 @@ import { discoverInstalledSteamApps, hashFolderPath, readLoginUsers, SteamImport
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SpotlightCommand, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SteamStoreEmbedInfo, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery, type WishlistManualEntryInput } from "@hynite/core";
+import { makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SpotlightCommand, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SteamStoreEmbedInfo, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery, type WishlistManualEntryInput } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -4154,6 +4154,27 @@ function registerIpc(): void {
     return steamWishlistService.sync({ refreshStaleMetadata: true });
   });
   handleIpc("wishlist:diagnostics", () => steamWishlistService.diagnostics());
+  handleIpc("wishlist:asset-candidates", async (_event, input: { title: string; appId?: string; coverUrl?: string }) => {
+    const title = input.title?.trim() || "Untitled";
+    const appId = input.appId?.trim();
+    const game: Game = {
+      id: appId ? makeGameId("steam", appId) : `manual-search:${makeSortTitle(title)}`,
+      title,
+      sortTitle: makeSortTitle(title),
+      sourceIds: appId ? [{ provider: "steam", externalId: appId }] : [],
+      installState: "unknown",
+      coverUrl: input.coverUrl,
+      screenshots: [],
+      contentDescriptors: [],
+      genres: [],
+      tags: [],
+      playerModes: [],
+      developers: [],
+      publishers: [],
+      metadataStatus: "partial"
+    };
+    return getAssetCandidates(game);
+  });
   handleIpc("wishlist:manual-list", () => steamWishlistService.listManualEntries());
   handleIpc("wishlist:manual-upsert", (_event, input: WishlistManualEntryInput) => steamWishlistService.upsertManualEntry(input));
   handleIpc("wishlist:manual-remove", (_event, id: string) => {

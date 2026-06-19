@@ -90,6 +90,7 @@ const api = {
     calendar: (query: WishlistCalendarQuery): Promise<SteamWishlistItem[]> => ipcRenderer.invoke("wishlist:calendar", query),
     refresh: (): Promise<SyncResult> => ipcRenderer.invoke("wishlist:refresh"),
     diagnostics: (): Promise<WishlistDiagnostics> => ipcRenderer.invoke("wishlist:diagnostics"),
+    assetCandidates: (input: { title: string; appId?: string; coverUrl?: string }): Promise<GameAssetCandidateResult> => ipcRenderer.invoke("wishlist:asset-candidates", input),
     manualList: (): Promise<WishlistManualEntry[]> => ipcRenderer.invoke("wishlist:manual-list"),
     manualUpsert: (input: WishlistManualEntryInput): Promise<WishlistManualEntry> => ipcRenderer.invoke("wishlist:manual-upsert", input),
     manualRemove: (id: string): Promise<{ removed: boolean }> => ipcRenderer.invoke("wishlist:manual-remove", id)
