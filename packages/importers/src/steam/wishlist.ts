@@ -79,18 +79,53 @@ function parseWishlistItems(json: unknown): ImportedSteamWishlistItem[] {
   throw new Error("Steam returned no parseable wishlist items.");
 }
 
+function wishlistSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Steam wishlist sync cancelled."));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(new Error("Steam wishlist sync cancelled."));
+      },
+      { once: true }
+    );
+  });
+}
+
 export async function fetchSteamWishlist(options: SteamWishlistOptions): Promise<ImportedSteamWishlistItem[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const params = new URLSearchParams({
     steamid: options.steamId,
     format: "json"
   });
-  const response = await fetchImpl(`https://api.steampowered.com/IWishlistService/GetWishlist/v1/?${params.toString()}`, {
-    signal: options.signal
-  });
-  if (!response.ok) {
+  const url = `https://api.steampowered.com/IWishlistService/GetWishlist/v1/?${params.toString()}`;
+
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetchImpl(url, { signal: options.signal });
+    if (response.ok) {
+      return parseWishlistItems(await response.json());
+    }
+
+    // Steam rate-limits this endpoint with 429; back off (honouring Retry-After)
+    // and retry rather than failing the whole sync on a transient throttle.
+    if (response.status === 429 && attempt < maxAttempts) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** (attempt - 1);
+      await wishlistSleep(Math.min(backoffMs, 30000), options.signal);
+      continue;
+    }
+
+    if (response.status === 429) {
+      throw new Error("Steam is rate-limiting wishlist requests (HTTP 429). Your cached wishlist is kept; try again in a few minutes.");
+    }
     throw new Error(`Steam wishlist request failed with ${response.status}.`);
   }
 
-  return parseWishlistItems(await response.json());
+  throw new Error("Steam wishlist request failed after repeated rate-limiting (HTTP 429).");
 }
