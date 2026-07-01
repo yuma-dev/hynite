@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clipboard,
+  AlertTriangle,
   Check,
   Clock3,
   Crop,
@@ -57,7 +58,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { defaultHomeLayout, defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeLayout, type HomeModel, type HomeModule, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OstSettings, type OstSourceMode, type GameSoundtrack, type YtdlpStatus, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceImportResult, type SourceMatch, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistDiagnostics, type WishlistManualEntry, type WishlistManualEntryInput, type WishlistReleasePrecision, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
+import { defaultHomeLayout, defaultLibraryView, defaultWishlistView, gameActivityTime, makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type BackgroundWorkload, type ControllerActionId, type ControllerButtonBinding, type ControllerSettings, type DownloadSourceInfo, type Game, type GameAssetCandidate, type GameAssetKind, type GameAssetProvider, type GameAssetUpdate, type GameDetail, type GameGroup, type HomeLayout, type HomeModel, type HomeModule, type InstallState, type LibraryDateFilter, type LibraryFilters, type LibraryOwnership, type LibrarySortField, type LibrarySortDirection, type LibraryView, type ManualGameGroup, type MusicSettings, type OstSettings, type OstSourceMode, type GameSoundtrack, type YtdlpStatus, type OnboardingState, type PlayerMode, type ProviderId, type SettingsBackupInfo, type SettingsHealthWarning, type SoundEffectId, type SoundEffectPlayback, type SoundEffectSettings, type SoundSettings, type SourceExactMatch, type SourceFetchDiagnostic, type SourceImportResult, type SourceMatch, type SourceRefreshStatus, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamSearchResult, type SteamStoreEmbedInfo, type SteamWishlistItem, type SyncStatus, type WishlistDiagnostics, type WishlistManualEntry, type WishlistManualEntryInput, type WishlistReleasePrecision, type WishlistSortField, type WishlistView, type WishlistViewMode } from "@hynite/core";
 import { closestCenter, DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { adjustCardsPerRow, AddModuleButton, HomeEditBar, HomeEmptyState, HomeGridBlock, ModuleConfigPanel, ModuleEditChrome, SortableModule, newDraftModule, resolveLayout, resolveModuleGames, type HomeResolveContext } from "./homeModules";
@@ -340,7 +341,19 @@ function BrandLogo({ className, sizes }: { className?: string; sizes: string }) 
   );
 }
 
-function TitleBar({ onEnterBigPicture }: { onEnterBigPicture: () => void }) {
+function TitleBar({
+  onEnterBigPicture,
+  steamActive = false,
+  steamNav,
+  onSteamBack,
+  onSteamForward
+}: {
+  onEnterBigPicture: () => void;
+  steamActive?: boolean;
+  steamNav?: { canGoBack: boolean; canGoForward: boolean };
+  onSteamBack?: () => void;
+  onSteamForward?: () => void;
+}) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -350,6 +363,32 @@ function TitleBar({ onEnterBigPicture }: { onEnterBigPicture: () => void }) {
 
   return (
     <header className="titlebar">
+      {steamActive ? (
+        <div className="titlebar-nav">
+          <button
+            type="button"
+            className="titlebar-btn"
+            tabIndex={-1}
+            onClick={onSteamBack}
+            disabled={!steamNav?.canGoBack}
+            aria-label="Back"
+            title="Back"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <button
+            type="button"
+            className="titlebar-btn"
+            tabIndex={-1}
+            onClick={onSteamForward}
+            disabled={!steamNav?.canGoForward}
+            aria-label="Forward"
+            title="Forward"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      ) : null}
       <span className="titlebar-drag" />
       <div className="titlebar-controls">
         <button
@@ -790,6 +829,10 @@ type SteamWebviewElement = HTMLElement & {
   loadURL(url: string): void;
   insertCSS(css: string): Promise<string>;
   executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
+  canGoBack(): boolean;
+  canGoForward(): boolean;
+  goBack(): void;
+  goForward(): void;
 };
 
 const STEAM_STORE_THEME_CSS = `
@@ -824,7 +867,6 @@ const STEAM_STORE_THEME_CSS = `
     border-radius: 999px !important;
   }
 
-  #global_header,
   .banner_open_in_steam {
     display: none !important;
     width: 0 !important;
@@ -834,6 +876,14 @@ const STEAM_STORE_THEME_CSS = `
     margin: 0 !important;
     padding: 0 !important;
     overflow: hidden !important;
+  }
+
+  #global_header .content {
+    height: 0 !important;
+  }
+
+  #global_actions {
+    right: -200px !important;
   }
 
   #store_header,
@@ -867,7 +917,7 @@ const STEAM_STORE_THEME_CSS = `
 
 const STEAM_STORE_PREPARE_JS = `
 (() => {
-  const selectors = "#global_header, .banner_open_in_steam";
+  const selectors = ".banner_open_in_steam, #global_header .logo, #global_header .supernav_container, a.header_installsteam_btn";
   const removeSteamChrome = () => {
     document.querySelectorAll(selectors).forEach((node) => node.remove());
   };
@@ -875,6 +925,21 @@ const STEAM_STORE_PREPARE_JS = `
   if (!window.__hyniteSteamChromeObserverInstalled && document.documentElement) {
     window.__hyniteSteamChromeObserverInstalled = true;
     new MutationObserver(removeSteamChrome).observe(document.documentElement, { childList: true, subtree: true });
+  }
+  // Mouse buttons 4/5 fire inside the guest page (the host window never sees them over a
+  // webview), so wire history back/forward here. Capture phase + the install guard keep a
+  // single handler ahead of Steam's own listeners.
+  if (!window.__hyniteNavInstalled) {
+    window.__hyniteNavInstalled = true;
+    window.addEventListener("mouseup", function (event) {
+      if (event.button === 3) {
+        event.preventDefault();
+        window.history.back();
+      } else if (event.button === 4) {
+        event.preventDefault();
+        window.history.forward();
+      }
+    }, true);
   }
 })();
 `;
@@ -2320,11 +2385,15 @@ function emptyHomeModel(): HomeModel {
 function SteamStoreScreen({
   settings,
   onSettingsChanged,
-  onOpenSettings
+  onOpenSettings,
+  onNavStateChange,
+  onNavReady
 }: {
   settings?: AppSettings;
   onSettingsChanged: (settings: AppSettings) => void;
   onOpenSettings: () => void;
+  onNavStateChange?: (state: { canGoBack: boolean; canGoForward: boolean }) => void;
+  onNavReady?: (controls: { goBack: () => void; goForward: () => void } | null) => void;
 }) {
   const webviewRef = useRef<SteamWebviewElement | null>(null);
   const [info, setInfo] = useState<SteamStoreEmbedInfo | undefined>();
@@ -2406,6 +2475,14 @@ function SteamStoreScreen({
       return;
     }
 
+    const updateNavState = () => {
+      try {
+        onNavStateChange?.({ canGoBack: webview.canGoBack(), canGoForward: webview.canGoForward() });
+      } catch {
+        // canGoBack/canGoForward can throw before the guest attaches; ignore
+      }
+    };
+
     const handleStart = () => {
       navigationTokenRef.current += 1;
       if (!hasPreparedOnceRef.current) {
@@ -2427,6 +2504,7 @@ function SteamStoreScreen({
           hasPreparedOnceRef.current = true;
           setPageReady(true);
           setLoadError(undefined);
+          updateNavState();
           captureSession();
         })
         .catch((error: unknown) => {
@@ -2481,6 +2559,8 @@ function SteamStoreScreen({
     webview.addEventListener("did-fail-load", handleFail);
     webview.addEventListener("will-navigate", handleNavigation);
     webview.addEventListener("new-window", handleNewWindow);
+    webview.addEventListener("did-navigate", updateNavState);
+    webview.addEventListener("did-navigate-in-page", updateNavState);
     return () => {
       webview.removeEventListener("did-start-loading", handleStart);
       webview.removeEventListener("dom-ready", handleDomReady);
@@ -2488,8 +2568,10 @@ function SteamStoreScreen({
       webview.removeEventListener("did-fail-load", handleFail);
       webview.removeEventListener("will-navigate", handleNavigation);
       webview.removeEventListener("new-window", handleNewWindow);
+      webview.removeEventListener("did-navigate", updateNavState);
+      webview.removeEventListener("did-navigate-in-page", updateNavState);
     };
-  }, [captureSession, info?.available, info?.available ? info.partition : undefined, refreshKey]);
+  }, [captureSession, info?.available, info?.available ? info.partition : undefined, refreshKey, onNavStateChange]);
 
   const reload = useCallback(() => {
     setLoadError(undefined);
@@ -2503,6 +2585,30 @@ function SteamStoreScreen({
       setRefreshKey((current) => current + 1);
     }
   }, []);
+
+  const goBack = useCallback(() => {
+    const webview = webviewRef.current;
+    if (webview?.canGoBack()) {
+      webview.goBack();
+    }
+  }, []);
+
+  const goForward = useCallback(() => {
+    const webview = webviewRef.current;
+    if (webview?.canGoForward()) {
+      webview.goForward();
+    }
+  }, []);
+
+  // Expose the nav controls to the title bar while this screen is mounted; reset its
+  // back/forward state on unmount so the buttons disappear when leaving the Steam page.
+  useEffect(() => {
+    onNavReady?.({ goBack, goForward });
+    return () => {
+      onNavReady?.(null);
+      onNavStateChange?.({ canGoBack: false, canGoForward: false });
+    };
+  }, [onNavReady, onNavStateChange, goBack, goForward]);
 
   if (!info) {
     return (
@@ -4450,6 +4556,63 @@ function WishlistManualDialog({ draft, onClose, onSaved }: { draft: WishlistManu
   );
 }
 
+// Identifies which auto-fetch is in flight: a new add, or refreshing a source by id.
+type FetchTarget = { kind: "add" } | { kind: "refresh"; sourceId: string };
+
+function sameFetchTarget(a: FetchTarget | undefined, b: FetchTarget): boolean {
+  if (!a) return false;
+  if (a.kind === "add" && b.kind === "add") return true;
+  return a.kind === "refresh" && b.kind === "refresh" && a.sourceId === b.sourceId;
+}
+
+// Live, timestamped diagnostics for an in-app source fetch. This panel is the
+// "test surface": when you solve the human check, every step shows up here, so a
+// success or the exact failure point is visible instantly.
+function SourceFetchPanel({
+  diagnostics,
+  running,
+  error,
+  result
+}: {
+  diagnostics: SourceFetchDiagnostic[];
+  running: boolean;
+  error?: string;
+  result?: SourceImportResult;
+}) {
+  const logRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [diagnostics.length]);
+
+  if (diagnostics.length === 0 && !error && !result) {
+    return null;
+  }
+
+  return (
+    <div className="source-fetch-panel">
+      <div className="source-fetch-log" ref={logRef}>
+        {diagnostics.map((d) => (
+          <div className={`source-fetch-line phase-${d.phase}`} key={d.seq}>
+            <span className="source-fetch-time">+{(d.at / 1000).toFixed(1)}s</span>
+            <span className="source-fetch-phase">{d.phase}</span>
+            <span className="source-fetch-msg">
+              {d.message}
+              {d.detail ? <em> — {d.detail}</em> : null}
+            </span>
+          </div>
+        ))}
+      </div>
+      {running && <p className="muted source-fetch-status">Working… solve the human check in the popup window if prompted, then wait.</p>}
+      {error && <p className="error-line">{error}</p>}
+      {result && (
+        <p className="result-line">
+          Saved <strong>{result.name}</strong> — {result.importedEntries.toLocaleString()} entries imported, {result.skippedEntries} skipped.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function SourcesScreen() {
   const [sources, setSources] = useState<DownloadSourceInfo[]>([]);
   const [addUrl, setAddUrl] = useState("");
@@ -4467,13 +4630,83 @@ function SourcesScreen() {
   const [matches, setMatches] = useState<SourceMatch[]>([]);
   const [searchError, setSearchError] = useState<string | undefined>();
 
+  // Auto-fetch (in-app browser) state. Only one fetch runs at a time.
+  const [fetchTarget, setFetchTarget] = useState<FetchTarget | undefined>();
+  // Which card the most recent fetch belongs to — kept after completion so the
+  // result/error panel stays pinned to the right card.
+  const [lastFetchTarget, setLastFetchTarget] = useState<FetchTarget | undefined>();
+  const [fetchDiagnostics, setFetchDiagnostics] = useState<SourceFetchDiagnostic[]>([]);
+  const [fetchError, setFetchError] = useState<string | undefined>();
+  const [fetchResult, setFetchResult] = useState<SourceImportResult | undefined>();
+  const fetchRunning = fetchTarget !== undefined;
+
+  // Daily auto-refresh status (per-source: ok / needs-verification / error).
+  const [refreshStatus, setRefreshStatus] = useState<SourceRefreshStatus | undefined>();
+  const refreshEntriesById = useMemo(() => {
+    const map = new Map<string, SourceRefreshStatus["entries"][number]>();
+    for (const entry of refreshStatus?.entries ?? []) map.set(entry.id, entry);
+    return map;
+  }, [refreshStatus]);
+  const attentionEntries = (refreshStatus?.entries ?? []).filter((e) => e.state !== "ok");
+
   useEffect(() => {
     void window.hynite.sources.list().then(setSources).catch(console.error);
+    void window.hynite.sources.refreshStatus().then(setRefreshStatus).catch(() => undefined);
   }, []);
+
+  // Stream live diagnostics from the main-process fetch into the panel.
+  useEffect(() => {
+    return window.hynite.sources.onFetchProgress((diagnostic) => {
+      setFetchDiagnostics((current) => [...current, diagnostic]);
+    });
+  }, []);
+
+  // Keep per-source status fresh as the daily sweep reports progress.
+  useEffect(() => {
+    return window.hynite.sources.onRefreshStatus(setRefreshStatus);
+  }, []);
+
+  function verifyAndRefresh(sourceId: string) {
+    const source = sources.find((s) => s.id === sourceId);
+    if (source?.url) void runAutoFetch({ kind: "refresh", sourceId }, source.url);
+  }
 
   async function reloadSources() {
     sourceAvailabilityCache.clear();
     setSources(await window.hynite.sources.list());
+  }
+
+  async function runAutoFetch(target: FetchTarget, url: string) {
+    if (fetchRunning) return;
+    setFetchTarget(target);
+    setLastFetchTarget(target);
+    setFetchDiagnostics([]);
+    setFetchError(undefined);
+    setFetchResult(undefined);
+    try {
+      const result = await window.hynite.sources.fetchAndImport({
+        url,
+        sourceId: target.kind === "refresh" ? target.sourceId : undefined
+      });
+      setFetchResult(result);
+      if (target.kind === "add") {
+        setAddUrl("");
+        setAddPhase("idle");
+        if (addJsonRef.current) addJsonRef.current.value = "";
+      }
+      await reloadSources();
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Fetch failed.");
+    } finally {
+      setFetchTarget(undefined);
+    }
+  }
+
+  const [sessionReset, setSessionReset] = useState(false);
+  async function resetBotCheckSession() {
+    await window.hynite.sources.clearFetchSession();
+    setSessionReset(true);
+    window.setTimeout(() => setSessionReset(false), 4000);
   }
 
   function openAddUrl() {
@@ -4573,62 +4806,137 @@ function SourcesScreen() {
         <p>Hydra-compatible JSON sources for download links.</p>
       </div>
 
+      {attentionEntries.length > 0 && (
+        <section className="source-attention-banner">
+          <div className="source-attention-head">
+            <AlertTriangle size={16} />
+            <strong>{attentionEntries.length} source{attentionEntries.length === 1 ? "" : "s"} need attention</strong>
+            <span className="muted">
+              {refreshStatus?.lastRunAt ? `Auto-refresh last ran ${formatDate(refreshStatus.lastRunAt)}` : "Daily auto-refresh"}
+            </span>
+          </div>
+          {attentionEntries.map((entry) => (
+            <div className="source-attention-row" key={entry.id}>
+              <div className="source-attention-info">
+                <strong>{entry.name}</strong>
+                <span className="muted">
+                  {entry.state === "needs-verification"
+                    ? "Needs manual verification — open it and pass the human check."
+                    : `Couldn't refresh: ${entry.message ?? "unknown error"}`}
+                </span>
+              </div>
+              <button className="primary-action" disabled={fetchRunning} onClick={() => verifyAndRefresh(entry.id)}>
+                <RefreshCw size={14} />
+                {fetchTarget?.kind === "refresh" && fetchTarget.sourceId === entry.id ? "Opening…" : "Verify & refresh"}
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+
       <section className="source-add-section source-panel">
         <h2>Add source</h2>
-        <p className="muted source-add-hint">Enter a URL, open it in your browser, then paste the JSON back here.</p>
+        <p className="muted source-add-hint">
+          Enter a URL and hit Fetch. A built-in browser opens — solve the human check if asked, and the JSON is pulled in automatically.
+          {" "}
+          <button type="button" className="link-button" disabled={fetchRunning} onClick={() => void resetBotCheckSession()}>
+            {sessionReset ? "Bot-check session cleared ✓" : "Reset bot-check session"}
+          </button>
+        </p>
         <div className="source-url-row">
           <input
             className="plain-input"
             value={addUrl}
             onChange={(e) => setAddUrl(e.target.value)}
             placeholder="https://example.com/source.json"
-            onKeyDown={(e) => { if (e.key === "Enter" && addUrl.trim() && addPhase === "idle") openAddUrl(); }}
+            disabled={fetchRunning}
+            onKeyDown={(e) => { if (e.key === "Enter" && addUrl.trim() && !fetchRunning) void runAutoFetch({ kind: "add" }, addUrl.trim()); }}
           />
-          {addPhase === "idle" ? (
-            <button className="icon-action" disabled={!addUrl.trim()} onClick={openAddUrl}>
-              <ExternalLink size={14} />
-              Open in browser
-            </button>
-          ) : (
-            <button className="icon-action" onClick={cancelAdd}>
-              <X size={14} />
-              Cancel
-            </button>
-          )}
+          <button
+            className="primary-action"
+            disabled={!addUrl.trim() || fetchRunning}
+            onClick={() => void runAutoFetch({ kind: "add" }, addUrl.trim())}
+          >
+            <RefreshCw size={14} />
+            {fetchTarget?.kind === "add" ? "Fetching…" : "Fetch"}
+          </button>
         </div>
-        {addPhase === "open" && (
-          <div className="source-paste-area">
-            <textarea
-              ref={addJsonRef}
-              placeholder="Paste the JSON from the page here…"
-              autoFocus
-            />
-            <div className="source-actions">
-              <button className="primary-action" disabled={addSaving} onClick={() => void saveAddJson()}>
-                {addSaving ? "Saving…" : "Save source"}
+        {(fetchTarget ?? lastFetchTarget)?.kind === "add" ? (
+          <SourceFetchPanel
+            diagnostics={fetchDiagnostics}
+            running={fetchTarget?.kind === "add"}
+            error={fetchTarget ? undefined : fetchError}
+            result={fetchTarget ? undefined : fetchResult}
+          />
+        ) : null}
+
+        <details className="source-manual-fallback">
+          <summary>Paste JSON manually instead</summary>
+          <div className="source-url-row">
+            {addPhase === "idle" ? (
+              <button className="icon-action" disabled={!addUrl.trim()} onClick={openAddUrl}>
+                <ExternalLink size={14} />
+                Open in external browser
               </button>
-            </div>
-            {addError && <p className="error-line">{addError}</p>}
+            ) : (
+              <button className="icon-action" onClick={cancelAdd}>
+                <X size={14} />
+                Cancel
+              </button>
+            )}
           </div>
-        )}
-        {addResult && (
-          <p className="result-line">
-            Saved <strong>{addResult.name}</strong> — {addResult.importedEntries.toLocaleString()} entries imported, {addResult.skippedEntries} skipped.
-          </p>
-        )}
+          {addPhase === "open" && (
+            <div className="source-paste-area">
+              <textarea
+                ref={addJsonRef}
+                placeholder="Paste the JSON from the page here…"
+                autoFocus
+              />
+              <div className="source-actions">
+                <button className="primary-action" disabled={addSaving} onClick={() => void saveAddJson()}>
+                  {addSaving ? "Saving…" : "Save source"}
+                </button>
+              </div>
+              {addError && <p className="error-line">{addError}</p>}
+            </div>
+          )}
+          {addResult && (
+            <p className="result-line">
+              Saved <strong>{addResult.name}</strong> — {addResult.importedEntries.toLocaleString()} entries imported, {addResult.skippedEntries} skipped.
+            </p>
+          )}
+        </details>
       </section>
 
       {sources.length > 0 && (
         <section className="source-active">
           <div className="section-head">
             <h2>Active sources</h2>
+            <button
+              className="icon-action"
+              title="Refresh every source now"
+              disabled={fetchRunning || refreshStatus?.running}
+              onClick={() => void window.hynite.sources.refreshAllNow()}
+            >
+              <RefreshCw size={14} />
+              {refreshStatus?.running ? "Checking…" : "Check all now"}
+            </button>
           </div>
           <div className="source-list">
-            {sources.map((source) => (
+            {sources.map((source) => {
+              const status = refreshEntriesById.get(source.id);
+              return (
               <div className="source-card" key={source.id}>
                 <div className="source-row">
                   <div className="source-row-info">
-                    <strong>{source.name}</strong>
+                    <strong>
+                      {source.name}
+                      {status && status.state !== "ok" ? (
+                        <span className={`source-state-chip ${status.state}`} title={status.message}>
+                          {status.state === "needs-verification" ? "Needs verification" : "Refresh failed"}
+                        </span>
+                      ) : null}
+                    </strong>
                     <span>
                       {source.entryCount.toLocaleString()} entries
                       {source.url ? (
@@ -4641,48 +4949,70 @@ function SourcesScreen() {
                     </span>
                   </div>
                   <div className="source-row-actions">
-                    {source.url && refreshingId !== source.id && (
-                      <button className="icon-action" title="Refresh source" onClick={() => openRefreshUrl(source)}>
+                    {source.url && (
+                      <button
+                        className="icon-action"
+                        title="Refresh source"
+                        disabled={fetchRunning}
+                        onClick={() => void runAutoFetch({ kind: "refresh", sourceId: source.id }, source.url!)}
+                      >
                         <RefreshCw size={14} />
-                        Refresh
+                        {fetchTarget?.kind === "refresh" && fetchTarget.sourceId === source.id ? "Fetching…" : "Refresh"}
                       </button>
                     )}
-                    {source.url && refreshingId === source.id && (
-                      <button className="icon-action" onClick={cancelRefresh}>
-                        <X size={14} />
-                        Cancel
-                      </button>
-                    )}
-                    <button className="icon-action danger" title="Remove source" onClick={() => void removeSource(source.id)}>
+                    <button className="icon-action danger" title="Remove source" disabled={fetchRunning} onClick={() => void removeSource(source.id)}>
                       <X size={14} />
                     </button>
                   </div>
                 </div>
-                {refreshingId === source.id && (
-                  <div className="source-paste-area">
-                    <p className="muted source-refresh-hint">
-                      The page is open in your browser. Copy the raw JSON and paste it below.
-                    </p>
-                    <textarea
-                      ref={refreshJsonRef}
-                      placeholder="Paste the updated JSON here…"
-                      autoFocus
-                    />
-                    <div className="source-actions">
-                      <button className="primary-action" disabled={refreshSaving} onClick={() => void saveRefreshJson(source.id)}>
-                        {refreshSaving ? "Saving…" : "Update source"}
+                {sameFetchTarget(fetchTarget ?? lastFetchTarget, { kind: "refresh", sourceId: source.id }) ? (
+                  <SourceFetchPanel
+                    diagnostics={fetchDiagnostics}
+                    running={fetchTarget?.kind === "refresh" && fetchTarget.sourceId === source.id}
+                    error={fetchTarget ? undefined : fetchError}
+                    result={fetchTarget ? undefined : fetchResult}
+                  />
+                ) : null}
+                {source.url && (
+                  <details className="source-manual-fallback">
+                    <summary>Paste JSON manually instead</summary>
+                    {refreshingId !== source.id ? (
+                      <button className="icon-action" onClick={() => openRefreshUrl(source)}>
+                        <ExternalLink size={14} />
+                        Open in external browser
                       </button>
-                    </div>
-                    {refreshError && <p className="error-line">{refreshError}</p>}
-                    {refreshResult && (
-                      <p className="result-line">
-                        Updated <strong>{refreshResult.name}</strong> — {refreshResult.importedEntries.toLocaleString()} entries imported, {refreshResult.skippedEntries} skipped.
-                      </p>
+                    ) : (
+                      <div className="source-paste-area">
+                        <p className="muted source-refresh-hint">
+                          The page is open in your external browser. Copy the raw JSON and paste it below.
+                        </p>
+                        <textarea
+                          ref={refreshJsonRef}
+                          placeholder="Paste the updated JSON here…"
+                          autoFocus
+                        />
+                        <div className="source-actions">
+                          <button className="primary-action" disabled={refreshSaving} onClick={() => void saveRefreshJson(source.id)}>
+                            {refreshSaving ? "Saving…" : "Update source"}
+                          </button>
+                          <button className="icon-action" onClick={cancelRefresh}>
+                            <X size={14} />
+                            Cancel
+                          </button>
+                        </div>
+                        {refreshError && <p className="error-line">{refreshError}</p>}
+                        {refreshResult && (
+                          <p className="result-line">
+                            Updated <strong>{refreshResult.name}</strong> — {refreshResult.importedEntries.toLocaleString()} entries imported, {refreshResult.skippedEntries} skipped.
+                          </p>
+                        )}
+                      </div>
                     )}
-                  </div>
+                  </details>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}
@@ -5810,6 +6140,8 @@ function SettingsScreen({
   setSettings,
   syncStatus,
   syncBusy,
+  requestTab,
+  onRequestTabConsumed,
   onSync,
   onSeed,
   onLibraryCleared
@@ -5818,11 +6150,22 @@ function SettingsScreen({
   setSettings: (settings: AppSettings) => void;
   syncStatus?: SyncStatus;
   syncBusy: boolean;
+  requestTab?: SettingsTab;
+  onRequestTabConsumed?: () => void;
   onSync: () => void;
   onSeed: () => void;
   onLibraryCleared: () => void;
 }) {
   const [tab, setTab] = useState<SettingsTab>("steam");
+
+  // Deep-link: when the rail asks for a specific tab (e.g. clicking the sources
+  // attention badge), switch to it and clear the request.
+  useEffect(() => {
+    if (requestTab) {
+      setTab(requestTab);
+      onRequestTabConsumed?.();
+    }
+  }, [requestTab, onRequestTabConsumed]);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [steamGridDbKey, setSteamGridDbKey] = useState("");
@@ -8789,6 +9132,12 @@ function LauncherShell() {
   const detailFromSkeletonRef = useRef(false);
   const [settings, setSettings] = useState<AppSettings | undefined>();
   const [localIssueCount, setLocalIssueCount] = useState(0);
+  const [sourceRefreshStatus, setSourceRefreshStatus] = useState<SourceRefreshStatus | undefined>();
+  const sourceAttentionCount = useMemo(
+    () => (sourceRefreshStatus?.entries ?? []).filter((e) => e.state !== "ok").length,
+    [sourceRefreshStatus]
+  );
+  const [pendingSettingsTab, setPendingSettingsTab] = useState<SettingsTab | undefined>();
   const [activeGroupId, setActiveGroupIdState] = useState<string | undefined>();
   const [contextMenu, setContextMenu] = useState<GameContextMenuRequest | undefined>();
   const [nameDialog, setNameDialog] = useState<NameDialogState | undefined>();
@@ -8843,6 +9192,12 @@ function LauncherShell() {
   const [bigPicture, setBigPicture] = useState(false);
   const [bpFiltersOpen, setBpFiltersOpen] = useState(false);
   const [bpFilters, setBpFilters] = useState<LibraryFilters>({});
+  const steamNavRef = useRef<{ goBack: () => void; goForward: () => void } | null>(null);
+  const [steamNavState, setSteamNavState] = useState({ canGoBack: false, canGoForward: false });
+  const handleSteamNavReady = useCallback((controls: { goBack: () => void; goForward: () => void } | null) => {
+    steamNavRef.current = controls;
+  }, []);
+
   const bigPictureRef = useRef(false);
   const focusComboPressedRef = useRef(false);
   const contentRef = useRef<HTMLElement | null>(null);
@@ -9810,6 +10165,8 @@ function LauncherShell() {
     }
     void window.hynite.updater.status().then(setUpdaterStatus).catch(() => undefined);
     const unsubscribeUpdater = window.hynite.updater.onStatusChanged(setUpdaterStatus);
+    void window.hynite.sources.refreshStatus().then(setSourceRefreshStatus).catch(() => undefined);
+    const unsubscribeSourceRefresh = window.hynite.sources.onRefreshStatus(setSourceRefreshStatus);
     const unsubscribeSync = window.hynite.sync.onStatusChanged((status) => {
       const syncSpan = profileSpan("renderer-render", "renderer:sync-status-update", {
         active: status.active,
@@ -9869,6 +10226,7 @@ function LauncherShell() {
       unsubscribeGameUpdated();
       unsubscribeHomeUpdated();
       unsubscribeUpdater();
+      unsubscribeSourceRefresh();
     };
   }, []);
 
@@ -10308,7 +10666,7 @@ function LauncherShell() {
       return <HomeScreen home={home} settings={settings} libraryGames={allGames} libraryGameIds={libraryGameIds} wishlistItems={homeWishlistItems} groups={settings?.gameGroups ?? []} onSelect={(game) => void selectGame(game)} onOpenSettings={() => setRoute("settings")} onGameContextMenu={openGameContextMenu} onGameIntent={scheduleHomeDetailPrefetch} onLayoutChange={(next) => void persistHomeLayout(next)} discoveryLoading={homeDiscoveryLoading} />;
     }
     if (route === "steam") {
-      return <SteamStoreScreen settings={settings} onSettingsChanged={setSettings} onOpenSettings={() => setRoute("settings")} />;
+      return <SteamStoreScreen settings={settings} onSettingsChanged={setSettings} onOpenSettings={() => setRoute("settings")} onNavReady={handleSteamNavReady} onNavStateChange={setSteamNavState} />;
     }
     if (route === "library") {
       return (
@@ -10368,6 +10726,8 @@ function LauncherShell() {
         setSettings={setSettings}
         syncStatus={syncStatus}
         syncBusy={busy || Boolean(syncStatus?.active)}
+        requestTab={pendingSettingsTab}
+        onRequestTabConsumed={() => setPendingSettingsTab(undefined)}
         onSync={() => void syncSteam()}
         onLibraryCleared={() => {
           setSelected(undefined);
@@ -10376,7 +10736,7 @@ function LauncherShell() {
         onSeed={() => void window.hynite.debug.seed().then(() => refresh())}
       />
     );
-  }, [route, home, homeDiscoveryLoading, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy, cardsPerRow, wishlistCount]);
+  }, [route, home, homeDiscoveryLoading, games, allGames, activeQuery, settings, syncStatus, libraryGameIds, activeLibraryView, activeGroup, busy, cardsPerRow, wishlistCount, pendingSettingsTab]);
 
   // Dev helpers — available in the browser console:
   //   window.__fakeUpdate()       shows "Update available", click the button to simulate download
@@ -10412,7 +10772,13 @@ function LauncherShell() {
   return (
     <>
     <div className="app-shell">
-      <TitleBar onEnterBigPicture={() => setBigPicture(true)} />
+      <TitleBar
+        onEnterBigPicture={() => setBigPicture(true)}
+        steamActive={route === "steam"}
+        steamNav={steamNavState}
+        onSteamBack={() => steamNavRef.current?.goBack()}
+        onSteamForward={() => steamNavRef.current?.goForward()}
+      />
       <div className="app-body">
         <aside className="rail">
           <div className="rail-brand">
@@ -10430,6 +10796,9 @@ function LauncherShell() {
                   if (item.id === "library") {
                     setActiveGroupId(undefined);
                   }
+                  if (item.id === "settings" && sourceAttentionCount > 0) {
+                    setPendingSettingsTab("sources");
+                  }
                   setRoute(item.id);
                 }}
               >
@@ -10440,6 +10809,11 @@ function LauncherShell() {
                 {item.id === "local" && localIssueCount > 0 ? (
                   <span className="rail-issue-badge" title={`${localIssueCount} item${localIssueCount === 1 ? "" : "s"} need review`}>
                     {localIssueCount}
+                  </span>
+                ) : null}
+                {item.id === "settings" && sourceAttentionCount > 0 ? (
+                  <span className="rail-issue-badge" title={`${sourceAttentionCount} source${sourceAttentionCount === 1 ? "" : "s"} need attention`}>
+                    {sourceAttentionCount}
                   </span>
                 ) : null}
               </button>

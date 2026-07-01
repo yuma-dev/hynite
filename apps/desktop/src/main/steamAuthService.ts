@@ -144,7 +144,7 @@ type AsyncConfigResponse = {
   };
 };
 
-function decodeJwtPayload(token: string): { exp?: number; sub?: string } | undefined {
+function decodeJwtPayload(token: string): { exp?: number; iat?: number; sub?: string } | undefined {
   const segments = token.split(".");
   const payloadSegment = segments[1];
   if (!payloadSegment) {
@@ -152,7 +152,7 @@ function decodeJwtPayload(token: string): { exp?: number; sub?: string } | undef
   }
   try {
     const payload = Buffer.from(payloadSegment.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-    return JSON.parse(payload) as { exp?: number; sub?: string };
+    return JSON.parse(payload) as { exp?: number; iat?: number; sub?: string };
   } catch {
     return undefined;
   }
@@ -224,6 +224,80 @@ export async function isSteamStoreSessionLoggedIn(steamId: string): Promise<bool
   }
   const all = await partition.cookies.get({});
   return all.some((cookie) => cookie.name === "steamLoginSecure");
+}
+
+// Modern Steam issues a *per-domain* steamLoginSecure JWT — a store.steampowered.com
+// session needs its own cookie; the steamcommunity.com one is not interchangeable.
+export async function hasSteamStoreDomainSession(steamId: string): Promise<boolean> {
+  const partition = session.fromPartition(steamFamilySessionPartition(steamId));
+  const cookies = await partition.cookies.get({ name: "steamLoginSecure" });
+  return cookies.some((cookie) => (cookie.domain ?? "").replace(/^\./, "").endsWith("store.steampowered.com"));
+}
+
+// `iat` (issued-at) of a steamLoginSecure cookie's JWT, used to tell a freshly minted
+// token from a stale duplicate. The value is `STEAMID||<jwt>` (|| may be percent-encoded).
+function steamLoginIssuedAt(cookieValue: string): number {
+  try {
+    const jwt = decodeURIComponent(cookieValue).split("||")[1];
+    if (!jwt) {
+      return 0;
+    }
+    return decodeJwtPayload(jwt)?.iat ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Pairing copies one domain variant of steamLoginSecure into the family partition while
+// the live login mints another, leaving TWO steamLoginSecure cookies for the same host.
+// Both land in document.cookie, Steam reads the stale one, and the page renders logged
+// out despite a valid session. This collapses each host's steamLoginSecure down to the
+// most recently issued token (single host-only cookie). Idempotent and input-free, so it
+// can run on every store open to heal accounts paired before the fix. Returns true if it
+// changed anything.
+export async function repairSteamLoginCookies(steamId: string): Promise<boolean> {
+  const partition = session.fromPartition(steamFamilySessionPartition(steamId));
+  const cookies = await partition.cookies.get({ name: "steamLoginSecure" });
+
+  const byHost = new Map<string, Electron.Cookie[]>();
+  for (const cookie of cookies) {
+    const host = (cookie.domain ?? "").replace(/^\./, "");
+    byHost.set(host, [...(byHost.get(host) ?? []), cookie]);
+  }
+
+  let repaired = false;
+  for (const [host, hostCookies] of byHost) {
+    if (hostCookies.length <= 1) {
+      continue;
+    }
+    const winner = hostCookies.reduce((best, candidate) =>
+      steamLoginIssuedAt(candidate.value) > steamLoginIssuedAt(best.value) ? candidate : best
+    );
+    const url = `https://${host}/`;
+    try {
+      // remove(url, name) clears every steamLoginSecure on the host (host-only + wildcard),
+      // then we set a single clean host-only cookie with the freshest token back.
+      await partition.cookies.remove(url, "steamLoginSecure");
+      await partition.cookies.set({
+        url,
+        name: "steamLoginSecure",
+        value: winner.value,
+        domain: host,
+        path: winner.path ?? "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: winner.sameSite ?? "no_restriction",
+        // Preserve the original expiry — omitting it makes a session cookie that is
+        // wiped on restart, which silently logs the store back out next launch.
+        ...(winner.session ? {} : { expirationDate: winner.expirationDate })
+      });
+      repaired = true;
+      console.info(`[steam:repair] collapsed ${hostCookies.length} steamLoginSecure cookies on ${host} to newest`);
+    } catch (error) {
+      console.warn(`[steam:repair] could not repair steamLoginSecure on ${host}:`, error);
+    }
+  }
+  return repaired;
 }
 
 function asyncConfigToResult(response: AsyncConfigResponse | undefined): SteamFamilyAuthResult | undefined {

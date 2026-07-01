@@ -20,8 +20,11 @@ import type {
   SettingsHealthWarning,
   SourceExactMatch,
   SourceExactMatchBatch,
+  SourceFetchDiagnostic,
+  SourceFetchInput,
   SourceImportInput,
   SourceImportResult,
+  SourceRefreshStatus,
   SourceMatch,
   SourceSearchOptions,
   SpotlightCommand,
@@ -216,6 +219,21 @@ const api = {
     remove: (id: string): Promise<void> => ipcRenderer.invoke("sources:remove", id),
     refreshSource: (id: string, json: string): Promise<SourceImportResult> =>
       ipcRenderer.invoke("sources:refreshSource", id, json),
+    fetchAndImport: (input: SourceFetchInput): Promise<SourceImportResult> =>
+      ipcRenderer.invoke("sources:fetchAndImport", input),
+    clearFetchSession: (): Promise<void> => ipcRenderer.invoke("sources:clearFetchSession"),
+    refreshStatus: (): Promise<SourceRefreshStatus> => ipcRenderer.invoke("sources:refreshStatus"),
+    refreshAllNow: (): Promise<void> => ipcRenderer.invoke("sources:refreshAllNow"),
+    onRefreshStatus: (callback: (status: SourceRefreshStatus) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: SourceRefreshStatus) => callback(value);
+      ipcRenderer.on("sources:refreshStatus", listener);
+      return () => ipcRenderer.removeListener("sources:refreshStatus", listener);
+    },
+    onFetchProgress: (callback: (diagnostic: SourceFetchDiagnostic) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: SourceFetchDiagnostic) => callback(value);
+      ipcRenderer.on("sources:fetch-progress", listener);
+      return () => ipcRenderer.removeListener("sources:fetch-progress", listener);
+    },
     search: (gameId: string, options?: SourceSearchOptions): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:search", gameId, options),
     searchTitle: (title: string, options?: SourceSearchOptions): Promise<SourceMatch[]> => ipcRenderer.invoke("sources:searchTitle", title, options),
     exactTitleMatches: (title: string): Promise<SourceExactMatch[]> => ipcRenderer.invoke("sources:exactTitleMatches", title),

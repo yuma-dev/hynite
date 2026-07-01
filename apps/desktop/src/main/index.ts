@@ -11,7 +11,7 @@ import { discoverInstalledSteamApps, hashFolderPath, readLoginUsers, SteamImport
 import type { IdentifyCandidate, LocalScanIssue } from "@hynite/importers";
 import { LocalImportService } from "./localImportService";
 import { LaunchTracker } from "./launchTracker";
-import { makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SpotlightCommand, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SteamStoreEmbedInfo, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery, type WishlistManualEntryInput } from "@hynite/core";
+import { makeGameId, makeSortTitle, resolveLaunchableSteamAccounts, type AppSettings, type EncryptedSecret, type Game, type GameAssetCandidate, type GameAssetCandidateResult, type GameAssetKind, type GameAssetUpdate, type GameMetadataPatch, type ImportedGame, type LaunchSession, type LibraryQuery, type OnboardingState, type ProfileSpanHandle, type ProviderId, type SourceImportInput, type SourceFetchInput, type SourceFetchDiagnostic, type SpotlightCommand, type SpotlightPendingAction, type SpotlightState, type SteamAccountSettings, type SteamLocalAccount, type SteamLaunchAccountOption, type SteamSearchResult, type SteamStoreEmbedInfo, type SyncResult, type WindowBounds, type WindowState, type WishlistCalendarQuery, type WishlistListQuery, type WishlistManualEntryInput } from "@hynite/core";
 import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
@@ -22,6 +22,8 @@ import { SoundFileService } from "./soundFileService";
 import { SoundtrackService } from "./soundtrackService";
 import { YtdlpService } from "./ytdlpService";
 import { SourceService } from "./sourceService";
+import { fetchSourceViaBrowser, clearSourceFetchSession } from "./sourceFetchService";
+import { SourceRefreshService } from "./sourceRefreshService";
 import { searchSteamStore } from "./steamSearchService";
 import { SteamWishlistService } from "./steamWishlistService";
 import { StartupProfileService } from "./startupProfileService";
@@ -34,7 +36,8 @@ import { SpotlightService } from "./spotlightService";
 import {
   authenticateSteamSession,
   disconnectSteamFamilySession,
-  isSteamStoreSessionLoggedIn,
+  hasSteamStoreDomainSession,
+  repairSteamLoginCookies,
   pairSteamAccount,
   refreshSteamAccessToken,
   steamFamilySessionPartition
@@ -58,6 +61,7 @@ let repository: HyniteRepository;
 let settingsService: SettingsService;
 let homeService: HomeService;
 let sourceService: SourceService;
+let sourceRefreshService: SourceRefreshService;
 let nativeBridge: NativeBridge;
 let syncStatusService: SyncStatusService;
 let updaterService: UpdaterService;
@@ -119,6 +123,7 @@ const MIN_ONBOARDING_WINDOW_WIDTH = 760;
 const MIN_ONBOARDING_WINDOW_HEIGHT = 360;
 const MIN_VISIBLE_WINDOW_PX = 80;
 const STEAM_STORE_HOME_URL = "https://store.steampowered.com/";
+const STEAM_STORE_LOGIN_URL = "https://store.steampowered.com/login/";
 const METADATA_REFRESH_CONCURRENCY = 4;
 const RICH_METADATA_CONCURRENCY = 1;
 const RICH_METADATA_STARTUP_LIMIT = Number.POSITIVE_INFINITY;
@@ -4318,10 +4323,21 @@ function registerIpc(): void {
       };
     }
 
-    const loggedIn = await isSteamStoreSessionLoggedIn(account.steamId).catch(() => false);
+    // Self-heal duplicate steamLoginSecure cookies (pairing + live login each leave one)
+    // before the webview loads, so the store reads a single valid token instead of a stale
+    // duplicate and renders logged in. Input-free; safe to run on every open.
+    await repairSteamLoginCookies(account.steamId).catch(() => false);
+
+    // Check the store domain specifically — a steamcommunity.com cookie alone does
+    // not log the store page in (Steam issues a separate per-domain JWT).
+    const loggedIn = await hasSteamStoreDomainSession(account.steamId).catch(() => false);
+    // With no store cookie, open the login page instead of the home page: a valid
+    // steamRefresh_steam token auto-mints a fresh persistent store cookie and redirects
+    // straight to the store, with no form shown (and if the refresh token is dead, the
+    // user just sees a normal login). Either way the next open lands on the home page.
     return {
       available: true,
-      url: STEAM_STORE_HOME_URL,
+      url: loggedIn ? STEAM_STORE_HOME_URL : STEAM_STORE_LOGIN_URL,
       partition: steamFamilySessionPartition(account.steamId),
       loggedIn,
       account: {
@@ -4383,13 +4399,58 @@ function registerIpc(): void {
     if (onboardingPreview) {
       return undefined;
     }
-    return sourceService.remove(id);
+    sourceService.remove(id);
+    // Drop any attention flag for the removed source from the rail badge.
+    sourceRefreshService.pushStatus();
   });
   handleIpc("sources:refreshSource", (_event, id: string, json: string) => {
     if (onboardingPreview) {
       return { sourceId: id, name: "Preview source", importedEntries: 24, skippedEntries: 0 };
     }
     return sourceService.refreshSource(id, json);
+  });
+  handleIpc("sources:fetchAndImport", async (_event, input: SourceFetchInput) => {
+    if (onboardingPreview) {
+      return { sourceId: input.sourceId ?? "preview-source", name: "Preview source", importedEntries: 24, skippedEntries: 0 };
+    }
+    const span = profileSpan("source-search", "sources:fetch-and-import", { sourceId: input.sourceId, hasUrl: Boolean(input.url) });
+    const sendDiagnostic = (diagnostic: SourceFetchDiagnostic): void => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("sources:fetch-progress", diagnostic);
+      }
+    };
+    try {
+      const fetched = await fetchSourceViaBrowser({ url: input.url, parent: mainWindow, onDiagnostic: sendDiagnostic });
+      sendDiagnostic({ seq: -1, at: 0, phase: "importing", message: "Saving source to your library" });
+      const result = input.sourceId
+        ? sourceService.refreshSource(input.sourceId, fetched.json)
+        : await sourceService.import({ kind: "json", value: fetched.json, url: input.url });
+      // A successful interactive fetch clears any "needs verification" flag.
+      sourceRefreshService.recordManualSuccess(result.sourceId, `${result.importedEntries.toLocaleString()} entries`);
+      span.end("ok", { sourceId: result.sourceId, importedEntries: result.importedEntries, skippedEntries: result.skippedEntries });
+      return result;
+    } catch (error) {
+      span.end("error", { message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  });
+  handleIpc("sources:clearFetchSession", async () => {
+    if (onboardingPreview) {
+      return;
+    }
+    await clearSourceFetchSession();
+  });
+  handleIpc("sources:refreshStatus", () => {
+    if (onboardingPreview) {
+      return { running: false, entries: [] };
+    }
+    return sourceRefreshService.get();
+  });
+  handleIpc("sources:refreshAllNow", () => {
+    if (onboardingPreview) {
+      return;
+    }
+    void sourceRefreshService.runSweep();
   });
   handleIpc("sources:search", (_event, gameId: string, options) => {
     const span = profileSpan("source-search", "sources:search", { gameId });
@@ -4770,6 +4831,15 @@ app.whenReady().then(async () => {
     mainWindow.webContents.send("home:updated", model);
   });
   sourceService = new SourceService(repository);
+  sourceRefreshService = new SourceRefreshService(
+    repository,
+    sourceService,
+    () => mainWindow,
+    join(userData, "source-refresh-status.json")
+  );
+  if (!onboardingPreview) {
+    sourceRefreshService.start();
+  }
   spotlightService = new SpotlightService(repository);
   spotlightService.refresh();
   void refreshSpotlightCommandContext();

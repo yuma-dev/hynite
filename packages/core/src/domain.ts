@@ -338,6 +338,58 @@ export type DownloadSourceInfo = {
   lastFetchedAt?: string;
 };
 
+export type SourceFetchPhase =
+  | "opening"
+  | "loaded"
+  | "challenge"
+  | "probing"
+  | "extracting"
+  | "validating"
+  | "importing"
+  | "success"
+  | "error"
+  | "cancelled";
+
+/** One timestamped step emitted while fetching a source through the in-app browser. */
+export type SourceFetchDiagnostic = {
+  /** Monotonic id within a single fetch run, so the UI can key/order entries. */
+  seq: number;
+  /** ms since the fetch run started. */
+  at: number;
+  phase: SourceFetchPhase;
+  message: string;
+  /** Short non-sensitive detail (e.g. current URL, byte counts) — never the full JSON. */
+  detail?: string;
+};
+
+export type SourceFetchInput = {
+  url: string;
+  /** When refreshing an existing source, its id; omit to add a new source. */
+  sourceId?: string;
+};
+
+/** Outcome of the most recent (auto) refresh attempt for one source. */
+export type SourceRefreshState = "ok" | "needs-verification" | "error";
+
+export type SourceRefreshEntry = {
+  id: string;
+  name: string;
+  url?: string;
+  state: SourceRefreshState;
+  /** Human-readable detail, e.g. the error or "imported 12,000 entries". */
+  message?: string;
+  checkedAt?: string;
+};
+
+export type SourceRefreshStatus = {
+  /** True while a daily/manual auto-refresh sweep is running. */
+  running: boolean;
+  /** When the last full sweep finished. */
+  lastRunAt?: string;
+  /** Per-source outcome from the last sweep, keyed by source id. */
+  entries: SourceRefreshEntry[];
+};
+
 export type SourceMatchConfidence = "high" | "medium" | "low";
 
 export type SourceSearchOptions = {
