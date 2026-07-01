@@ -1623,7 +1623,8 @@ function GameRow({
   onSelect,
   onGameContextMenu,
   onGameIntent,
-  libraryGameIds
+  libraryGameIds,
+  onNeedMore
 }: {
   title: string;
   description?: string;
@@ -1633,6 +1634,8 @@ function GameRow({
   onGameContextMenu?: (event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>, game: Game) => void;
   onGameIntent?: (game: Game) => void;
   libraryGameIds?: Set<string>;
+  /** Called when the user scrolls past the last loaded card — fetches another batch (infinite rows). */
+  onNeedMore?: () => void;
 }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const spotlight = useSpotlightGrid(stripRef);
@@ -1660,7 +1663,9 @@ function GameRow({
     }
 
     setCanScrollLeft(strip.scrollLeft > 2);
-    setCanScrollRight(strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 2 || visibleCount < games.length);
+    setCanScrollRight(
+      strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 2 || visibleCount < games.length || Boolean(onNeedMore)
+    );
   };
 
   const revealMore = () => {
@@ -1673,8 +1678,12 @@ function GameRow({
       return;
     }
 
-    if (direction > 0 && hasMoreGames) {
-      revealMore();
+    if (direction > 0) {
+      if (hasMoreGames) {
+        revealMore();
+      } else {
+        onNeedMore?.();
+      }
     }
 
     const firstCard = strip.querySelector<HTMLElement>(".game-cover");
@@ -1690,8 +1699,12 @@ function GameRow({
       return;
     }
 
-    if (strip.scrollLeft + strip.clientWidth > strip.scrollWidth - 220 && hasMoreGames) {
-      revealMore();
+    if (strip.scrollLeft + strip.clientWidth > strip.scrollWidth - 220) {
+      if (hasMoreGames) {
+        revealMore();
+      } else {
+        onNeedMore?.();
+      }
     }
     updateScrollState();
   };
@@ -2150,13 +2163,48 @@ function HomeScreen({
   const randomSeed = useMemo(() => Math.floor(Math.random() * 0xffffffff), []);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  // Infinite discovery queue: extra batches loaded on demand as the user scrolls the queue row.
+  const [extraDiscoveryQueue, setExtraDiscoveryQueue] = useState<Game[]>([]);
+  const [queueExhausted, setQueueExhausted] = useState(false);
+  const loadingMoreQueueRef = useRef(false);
+
+  // A fresh home rebuild replaces the base queue, so drop the on-demand batches with it.
+  useEffect(() => {
+    setExtraDiscoveryQueue([]);
+    setQueueExhausted(false);
+  }, [home?.generatedAt]);
+
+  const loadMoreQueue = useCallback(async () => {
+    if (loadingMoreQueueRef.current || queueExhausted) return;
+    loadingMoreQueueRef.current = true;
+    try {
+      const more = await window.hynite.home.queueMore();
+      const seen = new Set<string>();
+      for (const game of home?.discoveryQueue ?? []) seen.add(game.id);
+      for (const game of extraDiscoveryQueue) seen.add(game.id);
+      const fresh = more.filter((game) => !seen.has(game.id));
+      if (fresh.length === 0) {
+        // Steam handed back nothing new — stop so the row doesn't spin forever.
+        setQueueExhausted(true);
+      } else {
+        setExtraDiscoveryQueue((prev) => [...prev, ...fresh]);
+      }
+    } catch (error) {
+      console.error("discovery queue load-more failed", error);
+      setQueueExhausted(true);
+    } finally {
+      loadingMoreQueueRef.current = false;
+    }
+  }, [home?.discoveryQueue, extraDiscoveryQueue, queueExhausted]);
+
   const ctx: HomeResolveContext = useMemo(() => ({
     home,
     libraryGames,
     wishlistItems,
     groups,
-    randomSeed
-  }), [home, libraryGames, wishlistItems, groups, randomSeed]);
+    randomSeed,
+    extraDiscoveryQueue
+  }), [home, libraryGames, wishlistItems, groups, randomSeed, extraDiscoveryQueue]);
 
   // Resolve once per module per ctx change. Without this the resolver returns a fresh
   // array on every render, which makes GameRow's `useEffect([games])` reset visibleCount
@@ -2260,6 +2308,7 @@ function HomeScreen({
       );
     }
     const effectiveCardsPerRow = adjustCardsPerRow(cardsPerRow, module.cardSize);
+    const isDiscoveryQueue = module.source.kind === "homeModel" && module.source.row === "discoveryQueue";
     return (
       <div className={`home-scroller size-${module.cardSize ?? "default"}`}>
         <GameRow
@@ -2270,6 +2319,7 @@ function HomeScreen({
           onGameContextMenu={onGameContextMenu}
           onGameIntent={onGameIntent}
           libraryGameIds={libraryGameIds}
+          onNeedMore={isDiscoveryQueue && !queueExhausted ? loadMoreQueue : undefined}
         />
       </div>
     );

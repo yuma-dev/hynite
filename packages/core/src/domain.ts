@@ -527,6 +527,8 @@ export type HomeModel = {
   popularNow: Game[];
   recommended: Game[];
   newAndNotable: Game[];
+  /** Personalised Steam discovery queue for the primary paired account. */
+  discoveryQueue?: Game[];
   generatedAt: string;
   stale: boolean;
   cacheVersion?: number;
@@ -538,12 +540,14 @@ export type HomeModelRowKey =
   | "popularNow"
   | "recommended"
   | "newAndNotable"
+  | "discoveryQueue"
   | "recentActivity";
 
 export type HomeModuleVisual = "hero" | "scroller" | "grid";
 
 export type HomeModuleSource =
   | { kind: "homeModel"; row: HomeModelRowKey }
+  | { kind: "discoveryMix" }
   | { kind: "wishlist" }
   | { kind: "wishlistUpcoming" }
   | { kind: "neverPlayed" }
@@ -590,7 +594,7 @@ export type HomeLayout = {
 
 export const defaultHomeLayout: HomeLayout = {
   modules: [
-    { id: "default-hero", title: "Popular now", visual: "hero", source: { kind: "homeModel", row: "popularNow" }, hideTitle: true },
+    { id: "default-hero", title: "New & recommended", visual: "hero", source: { kind: "discoveryMix" }, hideTitle: true },
     { id: "default-continue", title: "Recently played", visual: "scroller", source: { kind: "homeModel", row: "continuePlaying" } },
     { id: "default-most-played", title: "Most played", visual: "scroller", source: { kind: "homeModel", row: "mostPlayed" } }
   ]
@@ -600,9 +604,11 @@ export const HOME_MODULE_SOURCE_LABELS: Record<string, string> = {
   "homeModel:continuePlaying": "Recently played",
   "homeModel:mostPlayed": "Most played",
   "homeModel:popularNow": "Popular now",
-  "homeModel:recommended": "Recommended",
-  "homeModel:newAndNotable": "New & notable",
+  "homeModel:recommended": "Recommended for you",
+  "homeModel:newAndNotable": "Top new releases",
+  "homeModel:discoveryQueue": "Discovery queue",
   "homeModel:recentActivity": "Recent activity",
+  "discoveryMix": "New & recommended",
   "wishlist": "Wishlist",
   "wishlistUpcoming": "Upcoming wishlist",
   "neverPlayed": "Never played",

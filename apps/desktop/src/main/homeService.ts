@@ -6,6 +6,22 @@ import type { DiagnosticLogService } from "./diagnosticLogService";
 
 const HOME_LOCAL_ROW_LIMIT = 72;
 
+type DiscoveryAppIds = {
+  recommendedAppIds?: string[];
+  discoveryQueueAppIds?: string[];
+  topReleaseAppIds?: string[];
+};
+
+type HomeGetOptions = {
+  steamGridDbApiKey?: string;
+  steamAppInfoProvider?: BuildHomeOptions["steamAppInfoProvider"];
+  /**
+   * Lazily resolves the supplemental discovery appid lists. Called only when a background
+   * rebuild actually runs, so the fast cached `get()` response is never blocked on network.
+   */
+  discoveryAppIdProvider?: () => Promise<DiscoveryAppIds>;
+};
+
 export class HomeService {
   private rebuild?: Promise<void>;
   private discoveryRefreshAttemptedThisRun = false;
@@ -16,13 +32,7 @@ export class HomeService {
     private readonly onRebuilt?: (model: HomeModel) => void
   ) {}
 
-  async get(
-    games: Game[],
-    options: {
-      steamGridDbApiKey?: string;
-      steamAppInfoProvider?: BuildHomeOptions["steamAppInfoProvider"];
-    } = {}
-  ): Promise<HomeModel> {
+  async get(games: Game[], options: HomeGetOptions = {}): Promise<HomeModel> {
     const previous = await this.readCache();
     this.logDecision("home:get", "Home model requested", {
       games: games.length,
@@ -64,14 +74,7 @@ export class HomeService {
     this.discoveryRefreshAttemptedThisRun = false;
   }
 
-  private startBackgroundRebuild(
-    games: Game[],
-    previous: HomeModel | undefined,
-    options: {
-      steamGridDbApiKey?: string;
-      steamAppInfoProvider?: BuildHomeOptions["steamAppInfoProvider"];
-    }
-  ): void {
+  private startBackgroundRebuild(games: Game[], previous: HomeModel | undefined, options: HomeGetOptions): void {
     if (this.rebuild) {
       this.logDecision("home:discovery", "Home rebuild already running; returning cached/local model");
       return;
@@ -87,14 +90,7 @@ export class HomeService {
     });
   }
 
-  private async rebuildNow(
-    games: Game[],
-    previous: HomeModel | undefined,
-    options: {
-      steamGridDbApiKey?: string;
-      steamAppInfoProvider?: BuildHomeOptions["steamAppInfoProvider"];
-    }
-  ): Promise<void> {
+  private async rebuildNow(games: Game[], previous: HomeModel | undefined, options: HomeGetOptions): Promise<void> {
     try {
       this.logDecision("home:discovery", "Home background rebuild started", { games: games.length });
       const model = await this.buildAndWrite(games, previous, options);
@@ -114,17 +110,16 @@ export class HomeService {
     }
   }
 
-  private async buildAndWrite(
-    games: Game[],
-    previous: HomeModel | undefined,
-    options: {
-      steamGridDbApiKey?: string;
-      steamAppInfoProvider?: BuildHomeOptions["steamAppInfoProvider"];
-    }
-  ): Promise<HomeModel> {
+  private async buildAndWrite(games: Game[], previous: HomeModel | undefined, options: HomeGetOptions): Promise<HomeModel> {
+    const discovery: DiscoveryAppIds = options.discoveryAppIdProvider
+      ? await options.discoveryAppIdProvider().catch(() => ({}))
+      : {};
     const model = await buildHomeModel(games, fetch, previous, {
       steamGridDbApiKey: options.steamGridDbApiKey,
       steamAppInfoProvider: options.steamAppInfoProvider,
+      recommendedAppIds: discovery.recommendedAppIds,
+      discoveryQueueAppIds: discovery.discoveryQueueAppIds,
+      topReleaseAppIds: discovery.topReleaseAppIds,
       logger: (entry) => this.diagnosticLog?.log(entry)
     });
     if (!this.hasDiscovery(model)) {
@@ -152,8 +147,9 @@ export class HomeService {
     if (previous) {
       const cached = this.withDiscoveryHeaderFallbacks(previous);
       const ownedIds = this.ownedSourceIds(games);
-      const filteredPopularNow = filterHomeHeroGames(cached.popularNow)
-        .filter((game) => !this.isOwnedDiscoveryGame(game, ownedIds));
+      const cleanRow = (rows: Game[]): Game[] =>
+        filterHomeHeroGames(rows).filter((game) => !this.isOwnedDiscoveryGame(game, ownedIds));
+      const filteredPopularNow = cleanRow(cached.popularNow);
       const excluded = cached.popularNow
         .map((game) => ({ game, reason: homeHeroSafetyReason(game) }))
         .filter((item): item is { game: Game; reason: string } => Boolean(item.reason));
@@ -177,6 +173,9 @@ export class HomeService {
         ...cached,
         ...localRows,
         popularNow: filteredPopularNow,
+        recommended: cleanRow(cached.recommended),
+        newAndNotable: cleanRow(cached.newAndNotable),
+        discoveryQueue: cleanRow(cached.discoveryQueue ?? []),
         stale
       };
     }
@@ -186,6 +185,7 @@ export class HomeService {
       popularNow: [],
       recommended: [],
       newAndNotable: [],
+      discoveryQueue: [],
       generatedAt: new Date().toISOString(),
       stale: true
     };
@@ -214,7 +214,8 @@ export class HomeService {
       ...model,
       popularNow: model.popularNow.map(apply),
       recommended: model.recommended.map(apply),
-      newAndNotable: model.newAndNotable.map(apply)
+      newAndNotable: model.newAndNotable.map(apply),
+      discoveryQueue: (model.discoveryQueue ?? []).map(apply)
     };
   }
 

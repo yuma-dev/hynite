@@ -3,6 +3,21 @@ import type { Game } from "@hynite/core";
 import { SteamRateLimitError } from "@hynite/metadata";
 import { HOME_DISCOVERY_CACHE_VERSION, buildHomeModel } from "../src";
 
+// Mocks the batched IStoreBrowseService/GetItems response for the appids in a request URL.
+function storeItemsResponse(url: string): Response {
+  const inputJson = url.match(/input_json=([^&]+)/)?.[1];
+  const ids: number[] = inputJson ? (JSON.parse(decodeURIComponent(inputJson)).ids ?? []).map((entry: { appid: number }) => entry.appid) : [];
+  const store_items = ids.map((appid) => ({
+    appid,
+    name: `Game ${appid}`,
+    type: 0,
+    visible: true,
+    assets: { asset_url_format: "steam/apps/" + appid + "/" + "${FILENAME}", library_capsule: "library_600x900.jpg", header: "header.jpg" },
+    reviews: { summary_filtered: { review_score: 8, review_count: 1000, percent_positive: 90, review_score_label: "Very Positive" } }
+  }));
+  return new Response(JSON.stringify({ response: { store_items } }), { status: 200 });
+}
+
 function game(id: string, title: string): Game {
   return {
     id,
@@ -59,6 +74,80 @@ describe("recommendations", () => {
     const home = await buildHomeModel([game("steam:730", "Counter-Strike 2")], fetchMock as typeof fetch);
 
     expect(home.recommended.some((item) => item.id === "steam:730")).toBe(false);
+  });
+
+  it("builds supplemental rows from supplied appid lists with per-row signals", async () => {
+    const fetchMock = async (url: string) => {
+      const href = String(url);
+      if (href.includes("featuredcategories") || href.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+      if (href.includes("IStoreBrowseService/GetItems")) {
+        return storeItemsResponse(href);
+      }
+      return new Response("{}", { status: 200 });
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch, undefined, {
+      recommendedAppIds: ["555"],
+      discoveryQueueAppIds: ["777"],
+      topReleaseAppIds: ["666"]
+    });
+
+    expect(home.recommended.map((g) => g.id)).toContain("steam:555");
+    expect(home.recommended[0]?.discovery?.signal).toBe("Recommended for you");
+    expect(home.recommended[0]?.discovery?.sources).toContain("userdata:recommended");
+    expect(home.newAndNotable.map((g) => g.id)).toContain("steam:666");
+    expect(home.newAndNotable[0]?.discovery?.signal).toBe("Top new release");
+    expect(home.discoveryQueue?.map((g) => g.id)).toContain("steam:777");
+    expect(home.discoveryQueue?.[0]?.discovery?.signal).toBe("In your discovery queue");
+  });
+
+  it("excludes owned games from supplemental appid rows", async () => {
+    const fetchMock = async (url: string) => {
+      const href = String(url);
+      if (href.includes("featuredcategories") || href.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+      if (href.includes("IStoreBrowseService/GetItems")) {
+        return storeItemsResponse(href);
+      }
+      return new Response("{}", { status: 200 });
+    };
+
+    const home = await buildHomeModel([game("steam:730", "Counter-Strike 2")], fetchMock as typeof fetch, undefined, {
+      recommendedAppIds: ["730", "555"]
+    });
+
+    expect(home.recommended.map((g) => g.id)).not.toContain("steam:730");
+    expect(home.recommended.map((g) => g.id)).toContain("steam:555");
+  });
+
+  it("keeps the previous supplemental row when a fresh fetch returns empty", async () => {
+    const fetchMock = async (url: string) => {
+      const href = String(url);
+      if (href.includes("featuredcategories") || href.includes("/api/featured/")) {
+        return new Response(JSON.stringify({ featured_win: [] }), { status: 200 });
+      }
+      // GetItems yields nothing → the fresh discovery-queue row is empty (transient failure).
+      return new Response(JSON.stringify({ response: { store_items: [] } }), { status: 200 });
+    };
+
+    const previous = {
+      recentActivity: [],
+      continuePlaying: [],
+      mostPlayed: [],
+      popularNow: [],
+      recommended: [],
+      newAndNotable: [],
+      discoveryQueue: [game("steam:999", "Cached Queue Game")],
+      generatedAt: "2026-06-01T00:00:00.000Z",
+      stale: false
+    };
+
+    const home = await buildHomeModel([], fetchMock as typeof fetch, previous, { discoveryQueueAppIds: ["555"] });
+
+    expect(home.discoveryQueue?.map((g) => g.id)).toContain("steam:999");
   });
 
   it("builds named discovery candidates from Steam sources", async () => {

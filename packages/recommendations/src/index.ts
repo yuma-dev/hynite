@@ -76,7 +76,131 @@ export type BuildHomeOptions = {
   logger?: RecommendationLogger;
   steamAppInfoProvider?: (game: ImportedGame) => Promise<GameMetadataPatch | undefined>;
   discoverySourceFetchTimeoutMs?: number;
+  /**
+   * Personalised Steam appids for the "Recommended for you" row, pulled from the
+   * logged-in store session's dynamicstore/userdata. Ordering is Steam's own.
+   */
+  recommendedAppIds?: string[];
+  /** Personalised Steam appids for the "Discovery queue" row (generatenewdiscoveryqueue). */
+  discoveryQueueAppIds?: string[];
+  /** Curated Steam appids for the "Top new releases" row (ISteamChartsService/GetTopReleasesPages). */
+  topReleaseAppIds?: string[];
 };
+
+/** A supplemental discovery row driven by an externally supplied appid list. */
+type AppIdRowSpec = {
+  row: "recommended" | "newAndNotable" | "discoveryQueue";
+  appIds: string[];
+  sourceTag: string;
+  signal: string;
+};
+
+// Resolve metadata for at most this many appids per supplemental row; the visible row is a subset.
+const APPID_ROW_FETCH_LIMIT = 50;
+const APPID_ROW_VISIBLE_LIMIT = 20;
+const STORE_ITEM_ASSET_BASE = "https://shared.cloudflare.steamstatic.com/store_item_assets/";
+const STORE_ITEMS_BATCH_SIZE = 100;
+
+// Compact view of an IStoreBrowseService/GetItems store item — everything the supplemental
+// Home rows need (title, correct vertical capsule, review quality) in a single batched call,
+// so these rows never touch the per-appid, rate-limited enrichment pipeline.
+type StoreItemInfo = {
+  appid: string;
+  name: string;
+  type?: number;
+  visible?: boolean;
+  coverUrl?: string;
+  headerUrl?: string;
+  backgroundUrl?: string;
+  shortDescription?: string;
+  reviewScore?: number;
+  reviewCount?: number;
+  percentPositive?: number;
+  reviewLabel?: string;
+  priceText?: string;
+  originalPriceText?: string;
+  discountPercent?: number;
+  releaseDate?: string;
+  storeUrl?: string;
+};
+
+function storeAssetUrl(assetUrlFormat: string | undefined, filename: string | undefined): string | undefined {
+  if (!assetUrlFormat || !filename) {
+    return undefined;
+  }
+  return STORE_ITEM_ASSET_BASE + assetUrlFormat.replace("${FILENAME}", filename);
+}
+
+function storeItemFromResponse(raw: Record<string, any>): StoreItemInfo | undefined {
+  const appid = raw.appid ? String(raw.appid) : undefined;
+  const name = typeof raw.name === "string" ? raw.name.trim() : undefined;
+  if (!appid || !name) {
+    return undefined;
+  }
+  const assets = (raw.assets ?? {}) as Record<string, string>;
+  const fmt = assets.asset_url_format;
+  const reviews = (raw.reviews?.summary_filtered ?? {}) as Record<string, unknown>;
+  const purchase = (raw.best_purchase_option ?? {}) as Record<string, unknown>;
+  const releaseDateSeconds = raw.release?.steam_release_date;
+  const discountRaw = purchase.discount_pct;
+  const discountPercent = typeof discountRaw === "number" ? discountRaw : typeof discountRaw === "string" ? Number(discountRaw) : undefined;
+  return {
+    appid,
+    name,
+    type: typeof raw.type === "number" ? raw.type : undefined,
+    visible: raw.visible,
+    coverUrl: storeAssetUrl(fmt, assets.library_capsule_2x ?? assets.library_capsule),
+    headerUrl: storeAssetUrl(fmt, assets.header ?? assets.header_2x) ?? officialSteamHeaderUrl(appid),
+    backgroundUrl: storeAssetUrl(fmt, assets.library_hero ?? assets.library_hero_2x),
+    shortDescription: typeof raw.basic_info?.short_description === "string" ? raw.basic_info.short_description : undefined,
+    reviewScore: typeof reviews.review_score === "number" ? reviews.review_score : undefined,
+    reviewCount: typeof reviews.review_count === "number" ? reviews.review_count : undefined,
+    percentPositive: typeof reviews.percent_positive === "number" ? reviews.percent_positive : undefined,
+    reviewLabel: typeof reviews.review_score_label === "string" ? reviews.review_score_label : undefined,
+    priceText: (typeof purchase.formatted_final_price === "string" ? purchase.formatted_final_price : undefined) ?? (raw.is_free ? "Free" : undefined),
+    originalPriceText: typeof purchase.formatted_original_price === "string" ? purchase.formatted_original_price : undefined,
+    discountPercent: discountPercent && Number.isFinite(discountPercent) && discountPercent > 0 ? discountPercent : undefined,
+    releaseDate: typeof releaseDateSeconds === "number" ? new Date(releaseDateSeconds * 1000).toISOString().slice(0, 10) : undefined,
+    storeUrl: typeof raw.store_url_path === "string" ? `https://store.steampowered.com/${raw.store_url_path}` : `https://store.steampowered.com/app/${appid}`
+  };
+}
+
+// Batch-resolve titles, vertical capsule art, and review quality for a set of appids via the
+// modern storefront API. One call per 100 appids — no per-app rate limiting.
+async function fetchStoreItems(appIds: string[], fetchImpl: typeof fetch, logger?: RecommendationLogger): Promise<Map<string, StoreItemInfo>> {
+  const items = new Map<string, StoreItemInfo>();
+  for (let start = 0; start < appIds.length; start += STORE_ITEMS_BATCH_SIZE) {
+    const batch = appIds.slice(start, start + STORE_ITEMS_BATCH_SIZE);
+    const input = {
+      ids: batch.map((appid) => ({ appid: Number(appid) })),
+      context: { language: "english", country_code: "DE", steam_realm: 1 },
+      data_request: { include_assets: true, include_release: true, include_reviews: true, include_basic_info: true }
+    };
+    const url = `https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=${encodeURIComponent(JSON.stringify(input))}`;
+    try {
+      const response = await fetchImpl(url);
+      if (!response.ok) {
+        logger?.({ level: "warning", phase: "home:discovery", message: `GetItems returned ${response.status}`, details: { batch: batch.length } });
+        continue;
+      }
+      const json = (await response.json()) as { response?: { store_items?: Array<Record<string, any>> } };
+      for (const raw of json.response?.store_items ?? []) {
+        const item = storeItemFromResponse(raw);
+        if (item) {
+          items.set(item.appid, item);
+        }
+      }
+    } catch (error) {
+      logger?.({
+        level: "warning",
+        phase: "home:discovery",
+        message: "GetItems batch failed",
+        details: { error: error instanceof Error ? error.message : String(error) }
+      });
+    }
+  }
+  return items;
+}
 
 export const HOME_DISCOVERY_CACHE_VERSION = 2;
 
@@ -797,6 +921,102 @@ function candidateGameId(candidate: Candidate): string {
   return makeGameId("steam", candidate.appid);
 }
 
+export type ResolveDiscoveryGamesParams = {
+  fetchImpl?: typeof fetch;
+  /** Display signal shown on each card (e.g. "In your discovery queue"). */
+  signal: string;
+  /** Discovery source tag stored on each game (e.g. "discovery:queue"). */
+  sourceTag: string;
+  /** Games owned by the user, excluded from the result. Keyed `provider:externalId`. */
+  ownedIds?: Set<string>;
+  /** Max appids to resolve metadata for (default {@link APPID_ROW_FETCH_LIMIT}). */
+  fetchLimit?: number;
+  /** Max games returned (default {@link APPID_ROW_VISIBLE_LIMIT}). */
+  visibleLimit?: number;
+  logger?: RecommendationLogger;
+};
+
+// Turns an externally supplied appid list (personalised recommendations, the discovery
+// queue, curated top releases) into discovery games. Titles, correct vertical capsule art,
+// and review quality all come from one batched GetItems call — no per-appid enrichment, so
+// these rows can't be starved by Steam rate-limiting the way the hero enrichment can be.
+// Ordering follows Steam's own ordering of the appids.
+export async function resolveDiscoveryGames(appIds: string[], params: ResolveDiscoveryGamesParams): Promise<Game[]> {
+  const fetchImpl = params.fetchImpl ?? fetch;
+  const ownedIds = params.ownedIds ?? new Set<string>();
+  const fetchLimit = params.fetchLimit ?? APPID_ROW_FETCH_LIMIT;
+  const visibleLimit = params.visibleLimit ?? APPID_ROW_VISIBLE_LIMIT;
+
+  const orderedIds: string[] = [];
+  const seen = new Set<string>();
+  for (const appid of appIds) {
+    const trimmed = String(appid).trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    orderedIds.push(trimmed);
+  }
+  if (orderedIds.length === 0) {
+    return [];
+  }
+
+  const items = await fetchStoreItems(orderedIds.slice(0, fetchLimit), fetchImpl, params.logger);
+  const row: Game[] = [];
+  for (const appid of orderedIds) {
+    const item = items.get(appid);
+    if (!item) {
+      continue;
+    }
+    // Games only (drop DLC/soundtracks/hardware) and anything Steam marks not visible.
+    if ((item.type !== undefined && item.type !== 0) || item.visible === false) {
+      continue;
+    }
+    const id = makeGameId("steam", appid);
+    if (ownedIds.has(id)) {
+      continue;
+    }
+    if (!isHomeHeroSafe({ title: item.name, genres: [], tags: [], contentDescriptors: [], shortDescription: item.shortDescription })) {
+      continue;
+    }
+
+    const headerUrl = item.headerUrl ?? officialSteamHeaderUrl(appid);
+    row.push({
+      ...emptyGame(appid, item.name),
+      coverUrl: item.coverUrl,
+      libraryCapsuleUrl: item.coverUrl,
+      headerUrl,
+      backgroundUrl: item.backgroundUrl ?? headerUrl,
+      releaseDate: item.releaseDate,
+      metadataStatus: "partial",
+      discovery: {
+        score: (item.reviewScore ?? 0) * 10 + (item.percentPositive ?? 0) / 10,
+        signal: params.signal,
+        sources: [params.sourceTag],
+        storeCategory: item.reviewLabel,
+        priceText: item.priceText,
+        originalPriceText: item.originalPriceText,
+        discountPercent: item.discountPercent,
+        storeUrl: item.storeUrl
+      }
+    });
+    if (row.length >= visibleLimit) {
+      break;
+    }
+  }
+  return uniqueGames(row);
+}
+
+function buildAppIdRow(spec: AppIdRowSpec, fetchImpl: typeof fetch, ownedIds: Set<string>, options: BuildHomeOptions): Promise<Game[]> {
+  return resolveDiscoveryGames(spec.appIds, {
+    fetchImpl,
+    signal: spec.signal,
+    sourceTag: spec.sourceTag,
+    ownedIds,
+    logger: options.logger
+  });
+}
+
 export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch = fetch, previous?: HomeModel, options: BuildHomeOptions = {}): Promise<HomeModel> {
   const previousRanks = previousChartRanks(previous);
   const cachedGames = previousDiscoveryGames(previous);
@@ -857,6 +1077,39 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
   const popularNow = uniqueGames(
     heroPool.filter(isHomeHeroSafe)
   ).slice(0, 20);
+
+  // Supplemental personalised / curated rows. Each is best-effort: a missing or empty
+  // appid list simply yields an empty row rather than failing the whole rebuild.
+  const appIdRowSpecs: AppIdRowSpec[] = [
+    { row: "recommended", appIds: options.recommendedAppIds ?? [], sourceTag: "userdata:recommended", signal: "Recommended for you" },
+    { row: "newAndNotable", appIds: options.topReleaseAppIds ?? [], sourceTag: "charts:top_releases", signal: "Top new release" },
+    { row: "discoveryQueue", appIds: options.discoveryQueueAppIds ?? [], sourceTag: "discovery:queue", signal: "In your discovery queue" }
+  ];
+  // Sequential (not Promise.all): each row is one batched GetItems call; running them in turn
+  // keeps outbound Steam requests modest and ordering deterministic.
+  const appIdRows: Record<AppIdRowSpec["row"], Game[]> = { recommended: [], newAndNotable: [], discoveryQueue: [] };
+  for (const spec of appIdRowSpecs) {
+    const built = await buildAppIdRow(spec, fetchImpl, ownedIds, options);
+    // Preserve the previous row when a fetch comes back empty. These sources need a live
+    // (and sometimes auth'd) Steam session, so an empty result is almost always a transient
+    // failure (401 / rate limit) rather than a genuinely empty row — don't wipe good data.
+    if (built.length === 0) {
+      const carried = (previous?.[spec.row] ?? []).filter((game) => !ownedIds.has(game.id));
+      if (carried.length > 0) {
+        options.logger?.({
+          level: "warning",
+          phase: "home:discovery",
+          message: `${spec.row} fetch was empty; keeping ${carried.length} previous games`,
+          details: { sourceTag: spec.sourceTag }
+        });
+        appIdRows[spec.row] = carried;
+        continue;
+      }
+    }
+    appIdRows[spec.row] = built;
+  }
+  const { recommended, newAndNotable, discoveryQueue } = appIdRows;
+
   const recentActivity = [...localGames]
     .filter((game) => gameActivityTime(game) > 0)
     .sort((a, b) => gameActivityTime(b) - gameActivityTime(a))
@@ -872,8 +1125,9 @@ export async function buildHomeModel(localGames: Game[], fetchImpl: typeof fetch
     continuePlaying,
     mostPlayed,
     popularNow,
-    recommended: [],
-    newAndNotable: [],
+    recommended,
+    newAndNotable,
+    discoveryQueue,
     generatedAt: new Date().toISOString(),
     stale: false,
     cacheVersion: HOME_DISCOVERY_CACHE_VERSION

@@ -16,6 +16,8 @@ import { getActiveSteamUser, switchSteamAccount } from "./steamSwitchService";
 import { buildIgdbImageUrl, fetchSteamMetadata, IgdbClient, metadataFromSteamAppDetailsResponse, metadataFromSteamAppInfo, refreshFusedMetadata, type IgdbGame } from "@hynite/metadata";
 import { DiagnosticLogService } from "./diagnosticLogService";
 import { HomeService } from "./homeService";
+import { resolveDiscoveryGames } from "@hynite/recommendations";
+import { fetchDiscoveryQueueAppIds, fetchSteamDiscoveryAppIds } from "./steamDiscoveryService";
 import { NativeBridge } from "./nativeBridge";
 import { SettingsService } from "./settingsService";
 import { SoundFileService } from "./soundFileService";
@@ -4374,7 +4376,42 @@ function registerIpc(): void {
   handleIpc("home:get", async () => {
     const settings = await settingsService.get();
     const steamGridDbApiKey = settings.steamGridDbApiKey ? await nativeBridge.decryptSecret(settings.steamGridDbApiKey) : undefined;
-    return homeService.get(repository.listGames(), { steamGridDbApiKey, steamAppInfoProvider: fetchNativeSteamAppInfoMetadata });
+    const primaryAccount = firstPairedSteamAccount(settings.steamAccounts);
+    return homeService.get(repository.listGames(), {
+      steamGridDbApiKey,
+      steamAppInfoProvider: fetchNativeSteamAppInfoMetadata,
+      // Lazily fetched inside the background rebuild only — keeps this response snappy.
+      discoveryAppIdProvider: async () => {
+        const accessToken = primaryAccount
+          ? await resolveFamilyAccessTokenForAccount(primaryAccount).catch(() => undefined)
+          : undefined;
+        return fetchSteamDiscoveryAppIds(primaryAccount?.steamId, accessToken, (entry) => diagnosticLogService?.log(entry));
+      }
+    });
+  });
+  // Infinite discovery queue: each call regenerates a fresh Steam discovery queue and returns
+  // the resolved games. The renderer accumulates + dedupes these as the user scrolls on.
+  handleIpc("home:discoveryQueueMore", async (): Promise<Game[]> => {
+    const settings = await settingsService.get();
+    const account = firstPairedSteamAccount(settings.steamAccounts);
+    if (!account) {
+      return [];
+    }
+    const accessToken = await resolveFamilyAccessTokenForAccount(account).catch(() => undefined);
+    const appIds = await fetchDiscoveryQueueAppIds(account.steamId, (entry) => diagnosticLogService?.log(entry), accessToken);
+    if (appIds.length === 0) {
+      return [];
+    }
+    const ownedIds = new Set(
+      repository.listGames().flatMap((game) => game.sourceIds.map((source) => `${source.provider}:${source.externalId}`))
+    );
+    return resolveDiscoveryGames(appIds, {
+      signal: "In your discovery queue",
+      sourceTag: "discovery:queue",
+      ownedIds,
+      visibleLimit: 50,
+      logger: (entry) => diagnosticLogService?.log(entry)
+    });
   });
   handleIpc("onboarding:state", () => getOnboardingState());
   handleIpc("onboarding:complete", (_event, input?: { skipped?: boolean }) => completeOnboarding(input));

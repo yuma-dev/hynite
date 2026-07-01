@@ -4,6 +4,7 @@ import {
   Calendar,
   ChevronDown,
   Clock3,
+  Compass,
   Download,
   Flame,
   GripVertical,
@@ -53,7 +54,32 @@ export type HomeResolveContext = {
   groups: GameGroup[];
   /** Stable seed per app session — keeps "random" / "shuffle" stable across re-renders. */
   randomSeed: number;
+  /** Extra discovery-queue games loaded on demand as the user scrolls (infinite queue). */
+  extraDiscoveryQueue?: Game[];
 };
+
+/** Interleave two lists 1:1 (a0, b0, a1, b1, …); the longer list's tail is appended. Dedupes by id. */
+function interleaveGames(a: Game[], b: Game[]): Game[] {
+  const out: Game[] = [];
+  const seen = new Set<string>();
+  const push = (game: Game | undefined) => {
+    if (game && !seen.has(game.id)) {
+      seen.add(game.id);
+      out.push(game);
+    }
+  };
+  const max = Math.max(a.length, b.length);
+  for (let i = 0; i < max; i++) {
+    push(a[i]);
+    push(b[i]);
+  }
+  return out;
+}
+
+function dedupeById(games: Game[]): Game[] {
+  const seen = new Set<string>();
+  return games.filter((game) => (seen.has(game.id) ? false : (seen.add(game.id), true)));
+}
 
 export function wishlistItemToGame(item: SteamWishlistItem): Game {
   return {
@@ -113,6 +139,10 @@ export function resolveSourceGames(source: HomeModuleSource, ctx: HomeResolveCon
       const row = source.row;
       // Discovery rows (popularNow/recommended/newAndNotable) stay from the home service —
       // they're external suggestions, not library games.
+      if (row === "discoveryQueue") {
+        // Base queue from the home model, plus any batches loaded on demand as the user scrolls.
+        return dedupeById([...(ctx.home?.discoveryQueue ?? []), ...(ctx.extraDiscoveryQueue ?? [])]);
+      }
       if (row === "popularNow" || row === "recommended" || row === "newAndNotable") {
         return ctx.home?.[row] ?? [];
       }
@@ -138,6 +168,9 @@ export function resolveSourceGames(source: HomeModuleSource, ctx: HomeResolveCon
       }
       return ctx.home?.[row] ?? [];
     }
+    case "discoveryMix":
+      // Top new releases interleaved 1:1 with your personalised recommendations.
+      return interleaveGames(ctx.home?.newAndNotable ?? [], ctx.home?.recommended ?? []);
     case "wishlist":
       return ctx.wishlistItems.map(wishlistItemToGame);
     case "wishlistUpcoming": {
@@ -416,9 +449,11 @@ const SOURCE_CATEGORIES: SourceCategory[] = [
     label: "Discovery",
     icon: Flame,
     options: [
-      { source: { kind: "homeModel", row: "popularNow" }, label: "Popular now", description: "What's trending on Steam.", icon: Flame },
-      { source: { kind: "homeModel", row: "recommended" }, label: "Recommended", description: "Personalised picks for you.", icon: Sparkles },
-      { source: { kind: "homeModel", row: "newAndNotable" }, label: "New & notable", description: "Recent launches worth noticing.", icon: Star }
+      { source: { kind: "discoveryMix" }, label: "New & recommended", description: "Top new releases mixed with your picks.", icon: Sparkles },
+      { source: { kind: "homeModel", row: "popularNow" }, label: "Popular now", description: "Steam's featured storefront feed.", icon: Flame },
+      { source: { kind: "homeModel", row: "recommended" }, label: "Recommended for you", description: "Picks from your logged-in Steam homepage.", icon: Sparkles },
+      { source: { kind: "homeModel", row: "discoveryQueue" }, label: "Discovery queue", description: "Your personalised Steam discovery queue.", icon: Compass },
+      { source: { kind: "homeModel", row: "newAndNotable" }, label: "Top new releases", description: "Steam's curated monthly top releases.", icon: Star }
     ]
   },
   {
@@ -448,10 +483,11 @@ const SOURCE_CATEGORIES: SourceCategory[] = [
 
 function findCategoryForSource(source: HomeModuleSource): SourceCategoryId {
   if (source.kind === "group") return "groups";
+  if (source.kind === "discoveryMix") return "discovery";
   if (source.kind === "wishlist" || source.kind === "wishlistUpcoming") return "wishlist";
   if (source.kind === "random") return "custom";
   if (source.kind === "homeModel") {
-    if (source.row === "popularNow" || source.row === "recommended" || source.row === "newAndNotable") return "discovery";
+    if (source.row === "popularNow" || source.row === "recommended" || source.row === "newAndNotable" || source.row === "discoveryQueue") return "discovery";
     return "library";
   }
   return "library";

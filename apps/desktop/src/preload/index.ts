@@ -188,6 +188,7 @@ const api = {
   },
   home: {
     get: (): Promise<HomeModel> => ipcRenderer.invoke("home:get"),
+    queueMore: (): Promise<Game[]> => ipcRenderer.invoke("home:discoveryQueueMore"),
     onUpdated: (callback: (home: HomeModel) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, home: HomeModel) => callback(home);
       ipcRenderer.on("home:updated", listener);
